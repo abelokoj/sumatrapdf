@@ -3,10 +3,8 @@
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/enhanced-wordmark-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/images/enhanced-wordmark-light.svg">
     <img src="docs/images/enhanced-wordmark-light.svg" width="960" alt="SumatraPDF Enhanced">
-  </picture>
-</p>
+  </picture><br>
 
-<p align="center">
   <a href="https://github.com/abelokoj/sumatrapdf/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf?label=release&amp;color=168349" alt="Latest release"></a>
   <a href="https://github.com/abelokoj/sumatrapdf/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf/total?color=168349" alt="Total release downloads"></a>
   <a href="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
