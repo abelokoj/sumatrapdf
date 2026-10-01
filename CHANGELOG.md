@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reorganized the repository homepage with status badges, icon-led feature sections, download comparisons and a getting-started guide.
+
 ## v0.1.1
 
 - Applied the green application logo across the app and its repository home page; archived alternate colors.
