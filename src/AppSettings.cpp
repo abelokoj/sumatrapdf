@@ -51,6 +51,8 @@
 #include "GlobalHotkeys.h"
 #include "PagePosition.h"
 #include "CachedObjects.h"
+#include "UiFonts.h"
+#include "VocabularyDialog.h"
 #include "AppSettings.h"
 
 // workaround for OnMenuExit
@@ -464,6 +466,7 @@ void ApplySettingsToOpenWindows() {
         }
         win->RedrawAll(true);
     }
+    RefreshVocabularyDialogs();
     ReRegisterGlobalHotkeys();
 }
 
@@ -1144,12 +1147,16 @@ int GetAppFontSize() {
     return GetAppFontSizeForDpi(DpiGet());
 }
 
+Str GetAppFontFamily() {
+    return ResolveUiFontName(gSettings ? gSettings->uIFontFamily : Str{});
+}
+
 PlatformFont* GetAppFontForDpi(int dpi) {
     UiFontsAtDpi* fonts = GetUiFontsAtDpi(dpi);
     if (fonts->appFont) {
         return fonts->appFont;
     }
-    fonts->appFont = GetUserGuiFont(StrL("auto"), GetAppFontSizeForDpi(dpi));
+    fonts->appFont = GetUserGuiFont(GetAppFontFamily(), GetAppFontSizeForDpi(dpi));
     return fonts->appFont;
 }
 
@@ -1176,7 +1183,7 @@ PlatformFont* GetAppBiggerFontForDpi(int dpi) {
     if (fonts->biggerAppFont) {
         return fonts->biggerAppFont;
     }
-    fonts->biggerAppFont = GetDefaultGuiFontOfSize(GetAppBiggerFontSizeForDpi(dpi));
+    fonts->biggerAppFont = GetUserGuiFont(GetAppFontFamily(), GetAppBiggerFontSizeForDpi(dpi));
     return fonts->biggerAppFont;
 }
 
@@ -1198,6 +1205,9 @@ PlatformFont* GetAppTreeFontExForDpi(int dpi, bool bold, bool italic) {
         fntSize = GetAppMenuFontSizeForDpi(dpi);
     }
     Str fntNameUser = gSettings->treeFontName;
+    if (len(fntNameUser) == 0 || str::EqI(fntNameUser, StrL("auto")) || str::EqI(fntNameUser, StrL("automatic"))) {
+        fntNameUser = GetAppFontFamily();
+    }
     fonts->treeFontEx[idx] = GetUserGuiFontEx(fntNameUser, fntSize, bold, italic);
     return fonts->treeFontEx[idx];
 }
@@ -1219,7 +1229,7 @@ PlatformFont* GetAppSidebarLabelFontForDpi(int dpi) {
     if (fonts->sidebarLabelFont) {
         return fonts->sidebarLabelFont;
     }
-    fonts->sidebarLabelFont = GetUserGuiFontEx({}, GetAppBiggerFontSizeForDpi(dpi), true, false);
+    fonts->sidebarLabelFont = GetUserGuiFontEx(GetAppFontFamily(), GetAppBiggerFontSizeForDpi(dpi), true, false);
     return fonts->sidebarLabelFont;
 }
 
@@ -1230,6 +1240,11 @@ PlatformFont* GetAppSidebarLabelFont() {
 PlatformFont* GetAppMenuFontForDpi(int dpi) {
     UiFontsAtDpi* fonts = GetUiFontsAtDpi(dpi);
     if (fonts->appMenuFont) {
+        return fonts->appMenuFont;
+    }
+    Str family = GetAppFontFamily();
+    if (len(family) > 0) {
+        fonts->appMenuFont = GetUserGuiFont(family, GetAppMenuFontSizeForDpi(dpi));
         return fonts->appMenuFont;
     }
     NONCLIENTMETRICS ncm{};
@@ -1246,7 +1261,7 @@ PlatformFont* GetAppMenuFont() {
 
 bool IsMenuFontSizeDefault() {
     auto fntSize = gSettings->uIFontSize;
-    return fntSize < kMinFontSize;
+    return fntSize < kMinFontSize && len(GetAppFontFamily()) == 0;
 }
 
 bool IsAppFontSizeDefault() {
@@ -1381,10 +1396,23 @@ void CollectZoomLevels(Vec<float>& out, bool forChm) {
         }
         return;
     }
+    if (!forChm) {
+        for (float level : gZoomLevels) {
+            if (level < 0) {
+                VecAppend(out, level);
+            }
+        }
+    }
+    float maximum = forChm ? 800 : kZoomMax;
+    for (float level = maximum; level >= 100; level -= 25) {
+        VecAppend(out, level);
+    }
     float* zoomLevels = forChm ? gZoomLevelsChm : gZoomLevels;
     n = forChm ? dimofi(gZoomLevelsChm) : dimofi(gZoomLevels);
     for (int i = 0; i < n; i++) {
-        VecAppend(out, zoomLevels[i]);
+        if (zoomLevels[i] > 0 && zoomLevels[i] < 100) {
+            VecAppend(out, zoomLevels[i]);
+        }
     }
 }
 

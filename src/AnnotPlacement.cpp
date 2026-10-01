@@ -143,6 +143,7 @@ void AnnotPlacement::Reset() {
     rect = {};
     VecClear(points);
     VecClear(strokeCounts);
+    inkScreenBounds = {};
     pressureTotal = 0;
     pressureSamples = 0;
     circle = false;
@@ -838,16 +839,18 @@ static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt, InkSampl
     }
     VecAppend(p.points, point);
     VecLast(p.strokeCounts)++;
-    HwndInvalidate(win->hwndCanvas);
+    Point screen = dm->CvtToScreen(pageNo, point);
+    float maxWidth = std::max(gSettings->penMaxWidth, std::max(gSettings->annotations.inkBorderWidth, 0.1f));
+    int pad = std::max(3, (int)ceilf(maxWidth * dm->GetZoomReal(pageNo)) + 2);
+    Rect dirty(screen.x - pad, screen.y - pad, pad * 2 + 1, pad * 2 + 1);
+    p.inkScreenBounds = p.inkScreenBounds.IsEmpty() ? dirty : p.inkScreenBounds.Union(dirty);
+    HwndInvalidateRect(win->hwndCanvas, p.inkScreenBounds, false);
     return true;
 }
 
 // How many screen pixels one PDF point of the page covers at the current zoom.
 static float PxPerPagePt(DisplayModel* dm, int pageNo) {
-    Point p0 = dm->CvtToScreen(pageNo, PointF(0, 0));
-    Point p1 = dm->CvtToScreen(pageNo, PointF(0, 1));
-    float px = (float)(p1.y - p0.y);
-    return px < 0.01f ? 1.f : px;
+    return std::max(dm->GetZoomReal(pageNo), 0.01f);
 }
 
 bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
@@ -1379,8 +1382,10 @@ static void PaintShapePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     gs.DrawEllipse(&pen, start.x - markerHalf, start.y - markerHalf, markerSize, markerSize);
 }
 
-static int InkStrokeWidth(MainWindow* win) {
-    int width = std::max(1, gSettings->annotations.inkBorderWidth);
+static float InkStrokeWidth(MainWindow* win) {
+    float minWidth = std::max(0.1f, gSettings->penMinWidth);
+    float maxWidth = std::max(minWidth, gSettings->penMaxWidth);
+    float width = limitValue(gSettings->annotations.inkBorderWidth, minWidth, maxWidth);
     AnnotPlacement& p = win->annotPlacement;
     bool fountain = win->inkPenStyle == InkPenStyle::Fountain;
     bool brush = win->inkPenStyle == InkPenStyle::Brush;
@@ -1390,7 +1395,7 @@ static int InkStrokeWidth(MainWindow* win) {
     // PDF ink stores one width per stroke, so save its mean pressure.
     float pressure = p.pressureTotal / (float)p.pressureSamples;
     float factor = fountain ? 0.3f + pressure : 0.25f + 1.5f * pressure;
-    return std::max(1, (int)roundf((float)width * factor));
+    return limitValue(width * factor, minWidth, maxWidth);
 }
 
 static int InkStrokeOpacity(MainWindow* win) {
@@ -1416,7 +1421,7 @@ static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     UnpackColor(col, r, g, b);
     u8 a = (u8)(InkStrokeOpacity(win) * 255 / 100);
     Gdiplus::Color strokeCol(a, r, g, b);
-    Gdiplus::REAL width = std::max(1.f, (float)InkStrokeWidth(win) * PxPerPagePt(dm, pageNo));
+    Gdiplus::REAL width = std::max(0.1f, InkStrokeWidth(win) * PxPerPagePt(dm, pageNo));
     Gdiplus::Pen pen(strokeCol, width);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);

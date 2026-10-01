@@ -5360,8 +5360,10 @@ constexpr UINT32 kSumatraPenFlagEraser = 0x0004;
 
 typedef BOOL(WINAPI* Sig_GetPointerType)(UINT32 pointerId, DWORD* pointerType);
 typedef BOOL(WINAPI* Sig_GetPointerPenInfo)(UINT32 pointerId, SumatraPointerPenInfo* penInfo);
+typedef BOOL(WINAPI* Sig_GetPointerPenInfoHistory)(UINT32, UINT32*, SumatraPointerPenInfo*);
 static Sig_GetPointerType DynGetPointerType = nullptr;
 static Sig_GetPointerPenInfo DynGetPointerPenInfo = nullptr;
+static Sig_GetPointerPenInfoHistory DynGetPointerPenInfoHistory = nullptr;
 static bool triedLoadPointerApi = false;
 
 static void EnsurePointerApiLoaded() {
@@ -5373,6 +5375,7 @@ static void EnsurePointerApiLoaded() {
     if (h) {
         DynGetPointerType = (Sig_GetPointerType)GetProcAddress(h, "GetPointerType");
         DynGetPointerPenInfo = (Sig_GetPointerPenInfo)GetProcAddress(h, "GetPointerPenInfo");
+        DynGetPointerPenInfoHistory = (Sig_GetPointerPenInfoHistory)GetProcAddress(h, "GetPointerPenInfoHistory");
     }
 }
 
@@ -5482,6 +5485,9 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
         if (hasPenInfo && (penInfo.penMask & 1) != 0) {
             AddInkPressure(win, penInfo.pressure);
         }
+        if (IsPlacingInkAnnotation(win) && win->inkEraseMode == 0) {
+            UpdateWindow(hwnd);
+        }
         return true;
     }
     if (msg == WM_POINTERUPDATE) {
@@ -5489,9 +5495,37 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
         if (inContact) {
             mouseWp = MK_LBUTTON;
         }
-        OnMouseMove(win, x, y, mouseWp);
-        if (hasPenInfo && inContact && (penInfo.penMask & 1) != 0) {
-            AddInkPressure(win, penInfo.pressure);
+        bool ink = IsPlacingInkAnnotation(win) && win->inkEraseMode == 0;
+        bool usedHistory = false;
+        if (ink && inContact && DynGetPointerPenInfoHistory) {
+            constexpr UINT32 kPenHistoryCapacity = 128;
+            SumatraPointerPenInfo history[kPenHistoryCapacity]{};
+            UINT32 count = kPenHistoryCapacity;
+            if (DynGetPointerPenInfoHistory(pointerId, &count, history)) {
+                count = std::min(count, kPenHistoryCapacity);
+                for (int i = (int)count - 1; i >= 0; i--) {
+                    SumatraPointerPenInfo& sample = history[i];
+                    if ((sample.pointerInfo.pointerFlags & kSumatraPointerMessageFlagInContact) == 0) {
+                        continue;
+                    }
+                    Point point = HwndScreenToClient(
+                        hwnd, Point(sample.pointerInfo.ptPixelLocation.x, sample.pointerInfo.ptPixelLocation.y));
+                    OnMouseMove(win, point.x, point.y, MK_LBUTTON);
+                    if ((sample.penMask & 1) != 0) {
+                        AddInkPressure(win, sample.pressure);
+                    }
+                }
+                usedHistory = count > 0;
+            }
+        }
+        if (!usedHistory) {
+            OnMouseMove(win, x, y, mouseWp);
+            if (hasPenInfo && inContact && (penInfo.penMask & 1) != 0) {
+                AddInkPressure(win, penInfo.pressure);
+            }
+        }
+        if (ink && inContact) {
+            UpdateWindow(hwnd);
         }
         return true;
     }

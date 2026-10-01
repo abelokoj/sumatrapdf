@@ -107,7 +107,7 @@ struct AnnotCreateArgs {
     // for free text, < 0 means not given
     int textSize = -1;
     // for free text, < 0 means not given
-    int borderWidth = -1;
+    float borderWidth = -1;
     // for free text, PDF /Q text alignment, < 0 means not given (MuPDF's left)
     int quadding = -1;
     bool setContentToSelection = false;
@@ -165,6 +165,7 @@ extern SeqStrings gQuaddingNames; // "Left\0Center\0Right\0"
 int QuaddingFromName(Str);
 int Quadding(Annotation*);
 int BorderWidth(Annotation*);
+float BorderWidthF(Annotation*);
 Str IconName(Annotation*); // empty if no icon
 int Opacity(Annotation*);
 int InkPenStyleTag(Annotation*);
@@ -184,7 +185,7 @@ bool SetContents(Annotation*, Str);
 bool SetColor(Annotation*, PdfColor);
 bool SetInteriorColor(Annotation*, PdfColor);
 bool SetQuadding(Annotation*, int);
-void SetBorderWidth(Annotation*, int);
+void SetBorderWidth(Annotation*, float);
 void SetOpacity(Annotation*, int);
 void SetIconName(Annotation*, Str);
 bool HasEmbeddedFile(Annotation*);

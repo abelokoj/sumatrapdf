@@ -71,6 +71,15 @@ END
 #endif
 IDR_EMBEDDED_PAK        RCDATA               QM(EMBEDDED_PAK)
 
+// Bundled UI faces are loaded privately with AddFontMemResourceEx.
+ENHANCED_FONT_MANROPE_REGULAR RCDATA "fonts\\Manrope-Regular.otf"
+ENHANCED_FONT_MANROPE_SEMIBOLD RCDATA "fonts\\Manrope-SemiBold.otf"
+ENHANCED_FONT_PRETENDARD_REGULAR RCDATA "fonts\\PretendardStd-Regular.ttf"
+ENHANCED_FONT_PRETENDARD_SEMIBOLD RCDATA "fonts\\PretendardStd-SemiBold.ttf"
+ENHANCED_FONT_PUBLICSANS_REGULAR RCDATA "fonts\\PublicSans-Regular.ttf"
+ENHANCED_FONT_PUBLICSANS_SEMIBOLD RCDATA "fonts\\PublicSans-SemiBold.ttf"
+
+
 /////////////////////////////////////////////////////////////////////////////
 
 // Icon with lowest ID value placed first to ensure application icon

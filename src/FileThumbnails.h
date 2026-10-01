@@ -18,3 +18,7 @@ TempStr GetThumbnailCacheDirTemp();
 TempStr GetThumbnailPathTemp(Str filePath);
 void DeleteThumbnailForFile(Str path);
 void EmptyThumbnailCacheDirectory();
+
+// Render enough pixels for the largest home grid size at the current display DPI.
+Size GetThumbnailRenderSize();
+void RequestHomeThumbnail(FileState* fs);

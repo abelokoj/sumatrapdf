@@ -1491,17 +1491,21 @@ static void ChipColorPicked(AnnotEditToolbar* tb, Color col) {
 
 // how wide the stroke of an ink annotation is, from the Thickness slider of
 // its color drop-down
-static void ChipThicknessPicked(AnnotEditToolbar* tb, int width) {
+static void ChipThicknessPicked(AnnotEditToolbar* tb, float width) {
     WindowTab* tab = tb->tab;
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     if (!AnnotationIsLive(annot) || annot != tb->annot) {
         return;
     }
-    if (BorderWidth(annot) == width) {
+    if (BorderWidthF(annot) == width) {
         return;
     }
     SetBorderWidth(annot, width);
     AnnotChanged(tab);
+}
+
+static void ChipBorderPicked(AnnotEditToolbar* tb, int width) {
+    ChipThicknessPicked(tb, (float)width);
 }
 
 // ranges of the number sliders; widths and sizes are in PDF points
@@ -1575,12 +1579,12 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
             bool isColor = kind == AnnotEditKind::Color;
             bool isInk = (Type(annot) == AnnotationType::Ink) && isColor;
             bool isBorder = AnnotationBorderInColorChip(Type(annot)) && isColor;
-            int thickness = (isInk || isBorder) ? std::max(BorderWidth(annot), 0) : -1;
+            float thickness = (isInk || isBorder) ? std::max(BorderWidthF(annot), 0.f) : -1.f;
             // a note's color fills its icon, behind the note
             bool isNoteColor = (Type(annot) == AnnotationType::Text) && isColor;
             Str label = isNoteColor ? Tr("Background Color") : Tr("Color");
             Str thicknessLabel;
-            int minThickness = 1;
+            float minThickness = isInk ? std::max(gSettings->penMinWidth, 0.1f) : 1.f;
             if (isBorder) {
                 label = Tr("Border Color");
                 thicknessLabel = Tr("Border Width");
@@ -1600,7 +1604,7 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
         }
         case AnnotEditKind::Border: {
             ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Border Width"), std::max(BorderWidth(annot), 0), 0,
-                                 kBorderWidthMax, MkFunc1(ChipThicknessPicked, tb));
+                                 kBorderWidthMax, MkFunc1(ChipBorderPicked, tb));
             break;
         }
         case AnnotEditKind::TextSize: {
@@ -3166,7 +3170,7 @@ static void CollectAnnotationHoverRows(Annotation* annot, AnnotationHoverRows& r
         }
     }
     if (AnnotationSupportsBorder(type)) {
-        rows.Add(StrL("border"), Tr("Border:"), fmt("%d", BorderWidth(annot)));
+        rows.Add(StrL("border"), Tr("Border:"), fmt("%.1f", BorderWidthF(annot)));
     }
     if (AnnotationSupportsColor(type)) {
         Str label = AnnotationColorIsBackground(type) ? Tr("Background Color:") : Tr("Color:");

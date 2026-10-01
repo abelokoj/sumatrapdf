@@ -357,6 +357,8 @@ const commandsRaw = [
     "CmdLaserSolid", "Laser Pointer: Solid Trail",
     "CmdLaserHollow", "Laser Pointer: Hollow Trail",
     "CmdLaserDot", "Laser Pointer: Single Dot",
+    "CmdDictionaryLookup", "Dictionary: Define Selected Word",
+    "CmdVocabularyHome", "Vocabulary: Learn and Practice",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them

@@ -95,6 +95,7 @@
 #include "ImageSaveCropResize.h"
 #include "StressTesting.h"
 #include "HomePage.h"
+#include "VocabularyDialog.h"
 #include "DocumentProperties.h"
 #include "TabGroupsManage.h"
 #include "TableOfContents.h"
@@ -1252,8 +1253,23 @@ void ControllerCallbackHandler::RenderThumbnail(DisplayModel* dm, Size size, con
     engine->disableAntiAlias = savedAntiAlias;
 }
 
+// UI-thread registries keep repaint-driven requests bounded and prevent an
+// unavailable/encrypted file from being retried on every home paint.
+static Vec<Str> gThumbnailRequests;
+static Vec<Str> gThumbnailFailures;
+
+static bool ThumbnailPathInList(const Vec<Str>& paths, Str path) {
+    for (Str candidate : paths) {
+        if (str::EqI(candidate, path)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct CreateThumbnailFromFileData {
     Str filePath;
+    Size renderSize;
     // when set, render from this clone of the open document instead of loading
     // the file again (owned)
     EngineBase* engine = nullptr;
@@ -1270,12 +1286,35 @@ struct CreateThumbnailFromFileData {
 };
 
 static void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
+    for (int i = 0; i < len(gThumbnailRequests); i++) {
+        Str path = gThumbnailRequests[i];
+        if (str::EqI(path, d->filePath)) {
+            VecRemoveAt(gThumbnailRequests, i);
+            str::Free(path);
+            break;
+        }
+    }
+    if (!d->bmp && !ThumbnailPathInList(gThumbnailFailures, d->filePath)) {
+        if (len(gThumbnailFailures) >= 128) {
+            for (Str path : gThumbnailFailures) {
+                str::Free(path);
+            }
+            VecReset(gThumbnailFailures);
+        }
+        VecAppend(gThumbnailFailures, str::Dup(d->filePath));
+    }
     if (d->bmp) {
         FileState* fs = FileHistoryFindByPath(d->filePath);
         SetThumbnail(fs, d->bmp);
         d->bmp = nullptr;
     }
     delete d;
+    HomePageInvalidateLayoutCache();
+    for (MainWindow* win : gWindows) {
+        if (!win->IsDocLoaded()) {
+            HwndInvalidate(win->hwndCanvas);
+        }
+    }
 }
 
 // an image next to the document with the same base name (Calibre puts a
@@ -1318,18 +1357,25 @@ static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
         SetLoadThreadFileEBookUI(nullptr);
     }
     if (!engine) {
-        delete d;
+        uitask::Post(MkFunc0(CreateThumbnailFromFileFinish, d), "Thumbnail failed");
+        return;
+    }
+    if (engine->IsPasswordProtected() && len(engine->decryptionKey) == 0) {
+        engine->Release();
+        d->engine = nullptr;
+        uitask::Post(MkFunc0(CreateThumbnailFromFileFinish, d), "Protected thumbnail skipped");
         return;
     }
     RectF pageRect = engine->PageMediabox(1);
     if (pageRect.IsEmpty()) {
         engine->Release();
-        delete d;
+        d->engine = nullptr;
+        uitask::Post(MkFunc0(CreateThumbnailFromFileFinish, d), "Thumbnail failed");
         return;
     }
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0);
-    float zoom = (float)kThumbnailDx / pageRect.dx;
-    pageRect.dy = std::min(pageRect.dy, (float)kThumbnailDy / zoom);
+    float zoom = (float)d->renderSize.dx / pageRect.dx;
+    pageRect.dy = std::min(pageRect.dy, (float)d->renderSize.dy / zoom);
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0, true);
     RenderPageArgs args(1, zoom, 0, &pageRect);
     d->bmp = engine->RenderPage(args);
@@ -1342,7 +1388,14 @@ static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
 // create a thumbnail by loading the file with a temporary engine
 // used for lazy-loaded files that don't have a loaded controller
 static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nullptr) {
+    if (ThumbnailPathInList(gThumbnailRequests, ds->filePath) ||
+        ThumbnailPathInList(gThumbnailFailures, ds->filePath) || len(gThumbnailRequests) >= 2) {
+        SafeEngineRelease(&engine);
+        return;
+    }
+    VecAppend(gThumbnailRequests, str::Dup(ds->filePath));
     auto* d = new CreateThumbnailFromFileData();
+    d->renderSize = GetThumbnailRenderSize();
     d->filePath = str::Dup(ds->filePath);
     d->engine = engine;
     d->fileEBookUI = CopyFileEBookUI(ds->eBookUI);
@@ -1350,7 +1403,24 @@ static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nul
     RunAsync(fn, StrL("CreateThumbnailFromFile"));
 }
 
+void RequestHomeThumbnail(FileState* ds) {
+    if (!ds || len(ds->filePath) == 0 || !ShouldSaveThumbnail(ds)) {
+        return;
+    }
+    CreateThumbnailFromFileAsync(ds);
+}
+
 static void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
+    // Explicitly reopening a document permits another attempt (for example,
+    // after the user supplied an encrypted file's remembered password).
+    for (int i = 0; i < len(gThumbnailFailures); i++) {
+        Str path = gThumbnailFailures[i];
+        if (str::EqI(path, ds->filePath)) {
+            VecRemoveAt(gThumbnailFailures, i);
+            str::Free(path);
+            break;
+        }
+    }
     if (!ShouldSaveThumbnail(ds)) {
         return;
     }
@@ -3682,6 +3752,7 @@ void UpdateAfterThemeChange() {
         uint flags = RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN;
         RedrawWindow(win->hwndFrame, nullptr, nullptr, flags);
     }
+    RefreshVocabularyDialogs();
     CommandPaletteUpdateTheme();
     UpdateDocumentColors();
 }
@@ -6158,6 +6229,8 @@ void CloseWindow(MainWindow* win, bool quitIfLast, bool forceClose) {
         }
         return;
     }
+
+    CloseVocabularyDialogs(win);
 
     // Stop eventual TTS reading
     StopReadAloudIfSourceWindow(win);
@@ -11513,7 +11586,7 @@ static void SetAnnotCreateArgsFromCommand(AnnotCreateArgs& args, CustomCommand* 
     if (borderWidth >= 0) {
         // set some reasonable limits
         setMinMax(borderWidth, 0, 128);
-        args.borderWidth = borderWidth;
+        args.borderWidth = (float)borderWidth;
     }
 
     int quadding = QuaddingFromName(GetCommandStringArg(cmd, kCmdArgAlignment, {}));
@@ -11545,7 +11618,7 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
         }
         args.opacity = a.freeTextOpacity;
         args.textSize = a.freeTextSize;
-        args.borderWidth = a.freeTextBorderWidth;
+        args.borderWidth = (float)a.freeTextBorderWidth;
         args.quadding = QuaddingFromName(a.freeTextAlignment);
     } else if (typ == AnnotationType::Line) {
         col = GetParsedColor(a.lineColor);
@@ -13032,6 +13105,19 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             nargs.timeoutMs = 8000;
             ShowNotification(nargs);
         } break;
+
+        case CmdDictionaryLookup: {
+            bool textOnly = false;
+            Str selection =
+                tab && HasPermission(Perm::CopySelection) ? GetSelectedTextTemp(tab, StrL("\n"), textOnly) : Str{};
+            ShowDictionaryDialog(win, selection, selection, tab ? tab->filePath : Str{},
+                                 win->ctrl ? win->ctrl->CurrentPageNo() : 0);
+            break;
+        }
+
+        case CmdVocabularyHome:
+            ShowVocabularyDialog(win);
+            break;
 
         case CmdOptions:
             ShowSettingsDialog(win);

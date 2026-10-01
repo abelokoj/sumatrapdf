@@ -213,6 +213,9 @@
     <ClInclude Include="..\src\EngineMupdf.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\EnhancedIcons.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\EutlTrust.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -310,6 +313,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Notifications.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\OfflineDictionary.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\OverlayScrollbar.h">
@@ -459,10 +465,19 @@
     <ClInclude Include="..\src\Translations.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\UiFonts.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\UpdateCheck.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Version.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Vocabulary.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\VocabularyDialog.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\WebpReader.h">
@@ -869,6 +884,9 @@
     <ClCompile Include="..\src\Notifications.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\OfflineDictionary.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\OverlayScrollbar.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -1104,6 +1122,12 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\UpdateCheck.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Vocabulary.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\VocabularyDialog.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\WebpReader.cpp">

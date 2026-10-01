@@ -51,6 +51,7 @@
 #include "SumatraDialogs.h"
 #include "Translations.h"
 #include "SvgIcons.h"
+#include "EnhancedIcons.h"
 #include "Theme.h"
 #include "ReadAloud.h"
 #include "Toolbar.h"
@@ -70,80 +71,59 @@ struct ToolbarButtonInfo {
     bool isText = false;
 };
 
-static const char* kEnhancedLaserIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m4 16 4 4 8-8-4-4zM14 6l2-2M19 9h3M19 4l2-2M8 20l-4 1-1-4"/><circle cx="18" cy="6" r="1"/></svg>)";
-static const char* kEnhancedThemeIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="8"/><path d="M12 4v16"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>)";
-static const char* kEnhancedStarIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>)";
-static const char* kEnhancedBookmarkIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h12v18l-6-4-6 4z"/></svg>)";
-
-static const char* kEnhancedSettingsIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></svg>)";
-
-static const char* kEnhancedSunIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/></svg>)";
-static const char* kEnhancedMoonIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11z"/></svg>)";
-static const char* kEnhancedGridIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>)";
-static const char* kEnhancedEraserIcon =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 14 10-11 8 8-9 10H8zM9 8l8 8M12 21h10"/></svg>)";
-
 static ToolbarButtonInfo gToolbarButtons[] = {
-    {gIconFileOpen, CmdOpenFile, TrN("Open")},
-    {gIconSearch, CmdFindFirst, TrN("Find")},
+    {kEnhancedIconOpen, CmdOpenFile, TrN("Open")},
+    {kEnhancedIconSearch, CmdFindFirst, TrN("Find")},
     {nullptr, 0, {}},
-    {gIconPagePrev, CmdGoToPrevPage, TrN("Previous Page")},
+    {kEnhancedIconPrevious, CmdGoToPrevPage, TrN("Previous Page")},
     {nullptr, PageInfoId, {}},
-    {gIconPageNext, CmdGoToNextPage, TrN("Next Page")},
+    {kEnhancedIconNext, CmdGoToNextPage, TrN("Next Page")},
     {nullptr, 0, {}},
-    {gIconZoomOut, CmdZoomOut, TrN("Zoom Out")},
-    {gIconZoomIn, CmdZoomIn, TrN("Zoom In")},
-    {gIconLayoutContinuous, CmdZoomFitWidthAndContinuous, TrN("Fit Width")},
-    {gIconLayoutSinglePage, CmdSinglePageView, TrN("Reading layout")},
+    {kEnhancedIconZoomMinus, CmdZoomOut, TrN("Zoom Out")},
+    {kEnhancedIconZoomPlus, CmdZoomIn, TrN("Zoom In")},
+    {kEnhancedIconFitWidth, CmdZoomFitWidthAndContinuous, TrN("Fit Width")},
+    {kEnhancedIconPage, CmdSinglePageView, TrN("Reading layout")},
     {nullptr, 0, {}},
-    {gIconRotateLeft, CmdRotateLeft, TrN("Rotate Left")},
-    {gIconRotateRight, CmdRotateRight, TrN("Rotate Right")},
+    {kEnhancedIconRotateLeft, CmdRotateLeft, TrN("Rotate Left")},
+    {kEnhancedIconRotateRight, CmdRotateRight, TrN("Rotate Right")},
     {nullptr, 0, {}},
-    {gIconEditAnnotations, CmdToggleEditPDF, TrN("Edit PDF")},
-    {gIconAnnotInk, CmdCreateAnnotInk, TrN("Pen: tools, colors and thickness")},
-    {gIconAnnotHighlightBrush, CmdAnnotationHighlightBrush, TrN("Text highlighter")},
-    {gIconAnnotUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
-    {gIconAnnotStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
-    {kEnhancedEraserIcon, CmdInkEraser, TrN("Stroke eraser")},
-    {kEnhancedLaserIcon, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
+    {kEnhancedIconEdit, CmdToggleEditPDF, TrN("Edit PDF")},
+    {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Pen: tools, colors and thickness")},
+    {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Text highlighter")},
+    {kEnhancedIconUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
+    {kEnhancedIconStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
+    {kEnhancedIconEraser, CmdInkEraser, TrN("Stroke eraser")},
+    {kEnhancedIconLaser, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
     {nullptr, 0, {}},
-    {kEnhancedBookmarkIcon, CmdToggleBookmarks, TrN("Bookmarks")},
-    {kEnhancedStarIcon, CmdCommandPaletteFavorites, TrN("Favorites")},
-    {gIconCommandPalette, CmdCommandPalette, TrN("Command Palette")},
-    {gIconPrint, CmdPrint, TrN("Print")},
+    {kEnhancedIconBookmark, CmdToggleBookmarks, TrN("Bookmarks")},
+    {kEnhancedIconStar, CmdCommandPaletteFavorites, TrN("Favorites")},
+    {kEnhancedIconCommand, CmdCommandPalette, TrN("Command Palette")},
+    {kEnhancedIconPrint, CmdPrint, TrN("Print")},
     {nullptr, 0, {}},
-    {kEnhancedSettingsIcon, CmdOptions, TrN("Settings")},
-    {kEnhancedSunIcon, CmdThemeLight, TrN("Day mode")},
-    {kEnhancedMoonIcon, CmdThemeDark, TrN("Night mode")},
-    {kEnhancedGridIcon, CmdChangeTheme, TrN("Theme presets")},
-    {kEnhancedThemeIcon, CmdInvertColors, TrN("Invert document colors")},
+    {kEnhancedIconSettings, CmdOptions, TrN("Settings")},
+    {kEnhancedIconSun, CmdThemeLight, TrN("Day mode")},
+    {kEnhancedIconMoon, CmdThemeDark, TrN("Night mode")},
+    {kEnhancedIconGrid, CmdChangeTheme, TrN("Theme presets")},
+    {kEnhancedIconInvert, CmdInvertColors, TrN("Invert document colors")},
     // Available to custom layouts without widening the default toolbar.
     {gIconHome, CmdGoToHomePage, TrN("Home")},
     {gIconNavigateBack, CmdNavigateBack, TrN("Back")},
     {gIconNavigateForward, CmdNavigateForward, TrN("Forward")},
     {gIconSpeak, CmdToggleReadAloud, TrN("Read Aloud")},
-    {gIconLayoutSinglePage, CmdZoomFitPageAndSinglePage, TrN("Fit a Single Page")},
-    {kEnhancedThemeIcon, CmdToggleLightDarkTheme, TrN("Light / Dark")},
+    {kEnhancedIconPage, CmdZoomFitPageAndSinglePage, TrN("Fit a Single Page")},
+    {kEnhancedIconInvert, CmdToggleLightDarkTheme, TrN("Light / Dark")},
 };
 // unicode chars: https://www.compart.com/en/unicode/U+25BC
 
 constexpr int kButtonsCount = dimof(gToolbarButtons);
 
 static ToolbarButtonInfo gPdfAnnotationButtons[] = {
-    {gIconAnnotHighlightBrush, CmdAnnotationHighlightBrush, TrN("Highlighter: select text to highlight it")},
-    {gIconAnnotInk, CmdCreateAnnotInk, TrN("Ink")},
+    {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Highlighter: select text to highlight it")},
+    {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Ink")},
     {gIconAnnotHighlight, CmdCreateAnnotHighlight, TrN("Highlight Selection")},
-    {gIconAnnotUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
+    {kEnhancedIconUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
     {gIconAnnotSquiggly, CmdCreateAnnotSquiggly, TrN("Squiggly")},
-    {gIconAnnotStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
+    {kEnhancedIconStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
     {nullptr, 0, {}},
     {gIconAnnotText, CmdCreateAnnotText, TrN("Text")},
     {gIconAnnotFreeText, CmdCreateAnnotFreeText, TrN("Free Text")},
@@ -206,7 +186,9 @@ static Color TbDisabledColor() {
     if (IsCurrentThemeDefault() && !ThemeColorizeControls()) {
         return SysDisabledTextColor();
     }
-    return ThemeWindowTextDisabledColor();
+    Color fg = TbTextColor(), bg = TbBgColor();
+    return MkRgb((GetRValue(fg) * 3 + GetRValue(bg)) / 4, (GetGValue(fg) * 3 + GetGValue(bg)) / 4,
+                 (GetBValue(fg) * 3 + GetBValue(bg)) / 4);
 }
 
 static Color TbHoverColor() {
@@ -731,6 +713,15 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
         }
     }
 
+    if (win->toolbarVirt) {
+        for (VirtCtrl* pinned : win->toolbarVirt->pinnedItems)
+            pinned->SetIsEnabled(IsCmdEnabled(win, CmdCreateAnnotInk, ctx));
+        if (Edit* zoom = win->toolbarVirt->zoomEdit) {
+            zoom->SetIsEnabled(win->IsDocLoaded());
+            if (GetFocus() != zoom->hwnd && win->IsDocLoaded())
+                zoom->SetText(fmt("%.1f%%", win->ctrl->GetZoomVirtual(true)));
+        }
+    }
     SetToolbarButtonCheckedState(win, CmdCreateAnnotInk, IsPlacingInkAnnotation(win) && win->inkEraseMode == 0);
     SetToolbarButtonCheckedState(win, CmdInkEraser, win->inkEraseMode == 1);
     SetToolbarButtonCheckedState(win, CmdToggleLaserPointer, IsLaserPointerActive(win));
@@ -1407,6 +1398,11 @@ static void RefreshToolbarIcons(MainWindow* win) {
 
 void UpdateToolbarAfterThemeChange(MainWindow* win) {
     RefreshToolbarIcons(win);
+    if (win->toolbarVirt && win->toolbarVirt->zoomEdit) {
+        win->toolbarVirt->zoomEdit->SetColors(TbTextColor(), TbBgColor());
+    }
+    ToolbarUpdateStateForWindow(win, true);
+    UpdateToolbarPageText(win, win->ctrl ? win->ctrl->PageCount() : -1);
     VirtHost* host = ToolbarHost(win);
     if (host) {
         host->bgColor = TbBgColor();
@@ -2398,10 +2394,10 @@ static void BuildLayoutHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     }
     DisplayMode mode = win->ctrl->GetDisplayMode();
     Vec<ToolbarHoverMenuItem> items;
-    VecAppend(items, {Str(gIconLayoutSinglePage), Tr("Single Page"), CmdSinglePageView, true, IsSingle(mode)});
-    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Facing"), CmdFacingView, true, IsFacing(mode)});
-    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Book View"), CmdBookView, true, IsBookView(mode)});
-    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Continuous scrolling"), CmdToggleContinuousView, true,
+    VecAppend(items, {Str(kEnhancedIconPage), Tr("Single Page"), CmdSinglePageView, true, IsSingle(mode)});
+    VecAppend(items, {Str(kEnhancedIconFitWidth), Tr("Facing"), CmdFacingView, true, IsFacing(mode)});
+    VecAppend(items, {Str(kEnhancedIconFitWidth), Tr("Book View"), CmdBookView, true, IsBookView(mode)});
+    VecAppend(items, {Str(kEnhancedIconFitWidth), Tr("Continuous scrolling"), CmdToggleContinuousView, true,
                       IsContinuous(mode)});
     ev->layout = NewToolbarHoverMenu(win, items);
     ev->centerOnButton = true;
@@ -2763,7 +2759,7 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     int pad = DpiScale(kAnnotSwatchPad);
     edit->id = cmdId;
     edit->padding = {pad, pad, pad, pad};
-    edit->pixmap = GetCachedPixmapForSvg(Str(gIconEditAnnotations), iconSize, iconSize, TbTextColor(), TbBgColor());
+    edit->pixmap = GetCachedPixmapForSvg(Str(kEnhancedIconEdit), iconSize, iconSize, TbTextColor(), TbBgColor());
     edit->SetTooltip(Tr("Edit colors"));
     edit->onClick = onEdit;
     row->AddChild(edit);
@@ -2822,29 +2818,29 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
 //--- the ink button's drop-down also sets how thick the stroke is
 
 // Annotations.InkBorderWidth is in PDF points, which is about a pixel at 100%
-constexpr int kInkThicknessMin = 1;
+constexpr float kInkThicknessMin = 0.1f;
 constexpr int kInkThicknessMax = 16;
 constexpr int kInkPreviewDy = 44;
 constexpr int kInkSliderDx = 190;
 // how far the preview's wave swings, as a part of the room left by the stroke
 constexpr float kInkPreviewWave = 0.42f;
 
-static int InkThickness() {
-    int v = gSettings ? gSettings->annotations.inkBorderWidth : kInkThicknessMin;
-    return limitValue(v, kInkThicknessMin, kInkThicknessMax);
+static float InkThickness() {
+    float v = gSettings ? gSettings->annotations.inkBorderWidth : kInkThicknessMin;
+    return limitValue(v, gSettings->penMinWidth, gSettings->penMaxWidth);
 }
 
 // What the ink button will lay down: the color in use, drawn as thick as the
 // slider is set to. It follows the slider while it's being dragged.
 struct InkStrokePreview : VirtCtrl {
     Color col = kColRed;
-    int thickness = kInkThicknessMin;
+    float thickness = kInkThicknessMin;
 
     Size GetIdealSize() override { return {DpiScale(kInkSliderDx), DpiScale(kInkPreviewDy)}; }
 
     void Paint(VirtPaintCtx& ctx) override {
         Rect r = ctx.bounds;
-        float w = (float)DpiScale(thickness);
+        float w = thickness * (float)DpiScale(100) / 100.f;
         // the stroke has to fit the preview whatever the thickness
         w = std::min(w, (float)r.dy / 2.f);
         w = std::max(w, 1.f);
@@ -2891,7 +2887,12 @@ struct InkThicknessSlider : VirtSlider {
     Str text; // owned; what the -dbg-control dump shows for the slider
     // where the width goes when let go. Without one it's the setting the ink
     // button makes its strokes with
-    Func1<int> onThickness;
+    Func1<float> onThickness;
+    Func1<int> onInteger;
+    bool fractional = false;
+    float minimum = 0.1f;
+    float step = 0.1f;
+    float Width() { return fractional ? minimum + (float)value * step : (float)value; }
     // committed by letting go of a drag, so the mouse capture is about to be
     // released; the color popup that holds the mouse takes it back
     bool releasingMouse = false;
@@ -2900,15 +2901,15 @@ struct InkThicknessSlider : VirtSlider {
 
     void OnChanged() {
         if (preview) {
-            preview->thickness = value;
+            preview->thickness = Width();
             preview->Invalidate();
         }
         if (valueText) {
-            valueText->SetText(fmt("%d", value));
+            valueText->SetText(fractional ? fmt("%.2f", Width()) : fmt("%d", value));
             valueText->Invalidate();
         }
-        if (!onThickness.IsValid() && gSettings) {
-            gSettings->annotations.inkBorderWidth = value;
+        if (!onThickness.IsValid() && !onInteger.IsValid() && gSettings) {
+            gSettings->annotations.inkBorderWidth = Width();
         }
     }
     // rewriting an annotation is too slow to do on every step of a drag, so
@@ -2917,8 +2918,10 @@ struct InkThicknessSlider : VirtSlider {
         // a mouse-up commits while still adjusting, a wheel step doesn't
         releasingMouse = IsAdjusting();
         OnChanged();
-        if (onThickness.IsValid()) {
-            onThickness.Call(value);
+        if (onInteger.IsValid()) {
+            onInteger.Call(value);
+        } else if (onThickness.IsValid()) {
+            onThickness.Call(Width());
         } else {
             ScheduleSaveSettings();
         }
@@ -2928,28 +2931,34 @@ struct InkThicknessSlider : VirtSlider {
 // sliderOut gets the slider, for the caller to record once the colors are in.
 // thickness < 0 starts the slider at Annotations.InkBorderWidth and leaves the
 // width there; otherwise it starts there and onThickness gets it
-static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, int thickness, const Func1<int>& onThickness,
-                                      Str label, int minThickness, InkThicknessSlider** sliderOut) {
+static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thickness, const Func1<float>& onThickness,
+                                      Str label, float minThickness, InkThicknessSlider** sliderOut) {
     ToolbarVirt* tb = win->toolbarVirt;
     if (thickness < 0) {
         thickness = InkThickness();
     }
-    thickness = limitValue(thickness, minThickness, kInkThicknessMax);
+    float minWidth = minThickness > 0 ? std::max(gSettings->penMinWidth, minThickness) : 0.f;
+    float maxWidth = std::max(minWidth, gSettings->penMaxWidth);
+    float step = limitValue(gSettings->penWidthStep, 0.1f, 16.f);
+    thickness = limitValue(thickness, minWidth, maxWidth);
 
     auto* preview = new InkStrokePreview();
     preview->col = (current == kColorUnset) ? kColRed : current;
     preview->thickness = thickness;
 
     auto* slider = new InkThicknessSlider();
-    slider->minVal = minThickness;
-    slider->maxVal = kInkThicknessMax;
-    slider->value = thickness;
+    slider->fractional = true;
+    slider->minimum = minWidth;
+    slider->step = step;
+    slider->minVal = 0;
+    slider->maxVal = std::max(0, (int)floorf((maxWidth - minWidth) / step + 0.001f));
+    slider->value = limitValue((int)roundf((thickness - minWidth) / step), 0, slider->maxVal);
     slider->idealDx = DpiScale(kInkSliderDx);
     slider->preview = preview;
     slider->onThickness = onThickness;
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
     slider->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(slider);
-    str::ReplaceWithCopy(&slider->text, fmt("thickness=%d", thickness));
+    str::ReplaceWithCopy(&slider->text, fmt("thickness=%.2f", thickness));
 
     auto* ends = new HBox();
     ends->alignMain = MainAxisAlign::SpaceBetween;
@@ -2964,8 +2973,8 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, int thickn
     };
     // the width as a number, centered between the ends. Padded out to the
     // widest value so it keeps its place when a drag adds a digit.
-    TempStr valueStr = fmt("%d", thickness);
-    int widestDx = PlatformFontMeasureText(tb->platformFont, fmt("%d", kInkThicknessMax)).dx;
+    TempStr valueStr = fmt("%.2f", thickness);
+    int widestDx = PlatformFontMeasureText(tb->platformFont, fmt("%.2f", maxWidth)).dx;
     int extraDx = std::max(widestDx - PlatformFontMeasureText(tb->platformFont, valueStr).dx, 0);
     auto* valueText = NewVirtText({
         .s = valueStr,
@@ -3100,11 +3109,11 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     header->AddChild(close);
     panel->AddChild(header);
     Vec<ToolbarHoverMenuItem> modes;
-    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Solid line"), CmdLaserSolid, true,
+    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Solid line"), CmdLaserSolid, true,
                       win->laserPointerMode == LaserPointerMode::Solid});
-    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Hollow line"), CmdLaserHollow, true,
+    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Hollow line"), CmdLaserHollow, true,
                       win->laserPointerMode == LaserPointerMode::Hollow});
-    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Single dot"), CmdLaserDot, true,
+    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Single dot"), CmdLaserDot, true,
                       win->laserPointerMode == LaserPointerMode::Dot});
     panel->AddChild(NewToolbarHoverMenu(win, modes));
     panel->AddChild(NewVirtText({.s = Tr("Color"), .font = tb->platformFont, .textColor = TbTextColor()}));
@@ -3149,6 +3158,8 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ev->centerOnButton = true;
 }
 
+static void PinToolClick(MainWindow*, VirtMouseEvent*);
+
 static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     ParsedColor* setting = AnnotPresetColorSetting(ev->cmdId);
@@ -3188,13 +3199,21 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
         panel->AddChild(BuildInkPenTypes(win));
         panel->AddChild(ev->layout);
         Vec<ToolbarHoverMenuItem> tools;
-        VecAppend(tools, {Str(kEnhancedEraserIcon), Tr("Stroke eraser"), CmdInkEraser, true, win->inkEraseMode == 1});
-        VecAppend(tools, {Str(kEnhancedEraserIcon), Tr("Erase highlights only"), CmdHighlightEraser, true,
+        VecAppend(tools, {Str(kEnhancedIconEraser), Tr("Stroke eraser"), CmdInkEraser, true, win->inkEraseMode == 1});
+        VecAppend(tools, {Str(kEnhancedIconEraser), Tr("Erase highlights only"), CmdHighlightEraser, true,
                           win->inkEraseMode == 2});
         VecAppend(tools, {{}, Tr("Ignore touch while writing"), CmdTogglePenOnly, true, win->penOnly});
         panel->AddChild(NewToolbarHoverMenu(win, tools));
         ev->layout = panel;
     }
+    auto* withPin = new VBox();
+    withPin->alignCross = CrossAxisAlign::Stretch;
+    withPin->AddChild(ev->layout);
+    auto* pin = new VirtButton(Tr("Pin / unpin current tool"), tb->platformFont);
+    pin->id = ev->cmdId;
+    pin->onClick = MkFunc1(PinToolClick, win);
+    withPin->AddChild(pin);
+    ev->layout = withPin;
     ev->centerOnButton = true;
 }
 
@@ -3332,8 +3351,8 @@ static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) 
 }
 
 void ShowAnnotColorPopup(MainWindow* win, Rect anchor, Color current, bool withNone, Str label,
-                         const Func1<Color>& onPick, int thickness, const Func1<int>& onThickness, Str thicknessLabel,
-                         int minThickness) {
+                         const Func1<Color>& onPick, float thickness, const Func1<float>& onThickness,
+                         Str thicknessLabel, float minThickness) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     if (!tb || gAnnotColorPopup) {
         return;
@@ -3374,7 +3393,7 @@ void ShowAnnotSliderPopup(MainWindow* win, Rect anchor, Str label, int value, in
     slider->maxVal = maxVal;
     slider->value = value;
     slider->idealDx = DpiScale(kInkSliderDx);
-    slider->onThickness = onValue;
+    slider->onInteger = onValue;
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
     slider->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(slider);
     str::ReplaceWithCopy(&slider->text, fmt("thickness=%d", value));
@@ -3521,7 +3540,7 @@ static bool IsAppearanceCmd(int cmdId) {
 
 static void PaintToolbarBrand(VirtCustom*, VirtPaintCtx* ctx) {
     Rect r = ctx->bounds;
-    int sz = DpiScale(28);
+    int sz = DpiScale(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)));
     HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, sz, sz, 0);
     Pixmap* badge = icon ? PixmapFromHICON(icon) : nullptr;
     if (badge) {
@@ -3531,12 +3550,191 @@ static void PaintToolbarBrand(VirtCustom*, VirtPaintCtx* ctx) {
     if (icon) {
         DestroyIcon(icon);
     }
-    Rect title{r.x + sz + DpiScale(6), r.y + DpiScale(2), r.dx - sz - DpiScale(6), DpiScale(17)};
-    ctx->gfx->DrawText(StrL("SumatraPDF Enhanced"), title, gfxTextEllipsis,
-                       GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(13)), TbTextColor());
-    title.y += DpiScale(17);
-    title.dy = DpiScale(13);
+    PlatformFont* font = GetAppFont();
+    int lineDy = PlatformFontLineHeight(font);
+    Rect title{r.x + sz + DpiScale(6), r.y + (r.dy - lineDy * 2) / 2, r.dx - sz - DpiScale(6), lineDy};
+    ctx->gfx->DrawText(StrL("SumatraPDF Enhanced"), title, gfxTextEllipsis, font, TbTextColor());
+    title.y += lineDy;
     ctx->gfx->DrawText(Tr("Focused reading"), title, gfxTextEllipsis, GetAppFont(), TbDisabledColor());
+}
+
+static void ZoomEntryChar(MainWindow* win, Edit::CharEvent* ev) {
+    if (ev->c != VK_RETURN && ev->c != VK_ESCAPE) return;
+    ev->didHandle = true;
+    auto* edit = win->toolbarVirt ? win->toolbarVirt->zoomEdit : nullptr;
+    if (ev->c == VK_RETURN && edit && win->IsDocLoaded()) {
+        TempStr text = edit->GetTextTemp();
+        str::RemoveCharsInPlace(text, StrL("% "));
+        char* end = nullptr;
+        float zoom = (float)strtod(text.s, &end);
+        if (text.len > 0 && end == text.s + text.len && zoom >= kZoomMin && zoom <= kZoomMax) {
+            SmartZoom(win, zoom, nullptr, true);
+        }
+    }
+    HwndSetFocus(win->hwndFrame);
+}
+
+static Edit* CreateZoomEntry(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    auto* edit = new Edit();
+    Edit::CreateArgs args;
+    args.parent = win->hwndToolbar;
+    args.font = tb->platformFont;
+    args.withFrame = true;
+    args.noTheme = true;
+    args.selectAllOnFocus = true;
+    args.alignRight = true;
+    args.cueText = StrL("Zoom %");
+    args.text = StrL("100%");
+    edit->SetColors(TbTextColor(), ThemeWindowControlBackgroundColor());
+    edit->Create(args);
+    edit->SetIdealWidthChars(7);
+    edit->SetMaxWidthChars(7);
+    edit->idealDy = tb->iconSize;
+    edit->mapRtlX = true;
+    edit->onChar = MkFunc1(ZoomEntryChar, win);
+    return edit;
+}
+
+static Str PinnedToolName(MainWindow* win, int cmd) {
+    if (cmd == CmdAnnotationHighlightBrush) return StrL("highlight");
+    if (cmd == CmdCreateAnnotUnderline) return StrL("underline");
+    if (cmd == CmdCreateAnnotStrikeOut) return StrL("strikeout");
+    switch (win->inkPenStyle) {
+        case InkPenStyle::Fountain:
+            return StrL("fountain");
+        case InkPenStyle::Brush:
+            return StrL("brush");
+        case InkPenStyle::Pencil:
+            return StrL("pencil");
+        case InkPenStyle::Highlighter:
+            return StrL("marker");
+        default:
+            return StrL("ballpoint");
+    }
+}
+
+static int PinnedToolCommand(Str tool) {
+    if (str::Eq(tool, StrL("highlight"))) return CmdAnnotationHighlightBrush;
+    if (str::Eq(tool, StrL("underline"))) return CmdCreateAnnotUnderline;
+    if (str::Eq(tool, StrL("strikeout"))) return CmdCreateAnnotStrikeOut;
+    if (str::Eq(tool, StrL("fountain"))) return CmdInkFountain;
+    if (str::Eq(tool, StrL("brush"))) return CmdInkBrush;
+    if (str::Eq(tool, StrL("pencil"))) return CmdInkPencil;
+    if (str::Eq(tool, StrL("marker"))) return CmdInkHighlighter;
+    return CmdInkPen;
+}
+
+static void RefreshPinnedBars() {
+    for (MainWindow* window : gWindows) {
+        ReCreateToolbar(window);
+        ToolbarUpdateStateForWindow(window, true);
+        ScheduleUiUpdate(window, kUiForceRelayout | kUiToolbarDirty);
+    }
+}
+
+static void RemovePinnedTool(int index) {
+    auto* presets = gSettings->pinnedAnnotationTools;
+    if (!presets || index < 0 || index >= len(*presets)) return;
+    auto* preset = (*presets)[index];
+    str::Free(preset->tool);
+    str::Free(preset->color);
+    free(preset);
+    VecRemoveAt(*presets, index);
+    ScheduleSaveSettings();
+    uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
+}
+
+static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
+    int cmd = ev->target->id;
+    Str tool = PinnedToolName(win, cmd);
+    Color color = AnnotCurrentColor(cmd);
+    float width = gSettings->annotations.inkBorderWidth;
+    auto*& presets = gSettings->pinnedAnnotationTools;
+    if (!presets) presets = new Vec<PinnedAnnotationTool*>();
+    for (int i = 0; i < len(*presets); i++) {
+        auto* preset = (*presets)[i];
+        if (str::Eq(preset->tool, tool) && str::Eq(preset->color, SerializeColorTemp(color)) &&
+            fabsf(preset->width - width) < 0.001f) {
+            RemovePinnedTool(i);
+            ev->didHandle = true;
+            return;
+        }
+    }
+    if (len(*presets) >= 32) return;
+    auto* preset = AllocStruct<PinnedAnnotationTool>();
+    str::ReplaceWithCopy(&preset->tool, tool);
+    str::ReplaceWithCopy(&preset->color, SerializeColorTemp(color));
+    preset->width = width;
+    VecAppend(*presets, preset);
+    ScheduleSaveSettings();
+    uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
+    ev->didHandle = true;
+}
+
+struct PinnedToolButton : VirtIconButton {
+    int index = 0;
+    Color inkColor = kColBlack;
+    void Paint(VirtPaintCtx& ctx) override {
+        VirtIconButton::Paint(ctx);
+        int sz = DpiScale(9);
+        Rect dot{ctx.bounds.Right() - sz - DpiScale(2), ctx.bounds.Bottom() - sz - DpiScale(2), sz, sz};
+        ctx.gfx->FillEllipse(dot, TbTextColor());
+        dot.Inflate(-DpiScale(1), -DpiScale(1));
+        ctx.gfx->FillEllipse(dot, inkColor);
+    }
+};
+
+static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
+    int index = ((PinnedToolButton*)ev->target)->index;
+    auto* presets = gSettings->pinnedAnnotationTools;
+    if (!presets || index < 0 || index >= len(*presets)) return;
+    if (ev->button == 1) {
+        RemovePinnedTool(index);
+        ev->didHandle = true;
+        return;
+    }
+    auto* preset = (*presets)[index];
+    int cmd = PinnedToolCommand(preset->tool);
+    Color color = ParseColor(preset->color);
+    if (cmd == CmdAnnotationHighlightBrush || cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut) {
+        SetAnnotPresetColor(cmd, color);
+        HwndSendCommand(win->hwndFrame, cmd);
+    } else {
+        HandlePenToolCommand(win, cmd);
+        SetColorText(gSettings->annotations.inkColor, preset->color);
+        gSettings->annotations.inkBorderWidth = limitValue(preset->width, 0.1f, 64.f);
+        StartAnnotationPlacement(win, CmdCreateAnnotInk);
+    }
+    HideToolbarHoverDropdown(win);
+    ToolbarUpdateStateForWindow(win, true);
+    HwndSetFocus(win->hwndFrame);
+    ev->didHandle = true;
+}
+
+static ILayout* BuildPinnedTools(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    auto* row = new Wrap();
+    row->colGap = DpiScale(3);
+    auto* presets = gSettings->pinnedAnnotationTools;
+    if (!presets) return row;
+    for (int i = 0; i < std::min(len(*presets), 32); i++) {
+        auto* preset = (*presets)[i];
+        auto* button = new PinnedToolButton();
+        button->index = i;
+        button->inkColor = ParseColor(preset->color);
+        button->padding = {DpiScale(4), DpiScale(6), DpiScale(4), DpiScale(6)};
+        button->cornerRadius = DpiScale(6);
+        button->pixmap =
+            GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
+        button->pixmapDisabled =
+            GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
+        button->SetTooltip(fmt("%s · %s · %.2f pt. Right-click to unpin.", preset->tool, preset->color, preset->width));
+        button->onClick = MkFunc1(PinnedToolClick, win);
+        row->AddChild(button);
+        VecAppend(tb->pinnedItems, (VirtCtrl*)button);
+    }
+    return row;
 }
 
 static void BuildToolbarLayout(MainWindow* win) {
@@ -3546,6 +3744,8 @@ static void BuildToolbarLayout(MainWindow* win) {
     ToolbarVirt* tb = win->toolbarVirt;
     VecReset(tb->items);
     VecReset(tb->annotationItems);
+    VecReset(tb->pinnedItems);
+    tb->zoomEdit = nullptr;
     tb->annotationRow = nullptr;
     tb->pageLabel = nullptr;
     tb->pageLabel2 = nullptr;
@@ -3667,12 +3867,18 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             group->AddChild(w);
         }
+        if (bi.cmdId == CmdZoomIn) {
+            tb->zoomEdit = CreateZoomEntry(win);
+            group->AddChild(tb->zoomEdit);
+        }
         if (bi.cmdId == 0) {
             box->AddChild(group);
             group = newGroup();
         }
     }
     box->AddChild(group);
+    if (gSettings->pinnedAnnotationTools && len(*gSettings->pinnedAnnotationTools) > 0)
+        box->AddChild(BuildPinnedTools(win));
 
     auto* annotationBox = new Wrap();
     annotationBox->colGap = DpiScale(4);
@@ -3707,7 +3913,10 @@ static void BuildToolbarLayout(MainWindow* win) {
     mainRow->gap = DpiScale(kButtonSpacingX);
     if (prettyLayout) {
         auto* brand = new VirtCustom();
-        brand->idealSize = {DpiScale(176), DpiScale(36)};
+        int badgeDx = DpiScale(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)) + 6);
+        int brandDx = PlatformFontMeasureText(GetAppFont(), StrL("SumatraPDF Enhanced")).dx + badgeDx;
+        brand->idealSize = {std::max(DpiScale(176), brandDx),
+                            std::max(DpiScale(36), PlatformFontLineHeight(GetAppFont()) * 2 + DpiScale(4))};
         brand->SetFlag(vwfNoHitTest, true);
         brand->onPaint = MkFunc1(PaintToolbarBrand, brand);
         mainRow->AddChild(brand);

@@ -157,15 +157,7 @@ void TabCtrl::SetBounds(Rect r) {
     int dx = r.dx;
     int dy = r.dy;
 
-    // Close glyph grows with tab height (taller UI fonts / tab bar) so it
-    // stays usable on touch; floor 16 DIP, cap 28 DIP (issue #5220).
-    int closeMin = DpiScale(16);
-    int closeMax = DpiScale(28);
-    int closeDy = dy - DpiScale(6);
-    closeDy = limitValue(closeDy, closeMin, closeMax);
-    if (closeDy > dy) {
-        closeDy = dy;
-    }
+    int closeDy = std::min(std::max(DpiScale(12), tabsCtrl->tabIconDx), dy);
     int closeDx = closeDy;
 
     // Padding between circle and tab edge; grow with the button.
@@ -457,8 +449,13 @@ void TabsCtrl::LayoutTabs() {
         dx = frozenTabDx;
     } else {
         auto maxDx = (rect.dx - 5) / nTabs;
-        dx = std::min(tabDefaultDx, maxDx);
+        dx = std::max(tabMinDx, std::min(tabDefaultDx, maxDx));
     }
+    dx = std::max(tabMinDx, dx);
+    hasOverflow = dx * nTabs > rect.dx;
+    scrollButtonDx = std::max(DpiScale(32), tabIconDx + DpiScale(12));
+    viewportDx = std::max(1, rect.dx - (hasOverflow ? scrollButtonDx * 2 : 0));
+    scrollDx = limitValue(scrollDx, 0, std::max(0, dx * nTabs - viewportDx));
     tabSize = {dx, dy};
     if (IsRunningOnWine()) {
         logf("TabsCtrl::LayoutTabs: hwnd=%p client=(%d,%d) tabSize=(%d,%d) nTabs=%d\n", hwnd, rect.dx, rect.dy,
@@ -472,9 +469,9 @@ void TabsCtrl::LayoutTabs() {
     // pack tabs left-to-right (LTR) or right-aligned with reversed order (RTL)
     bool isRtl = IsTabsRtl(hwnd);
     int totalW = nTabs * tabSize.dx;
-    int x = 0;
-    if (isRtl && totalW < rect.dx) {
-        x = rect.dx - totalW;
+    int x = -scrollDx;
+    if (isRtl && totalW < viewportDx) {
+        x = viewportDx - totalW;
     }
     vroot->SetBounds(rect);
     VirtCtrl::SetBounds(rect);
@@ -489,10 +486,19 @@ void TabsCtrl::LayoutTabs() {
     }
 }
 
+void TabsCtrl::ScrollTabs(int direction) {
+    if (!hasOverflow) {
+        return;
+    }
+    scrollDx += direction * std::max(tabSize.dx, 1);
+    LayoutTabs();
+    ScheduleRepaint();
+}
+
 // Finds the index of the tab which contains the given point.
 TabsCtrl::MouseState TabsCtrl::TabStateFromMousePosition(const Point& p) {
     TabsCtrl::MouseState res;
-    if (p.x < 0 || p.y < 0 || !vroot) {
+    if (p.x < 0 || p.y < 0 || (hasOverflow && p.x >= viewportDx) || !vroot) {
         return res;
     }
     Point ptLocal{0, 0};
@@ -782,6 +788,19 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         mousePos = HwndGetCursorPos(hwnd);
     }
 
+    if (hasOverflow && (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)) {
+        int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        ScrollTabs(msg == WM_MOUSEHWHEEL ? (delta > 0 ? 1 : -1) : (delta > 0 ? -1 : 1));
+        return 0;
+    }
+    if (hasOverflow && mousePos.x >= viewportDx && msg == WM_LBUTTONDOWN) {
+        ScrollTabs(mousePos.x < viewportDx + scrollButtonDx ? -1 : 1);
+        return 0;
+    }
+    if (hasOverflow && mousePos.x >= viewportDx && msg == WM_LBUTTONUP) {
+        return 0;
+    }
+
     TabsCtrl::MouseState tabState;
 
     bool overClose = false;
@@ -823,7 +842,7 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             mousePos = HwndScreenToClient(hwnd, mousePos);
             tabState = TabStateFromMousePosition(mousePos);
-            if (tabState.tabIdx >= 0) {
+            if (tabState.tabIdx >= 0 || (hasOverflow && mousePos.x >= viewportDx)) {
                 return HTCLIENT;
             }
             return HTTRANSPARENT;
@@ -1014,10 +1033,29 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HDC hdc = GetDC(hwnd);
             Color bgCol = GetColor(kColTabBg);
             if (vroot) {
-                PaintVirtTree(vroot, hdc, clientRc, bgCol);
+                Rect tabClip = clientRc;
+                if (hasOverflow) {
+                    tabClip.dx = viewportDx;
+                }
+                PaintVirtTree(vroot, hdc, tabClip, bgCol);
             } else {
                 // no tabs: nothing but the background
                 HdcFillRect(hdc, clientRc, bgCol);
+            }
+            if (hasOverflow) {
+                Rect buttons{viewportDx, 0, clientRc.dx - viewportDx, clientRc.dy};
+                HdcFillRect(hdc, buttons, bgCol);
+                PlatformFont* arrowFont = GetUserGuiFont(GetFont()->GetName(), tabIconDx);
+                HGDIOBJ oldFont = SelectObject(hdc, arrowFont->GetHFont());
+                int oldMode = SetBkMode(hdc, TRANSPARENT);
+                Color oldColor = SetTextColor(hdc, GetColor(kColTabText));
+                RECT left{viewportDx, 0, viewportDx + scrollButtonDx, clientRc.dy};
+                RECT right{left.right, 0, clientRc.dx, clientRc.dy};
+                DrawTextW(hdc, L"\u2039", 1, &left, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawTextW(hdc, L"\u203a", 1, &right, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SetTextColor(hdc, oldColor);
+                SetBkMode(hdc, oldMode);
+                SelectObject(hdc, oldFont);
             }
             ReleaseDC(hwnd, hdc);
             return 0;
@@ -1206,6 +1244,18 @@ int TabsCtrl::SetSelected(int idx) {
     ReportIf(idx < 0 || idx >= nTabs);
     int prevSelectedIdx = selectedIdx;
     selectedIdx = idx;
+    LayoutTabs();
+    if (hasOverflow && IsValidIdx(idx)) {
+        int visualIndex = IsTabsRtl(hwnd) ? TabCount() - 1 - idx : idx;
+        int left = visualIndex * tabSize.dx;
+        int right = left + tabSize.dx;
+        if (left < scrollDx) {
+            scrollDx = left;
+        } else if (right > scrollDx + viewportDx) {
+            scrollDx = right - viewportDx;
+        }
+        LayoutTabs();
+    }
     UpdateHover(tabHighlighted);
     HwndRepaintNow(hwnd);
     return prevSelectedIdx;

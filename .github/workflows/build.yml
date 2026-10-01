@@ -9,6 +9,7 @@ permissions:
 jobs:
   build:
     name: Build
+    if: github.repository == 'sumatrapdfreader/sumatrapdf'
     #runs-on: SumatraBuilder
     runs-on: windows-2025-vs2026
     steps:

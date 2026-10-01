@@ -1,0 +1,90 @@
+[
+  {
+    "id": "ws1",
+    "name": "Word Smart 1",
+    "count": 850,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/word_smart_1.json",
+    "sha256": "4a36610c28ba3fcff4f27d5579b84fba1708e8cab9aeaada816f5f303204eb0a",
+    "license": "MIT"
+  },
+  {
+    "id": "ws2",
+    "name": "Word Smart 2",
+    "count": 829,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/word_smart_2.json",
+    "sha256": "9298d49003425c19b0b32b5a42533f2b3800edbd55351b37a0e3f58edeec2170",
+    "license": "MIT"
+  },
+  {
+    "id": "b333",
+    "name": "Barron's 333",
+    "count": 333,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/barrons_333.json",
+    "sha256": "c3487e2cb670af78857abbeca44eb1bf9d4abcd81bffd049b34ea778239f5065",
+    "license": "MIT"
+  },
+  {
+    "id": "b800",
+    "name": "Barron's 800",
+    "count": 805,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/barrons_800.json",
+    "sha256": "32b32255e5f7e1aa64dea2814f6074b8d151736a9f165f4f80892f1132dd1016",
+    "license": "MIT"
+  },
+  {
+    "id": "b1100",
+    "name": "Barron's 1100",
+    "count": 1104,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/barrons_1100.json",
+    "sha256": "909521ef26413c2faa2344a8fa5b068e8068c3b533b54c7b678e45868f74f4eb",
+    "license": "MIT"
+  },
+  {
+    "id": "mg1000",
+    "name": "Magoosh 1000",
+    "count": 1000,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/magoosh_1000.json",
+    "sha256": "949150d1f7f9323efc93c33df20c71812a34f6abc46705c5eaf12dea1661c9de",
+    "license": "MIT"
+  },
+  {
+    "id": "k900",
+    "name": "Kaplan 900",
+    "count": 767,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/kaplan_900.json",
+    "sha256": "441e29b403fc63e7921ee1f895c840e68b7b0b324c6b3c190851c0f3621699b8",
+    "license": "MIT"
+  },
+  {
+    "id": "p700",
+    "name": "Powerscore 700",
+    "count": 699,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/powerscore_700.json",
+    "sha256": "5fdfb4f982dd492e55fcf1c8a61fe4f3e51e79b58f40741c3fafd499ffcb8346",
+    "license": "MIT"
+  },
+  {
+    "id": "sn1000",
+    "name": "SparkNotes 1000",
+    "count": 991,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/sparknotes_1000.json",
+    "sha256": "f87bc1b7a88722f480665e345ae546f4b384772bf8cd265c42751f5a3f00a78b",
+    "license": "MIT"
+  },
+  {
+    "id": "mp1000",
+    "name": "Manhattan Prep 1000",
+    "count": 996,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/manhattan_prep_1000.json",
+    "sha256": "4b7cce764d19644ed396ca73881123e007040ad305ec087ab54be89384d55c3a",
+    "license": "MIT"
+  },
+  {
+    "id": "gm1100",
+    "name": "GregMat 1100",
+    "count": 783,
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/sources/lists/gregmat_1100.json",
+    "sha256": "78b98ff329ad6a36dcb1ee9bc46c31bb889780719c59ca5b9a6df46e70e8e7d4",
+    "license": "MIT"
+  }
+]

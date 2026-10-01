@@ -84,6 +84,13 @@ void RefHoverOnCanvasMouseMove(RefHoverState*& s, HWND hwndCanvas, DocController
     if (!s) {
         return;
     }
+    if (s->ctrl && s->ctrl != ctrl) {
+        // The same canvas is reused when switching documents. Its text lookup
+        // cache belongs to the previous engine and must never resolve citations
+        // against that document after a tab switch.
+        RefHoverHide(s, hwndCanvas);
+        RefHoverFreeLookupCache(s);
+    }
     s->ctrl = ctrl;
     s->linkHandler = linkHandler;
 

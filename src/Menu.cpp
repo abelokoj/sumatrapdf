@@ -360,6 +360,14 @@ static MenuDef menuDefView[] = {
         CmdAIChatWithAntiGravity,
     },
     {
+        TrN("Offline &Dictionary..."),
+        CmdDictionaryLookup,
+    },
+    {
+        TrN("&Vocabulary and Practice..."),
+        CmdVocabularyHome,
+    },
+    {
         {},
         0,
     },
@@ -2760,22 +2768,11 @@ void FreeMenuOwnerDrawInfoData(HMENU hmenu) {
         }
     };
 }
-#if 1
-void MarkMenuOwnerDraw(HMENU /*hmenu*/, bool /*isMenuBar*/) {
-    // our painting isn't good enough so disable for now
-    // rely on darkmodelib for menu theming, which only does light / dark theme from os
-}
-#else
-void MarkMenuOwnerDraw(HMENU hmenu, bool isMenuBar) {
-    // darkmodelib handles the menu bar via setWindowMenuBarSubclass
-    // but doesn't handle popup/context menus, so we owner-draw those
-    if (isMenuBar && DarkModeIsActive()) {
+void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/) {
+    // Native popup menus ignore UIFontSize; owner drawing applies the chosen font.
+    if (IsMenuFontSizeDefault()) {
         return;
     }
-    if (!ThemeColorizeControls()) {
-        return;
-    }
-
     // https://stackoverflow.com/questions/30353644/cmenu-border-color-on-mfc
     static HBRUSH hbrBrush = nullptr;
     static Color bgCol = (Color)-1;
@@ -2820,7 +2817,7 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool isMenuBar) {
             FreeMenuOwnerDrawInfo(modi);
         }
         auto modi = AllocStruct<MenuOwnerDrawInfo>();
-        g_menuDrawInfos.Append(modi);
+        VecAppend(g_menuDrawInfos, modi);
         modi->fState = mii.fState;
         modi->fType = mii.fType;
         modi->hbmpItem = mii.hbmpItem;
@@ -2837,7 +2834,6 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool isMenuBar) {
         }
     }
 }
-#endif
 
 static int GetMenuCheckMarkCx(HWND hwnd) {
     DpiSetFromHwnd(hwnd);
@@ -2849,7 +2845,6 @@ static int GetMenuCheckMarkCx(HWND hwnd) {
         // this applies scaling for default values on my win 11 i.e.:
         // font size is 12, menu checkmark is 15
         cx = (cx * 15) / 12;
-        cx = DpiScale(cx);
     }
     return cx;
 }

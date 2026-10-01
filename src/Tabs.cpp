@@ -110,6 +110,7 @@ int GetTabbarHeight(HWND hwnd, float factor) {
     int tabDy = DpiScale(kTabBarDy);
     int fontDyWithPadding = PlatformFontLineHeight(font) + DpiScale(2);
     tabDy = std::max(fontDyWithPadding, tabDy);
+    tabDy = std::max(tabDy, DpiScale(limitValue(gSettings->toolbarSize, 8, 64) + 6));
     // Guard against the bad per-window DPI Wine reports (93e5b4e47: the tab bar
     // and caption came out tiny). Wine only, deliberately: we are PerMonitorV2,
     // so DpiScale(HWND_DESKTOP) is the *system* (primary monitor) DPI, which
@@ -158,7 +159,9 @@ void UpdateTabWidth(MainWindow* win) {
     // (issue #3850). Height already uses DpiScale via GetTabbarHeight.
     if (win->tabsCtrl) {
         HWND hwnd = win->tabsCtrl->hwnd ? win->tabsCtrl->hwnd : win->hwndFrame;
-        win->tabsCtrl->tabDefaultDx = DpiScale(gSettings->tabWidth);
+        win->tabsCtrl->tabIconDx = DpiScale(limitValue(gSettings->toolbarSize, 8, 64));
+        win->tabsCtrl->tabMinDx = DpiScale(limitValue(gSettings->minTabWidth, 60, 400));
+        win->tabsCtrl->tabDefaultDx = std::max(win->tabsCtrl->tabMinDx, DpiScale(gSettings->tabWidth));
     }
     // Lay out only when the bar stays visible. Hiding it right after
     // TabCtrl_SetItemSize invalidated the control leaves a pending WM_PAINT for

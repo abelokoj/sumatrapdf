@@ -1,0 +1,354 @@
+[
+  {
+    "id": "ws1",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/ws1.wmvocab.json.gz",
+    "sha256": "0e075b8378ee430b674dd4605047b2ea5b966ab45ff24e1e7e69b9b962852102",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Word Smart 1 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "ws2",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/ws2.wmvocab.json.gz",
+    "sha256": "4582b0b8c7f5b15f9f37c236ee1735824a6109055fd74bb0154a014f584ae691",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Word Smart 2 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "b333",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/b333.wmvocab.json.gz",
+    "sha256": "5cdc6b41fe86e3fe589bcff356faada02188e745f51bde735133388656012083",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Barron's 333 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "b800",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/b800.wmvocab.json.gz",
+    "sha256": "8e633a2b9b77c466b511723d4ed01f88e8d1946f91247445046e3369086fff4c",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Barron's 800 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "b1100",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/b1100.wmvocab.json.gz",
+    "sha256": "c2e20e3dea36ac46be62f680b79fe82e6247761afa96f669f59be8f20e06b7ea",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Barron's 1100 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "mg1000",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/mg1000.wmvocab.json.gz",
+    "sha256": "c9d398665c9291ac301923e06c9a871ab4c5fd3ed2f1770717391eadff5d5fbd",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Magoosh 1000 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "k900",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/k900.wmvocab.json.gz",
+    "sha256": "f72934dcd5930a9bf02e7442af1077ee7ea0838a76e7defdfd764277eefa45b7",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Kaplan 900 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "p700",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/p700.wmvocab.json.gz",
+    "sha256": "e5a8a844659d8586f4db6760113249e869e8ac2c541cb44ace214d751b629005",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Powerscore 700 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "sn1000",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/sn1000.wmvocab.json.gz",
+    "sha256": "c9885f0cfc95db46aed9667a61979fff441b57adb7da70f33fb7aaa8421e0323",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "SparkNotes 1000 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "mp1000",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/mp1000.wmvocab.json.gz",
+    "sha256": "483139fa9fe74cec84026ff26dafc8b03e3909e48fa2fcc86646905a71fcbfdc",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "Manhattan Prep 1000 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "id": "gm1100",
+    "source": "https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/gm1100.wmvocab.json.gz",
+    "sha256": "d34807c5642dc12182ba51acbe6eb5a95a3bd1abd1637d6c3bb7387b1695f21a",
+    "attribution": [
+      {
+        "name": "Wiktionary (via kaikki.org)",
+        "license": "CC-BY-SA-3.0",
+        "url": "https://kaikki.org/dictionary/English/"
+      },
+      {
+        "name": "WordNet 3.0",
+        "license": "WordNet License",
+        "url": "https://wordnet.princeton.edu/license-and-commercial-use"
+      },
+      {
+        "name": "CMU Pronouncing Dictionary",
+        "license": "BSD-2-Clause",
+        "url": "http://www.speech.cs.cmu.edu/cgi-bin/cmudict"
+      },
+      {
+        "name": "FrequencyWords (OpenSubtitles 2018)",
+        "license": "CC-BY-SA-4.0",
+        "url": "https://github.com/hermitdave/FrequencyWords"
+      },
+      {
+        "name": "GregMat 1100 word list",
+        "license": "list of words only",
+        "url": ""
+      }
+    ]
+  }
+]

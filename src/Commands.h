@@ -350,8 +350,10 @@ enum {
     CmdLaserSolid = 544,
     CmdLaserHollow = 545,
     CmdLaserDot = 546,
+    CmdDictionaryLookup = 547,
+    CmdVocabularyHome = 548,
 
-    CmdLast = 546,
+    CmdLast = 548,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

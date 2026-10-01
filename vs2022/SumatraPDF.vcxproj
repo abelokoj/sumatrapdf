@@ -1445,6 +1445,7 @@
     <ClInclude Include="..\src\EngineAll.h" />
     <ClInclude Include="..\src\EngineBase.h" />
     <ClInclude Include="..\src\EngineMupdf.h" />
+    <ClInclude Include="..\src\EnhancedIcons.h" />
     <ClInclude Include="..\src\EutlTrust.h" />
     <ClInclude Include="..\src\ExifDump.h" />
     <ClInclude Include="..\src\ExplorerQuickLook.h" />
@@ -1478,6 +1479,7 @@
     <ClInclude Include="..\src\MobiDoc.h" />
     <ClInclude Include="..\src\NavFilesInFolder.h" />
     <ClInclude Include="..\src\Notifications.h" />
+    <ClInclude Include="..\src\OfflineDictionary.h" />
     <ClInclude Include="..\src\OverlayScrollbar.h" />
     <ClInclude Include="..\src\PagePosition.h" />
     <ClInclude Include="..\src\PageRenderPolicy.h" />
@@ -1527,8 +1529,11 @@
     <ClInclude Include="..\src\Theme.h" />
     <ClInclude Include="..\src\Toolbar.h" />
     <ClInclude Include="..\src\Translations.h" />
+    <ClInclude Include="..\src\UiFonts.h" />
     <ClInclude Include="..\src\UpdateCheck.h" />
     <ClInclude Include="..\src\Version.h" />
+    <ClInclude Include="..\src\Vocabulary.h" />
+    <ClInclude Include="..\src\VocabularyDialog.h" />
     <ClInclude Include="..\src\WebpReader.h" />
     <ClInclude Include="..\src\WindowTab.h" />
     <ClInclude Include="..\src\base\Archive.h" />
@@ -1700,6 +1705,7 @@
     <ClCompile Include="..\src\MuPDF_Exports.cpp" />
     <ClCompile Include="..\src\NavFilesInFolder.cpp" />
     <ClCompile Include="..\src\Notifications.cpp" />
+    <ClCompile Include="..\src\OfflineDictionary.cpp" />
     <ClCompile Include="..\src\OverlayScrollbar.cpp" />
     <ClCompile Include="..\src\PageGridDialog.cpp" />
     <ClCompile Include="..\src\PagePosition.cpp" />
@@ -1812,6 +1818,8 @@
     <ClCompile Include="..\src\Translations.cpp" />
     <ClCompile Include="..\src\Uninstaller.cpp" />
     <ClCompile Include="..\src\UpdateCheck.cpp" />
+    <ClCompile Include="..\src\Vocabulary.cpp" />
+    <ClCompile Include="..\src\VocabularyDialog.cpp" />
     <ClCompile Include="..\src\WebpReader.cpp" />
     <ClCompile Include="..\src\WindowTab.cpp" />
     <ClCompile Include="..\src\base\Archive.cpp">

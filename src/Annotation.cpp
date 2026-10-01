@@ -3,6 +3,7 @@
 
 #include "base/Base.h"
 #include "base/File.h"
+#include "base/GuessFileType.h"
 #include "base/Pixmap.h"
 #include "base/AutoWin.h"
 #include "base/HtmlTags.h"
@@ -18,6 +19,9 @@ extern "C" {
 #include "DocController.h"
 #include "EngineBase.h"
 #include "EngineMupdf.h"
+#if IS_DEBUG
+#include "EngineAll.h"
+#endif
 #include "AppSettings.h"
 #include "Commands.h"
 #include "Translations.h"
@@ -2003,7 +2007,7 @@ InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
     Vec<int> strokeCounts;
     Vec<PointF> points;
     GetInkList(annot, strokeCounts, points);
-    radius += (float)BorderWidth(annot) / 2.f;
+    radius += BorderWidthF(annot) / 2.f;
     if (!EraseInkStrokes(strokeCounts, points, pt, radius)) {
         return InkEraseResult::None;
     }
@@ -2040,7 +2044,7 @@ InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
     return InkEraseResult::Changed;
 }
 
-int BorderWidth(Annotation* annot) {
+float BorderWidthF(Annotation* annot) {
     if (!AnnotationIsLive(annot)) {
         return 0;
     }
@@ -2057,10 +2061,14 @@ int BorderWidth(Annotation* annot) {
         logf("BorderWidth: pdf_annot_border() failed\n");
     }
 
-    return (int)res;
+    return res;
 }
 
-void SetBorderWidth(Annotation* annot, int newWidth) {
+int BorderWidth(Annotation* annot) {
+    return (int)roundf(BorderWidthF(annot));
+}
+
+void SetBorderWidth(Annotation* annot, float newWidth) {
     ReportIf(!annot);
     if (!AnnotationIsLive(annot)) {
         return;
@@ -2646,7 +2654,7 @@ struct AnnotationClipboard {
     PdfColor textColor = 0;
     bool hasTextColor = false;
     int opacity = 255;
-    int borderWidth = -1;
+    float borderWidth = -1;
     int quadding = -1;
     int textSize = -1;
     int lineStartStyle = 0;
@@ -2851,7 +2859,7 @@ bool CopyAnnotation(Annotation* annot) {
     gAnnotClipboard.iconName = str::Dup(IconName(annot));
     gAnnotClipboard.opacity = Opacity(annot);
     if (AnnotationSupportsBorder(annot->type)) {
-        gAnnotClipboard.borderWidth = BorderWidth(annot);
+        gAnnotClipboard.borderWidth = BorderWidthF(annot);
     }
     if (annot->type == AnnotationType::FreeText) {
         gAnnotClipboard.quadding = Quadding(annot);
@@ -3036,3 +3044,70 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
     // clang-format on
     return AnnotationType::Unknown;
 }
+
+#if IS_DEBUG
+bool Annotation_UnitTestInkRoundtrip() {
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Ink /Rect [9 9 31 41] /BS << /W 0.1 >> /C [0 0 0] /CA 0.65 "
+        "/SumatraPenStyle 3 /InkList [[10 10 30 10] [10 40 30 40]] >>",
+    };
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) {
+        pdf.Append(fmt("%010d 00000 n \n", offset));
+    }
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("ink-roundtrip.pdf"), nullptr);
+    if (!engine) {
+        return false;
+    }
+    Vec<Annotation*> annotations;
+    EngineMupdfGetAnnotations(engine, annotations);
+    bool ok = len(annotations) == 1;
+    if (ok) {
+        Annotation* annot = annotations[0];
+        ok = fabsf(BorderWidthF(annot) - 0.1f) < 0.001f && InkPenStyleTag(annot) == 3;
+        SetBorderWidth(annot, 0.3f);
+    }
+    Str savedPath = str::Dup(GetTempFilePathTemp(StrL("enhanced-ink")));
+    ok = ok && EngineMupdfSaveCopy(engine, savedPath);
+    SafeEngineRelease(&engine);
+    if (ok) {
+        Str data = file::ReadFile(savedPath);
+        engine = CreateEngineMupdfFromData(data, StrL("reopened.pdf"), nullptr);
+        ok = engine != nullptr;
+        if (ok) {
+            EngineMupdfGetAnnotations(engine, annotations);
+            ok = len(annotations) == 1;
+            if (ok) {
+                Annotation* annot = annotations[0];
+                ok = fabsf(BorderWidthF(annot) - 0.3f) < 0.001f && InkPenStyleTag(annot) == 3;
+                Vec<int> counts;
+                Vec<PointF> points;
+                GetInkList(annot, counts, points);
+                ok = ok && len(counts) == 2 && len(points) == 4;
+                if (ok) {
+                    ok = EraseAnnotationInk(annot, points[0], 0.1f) == InkEraseResult::Changed;
+                    GetInkList(annot, counts, points);
+                    ok = ok && len(counts) == 1 && len(points) == 2;
+                }
+            }
+        }
+        SafeEngineRelease(&engine);
+        str::Free(data);
+    }
+    file::Delete(savedPath);
+    str::Free(savedPath);
+    return ok;
+}
+#endif

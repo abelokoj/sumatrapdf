@@ -6,12 +6,17 @@
 #include "base/File.h"
 #include "base/GdiPlusUtil.h"
 #include "base/Pixmap.h"
+#include "gui/Dpi.h"
 
 #include "Settings.h"
 #include "ImageReader.h"
 
 #include "AppTools.h"
 #include "FileThumbnails.h"
+
+Size GetThumbnailRenderSize() {
+    return {std::min(DpiScale(kThumbnailDx * 250 / 100), 2120), std::min(DpiScale(kThumbnailDy * 250 / 100), 1500)};
+}
 
 TempStr GetThumbnailPathTemp(Str filePath) {
     // create a fingerprint of a (normalized) path for the file name
@@ -116,7 +121,9 @@ bool HasThumbnail(FileState* fs) {
         fs->thumbnail = nullptr;
     }
 
-    return fs->thumbnail != nullptr;
+    // Old 212px cache entries remain a placeholder while a sharper replacement
+    // is rendered. They must not suppress regeneration when the grid grows.
+    return fs->thumbnail && fs->thumbnail->width >= GetThumbnailRenderSize().dx;
 }
 
 // takes ownership of bmp

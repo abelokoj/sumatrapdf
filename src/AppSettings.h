@@ -30,6 +30,7 @@ void RegisterSettingsForFileChanges();
 void UnregisterSettingsForFileChanges();
 int GetAppFontSize();
 int GetAppFontSizeForDpi(int dpi);
+Str GetAppFontFamily();
 PlatformFont* GetAppFont();
 PlatformFont* GetAppFontForDpi(int dpi);
 int GetAppMenuFontSize();

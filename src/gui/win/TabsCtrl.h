@@ -42,6 +42,12 @@ struct TabsCtrl : VirtCtrl {
         bool withToolTips = false;
         int ctrlID = 0;
         int tabDefaultDx = 300;
+        int tabMinDx = 100;
+        int tabIconDx = 18;
+        int scrollButtonDx = 32;
+        int scrollDx = 0;
+        int viewportDx = 0;
+        bool hasOverflow = false;
         bool isRtl = false;
     };
 
@@ -99,6 +105,12 @@ struct TabsCtrl : VirtCtrl {
     bool draggingTab = false;
     // dx of tab if there's more space available
     int tabDefaultDx = 300;
+    int tabMinDx = 100;
+    int tabIconDx = 18;
+    int scrollButtonDx = 32;
+    int scrollDx = 0;
+    int viewportDx = 0;
+    bool hasOverflow = false;
 
     Vec<TabInfo*> tabs;
     // VirtRoot over this control on `hwnd`; does not own us
@@ -175,6 +187,7 @@ struct TabsCtrl : VirtCtrl {
     void SetHighlighted(int idx);
 
     void LayoutTabs();
+    void ScrollTabs(int direction);
     void ScheduleRepaint();
     TabsCtrl::MouseState TabStateFromMousePosition(const Point& p);
     HBITMAP RenderForDragging(int idx);

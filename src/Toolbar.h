@@ -98,8 +98,8 @@ bool ToolbarHoverDropdownContainsScreenPoint(MainWindow*, Point);
 // starting there; onThickness gets the width when the slider is let go.
 // thicknessLabel names the slider (Thickness when empty), minThickness is its lowest width
 void ShowAnnotColorPopup(MainWindow*, Rect anchor, Color current, bool withNone, Str label, const Func1<Color>& onPick,
-                         int thickness = -1, const Func1<int>& onThickness = {}, Str thicknessLabel = {},
-                         int minThickness = 1);
+                         float thickness = -1, const Func1<float>& onThickness = {}, Str thicknessLabel = {},
+                         float minThickness = 0.1f);
 void ShowAnnotSliderPopup(MainWindow*, Rect anchor, Str label, int value, int minVal, int maxVal,
                           const Func1<int>& onValue);
 // for tests: the swatches of the drop-down that is up, if any
@@ -143,6 +143,8 @@ struct ToolbarVirt {
     VirtHost* host = nullptr;
     Vec<VirtCtrl*> items; // not owned; the layout owns them
     Vec<VirtCtrl*> annotationItems;
+    Vec<VirtCtrl*> pinnedItems;
+    Edit* zoomEdit = nullptr;
     ILayout* annotationRow = nullptr;
     VirtText* pageLabel = nullptr;
     VirtText* pageLabel2 = nullptr; // "Page:" before pageEdit, only for HasChapters() docs

@@ -821,6 +821,12 @@ const selectionHandler: Field[] = [
   ).ver("3.7"),
 ];
 
+const annotationToolPreset: Field[] = [
+  field("Tool", Str, "ballpoint", "annotation tool identifier"),
+  field("Color", Str, "#000000", "pinned tool color"),
+  field("Width", Float, 2, "pinned stroke width in PDF points"),
+];
+
 const annotations: Field[] = [
   field(
     "HighlightColor",
@@ -920,7 +926,7 @@ const annotations: Field[] = [
     "colors offered by the ink button's drop-down, separated by space. Use #aarrggbb values: " +
       "the alpha is the stroke's opacity. The color ink currently draws in is added when it is missing",
   ).ver("3.7"),
-  field("InkBorderWidth", Int, 2, "width of the stroke of new ink annotations, in points").ver("3.7"),
+  field("InkBorderWidth", Float, 2, "width of the stroke of new ink annotations, in points").ver("3.7"),
   field(
     "StampColor",
     Color,
@@ -1319,6 +1325,7 @@ const globalPrefs: Field[] = [
   )
     .ver("3.7")
     .doc("valid values: thumbnails, list"),
+  field("HomePageMaxRecentItems", Int, 30, "maximum recent documents shown on the home page, from 1 to 200"),
   field(
     "HomePageThumbnailSize",
     Int,
@@ -1626,10 +1633,10 @@ const globalPrefs: Field[] = [
   field(
     "CitationHoverDelay",
     Int,
-    -1,
+    300,
     "how long an internal-document link has to be hovered, in milliseconds, before a popup " +
       "rendering the destination region (citation entry, figure, footnote) appears. -1 (the " +
-      "default) disables the popup; set a positive value like 300 to enable it",
+      "disabled value) disables the popup; default 300 enables previews",
   ).ver("3.7"),
   field(
     "ReadAloudVoiceId",
@@ -1666,6 +1673,7 @@ const globalPrefs: Field[] = [
     true,
     "if true, prevents the screen from turning off when in fullscreen or presentation mode",
   ),
+  field("MinTabWidth", Int, 100, "minimum tab width in logical pixels; overflow scrolls"),
   field("TabWidth", Int, 300, "maximum width of a single tab, in pixels at 100% display scaling (at least 60)"),
   // Built-in names must stay in sync with themesTxt in src/Theme.cpp (plus System)
   field(
@@ -1754,6 +1762,7 @@ const globalPrefs: Field[] = [
     "font size for bookmarks and favorites tree views, in pixels; 0 means the Windows default. " +
       "Not scaled by the display scaling",
   ).ver("3.3"),
+  field("UIFontFamily", Str, "system", "interface font: system, Manrope, Pretendard Std or Public Sans"),
   field(
     "UIFontSize",
     Int,
@@ -1933,6 +1942,15 @@ const globalPrefs: Field[] = [
   emptyLine(),
   array("Shortcuts", keyboardShortcut, "custom keyboard shortcuts"),
   emptyLine(),
+  field("PenMinWidth", Float, 0.1, "minimum pen width in PDF points"),
+  field("PenMaxWidth", Float, 16, "maximum pen width in PDF points"),
+  field("PenWidthStep", Float, 0.1, "pen width increment in PDF points"),
+  array(
+    "PinnedAnnotationTools",
+    annotationToolPreset,
+    "favorite annotation tool, color and width combinations",
+  ).structName("PinnedAnnotationTool"),
+  emptyLine(),
   array("Themes", theme, "color themes").ver("3.6"),
   emptyLine(),
   array("TabGroups", tabGroup, "saved groups of tabs").ver("3.7"),
@@ -2037,6 +2055,7 @@ const globalPrefsLayout = [
   "InverseSearchCmdLine",
   "HomePageViewMode",
   "HomePageThumbnailSize",
+  "HomePageMaxRecentItems",
   "FilePicker",
   "CustomColors",
   "Toolbar",
@@ -2080,10 +2099,16 @@ const globalPrefsLayout = [
   "ReadingAutoScrollSpeed",
   "ReadingBar",
   "TabWidth",
+  "MinTabWidth",
+  "PenMinWidth",
+  "PenMaxWidth",
+  "PenWidthStep",
+  "PinnedAnnotationTools",
   "TocDy",
   "ToolbarSize",
   "TreeFontSize",
   "UIFontSize",
+  "UIFontFamily",
   "ZoomIncrement",
   "AIChatSidebarDx",
   "CustomScreenDPI",

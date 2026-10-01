@@ -1,0 +1,57 @@
+{
+  "id": "wordnet-en",
+  "title": "Princeton WordNet 3.0 (English)",
+  "language": "en",
+  "version": "3.0",
+  "license": "Princeton WordNet license; see LICENSE",
+  "officialSource": "https://wordnet.princeton.edu/",
+  "dataMirror": "https://github.com/nltk/wordnet",
+  "mirrorRevision": "ce91915ae38a341ae845be4d825ef6003cddf395",
+  "files": [
+    {
+      "name": "adj.exc",
+      "bytes": 23019,
+      "sha256": "8824cc24bbedd797b9702316b27f07cd4c2b76b629539f0a1276f03926758016"
+    },
+    {
+      "name": "adv.exc",
+      "bytes": 85,
+      "sha256": "e7291461b629abfe63301bbe1998cee09fd575ed7107abd7ea9763adb05bf0a8"
+    },
+    {
+      "name": "data.adj",
+      "bytes": 3155426,
+      "sha256": "f24b635368be441501c9b8001e9271fd3b30b203f00d91e332979e6f8fe35646"
+    },
+    {
+      "name": "data.adv",
+      "bytes": 516696,
+      "sha256": "e66dbbda0e0359e41b7f225bff71dd0c263dc7c66c1b61abc9ba334973d92979"
+    },
+    {
+      "name": "data.noun",
+      "bytes": 15300280,
+      "sha256": "489f145e0f68877c0be5bd0eb4117adaaac52f38f6204eb8d85dbe2158b614cc"
+    },
+    {
+      "name": "data.verb",
+      "bytes": 2772517,
+      "sha256": "29cc96ed80c9f47d94fe75e332a9df80f4b1c737205f92d2f433d63c6da2ab51"
+    },
+    {
+      "name": "LICENSE",
+      "bytes": 1625,
+      "sha256": "7731175a77952e259390b496fab905e57118b8d19ad3a8383c67eee724ff443f"
+    },
+    {
+      "name": "noun.exc",
+      "bytes": 38301,
+      "sha256": "2b5d675c380b39ecf595af9fa9d4e7feb1d58c643b0bff08c40ed5bfe41fab7a"
+    },
+    {
+      "name": "verb.exc",
+      "bytes": 38033,
+      "sha256": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c"
+    }
+  ]
+}

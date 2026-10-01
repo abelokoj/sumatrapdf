@@ -44,6 +44,9 @@
 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/Win.h"
 #include "gui/Dpi.h"
 #include "base/Timer.h"
@@ -3167,29 +3170,65 @@ bool MaybeGetNextZoomByIncrement(float* currZoomInOut, float towardsLevel) {
     return true;
 }
 
-// differences to Adobe Reader: starts at 8.33 (instead of 1 and 6.25)
-// and has four additional intermediary zoom levels ("added")
-// clang-format off
-static float defaultZoomLevels[] = {
-    8.33f, 12.5f, 18 /* added */, 25, 33.33f, 50, 66.67f, 75,
-    100, 125, 150, 200, 300, 400, 600, 800, 1000 /* added */,
-    1200, 1600, 2000 /* added */, 2400, 3200, 4800 /* added */, 6400
-};
-// clang-format on
+static Vec<float> defaultZoomLevels;
 
 float* GetDefaultZoomLevels(int* nZoomLevelsOut) {
-    float* zoomLevels = defaultZoomLevels;
-    int nZoomLevels = dimofi(defaultZoomLevels);
-
     int nCustomZooms = len(*gSettings->zoomLevels);
     if (nCustomZooms > 0) {
-        // ReportIf(((*defaultZooms)[0] < kZoomMin || defaultZooms->Last() > kZoomMax));
-        // ReportIf((*defaultZooms)[0] > defaultZooms->Last());
-        zoomLevels = VecData(*gSettings->zoomLevels);
-        nZoomLevels = nCustomZooms;
+        *nZoomLevelsOut = nCustomZooms;
+        return VecData(*gSettings->zoomLevels);
     }
-    *nZoomLevelsOut = nZoomLevels;
-    return zoomLevels;
+    if (len(defaultZoomLevels) == 0) {
+        const float smaller[] = {8.33f, 12.5f, 18, 25, 33.33f, 50, 66.67f, 75};
+        for (float level : smaller) {
+            VecAppend(defaultZoomLevels, level);
+        }
+        for (float level = 100; level <= kZoomMax; level += 25) {
+            VecAppend(defaultZoomLevels, level);
+        }
+    }
+    *nZoomLevelsOut = len(defaultZoomLevels);
+    return VecData(defaultZoomLevels);
+}
+
+static float NextZoomStep(float current, float towards, const float* levels, int count, float pageZoom, float widthZoom,
+                          bool uniformSteps) {
+    constexpr float fuzz = 0.01f;
+    float result = towards;
+    if (current + fuzz < towards) {
+        for (int i = 0; i < count; i++) {
+            if (levels[i] - fuzz > current) {
+                result = levels[i];
+                break;
+            }
+        }
+        if (uniformSteps && result >= 100) {
+            return result;
+        }
+        if (current + fuzz < pageZoom && pageZoom < result - fuzz) {
+            return kZoomFitPage;
+        }
+        if (current + fuzz < widthZoom && widthZoom < result - fuzz) {
+            return kZoomFitWidth;
+        }
+    } else if (current - fuzz > towards) {
+        for (int i = count - 1; i >= 0; i--) {
+            if (levels[i] + fuzz < current) {
+                result = levels[i];
+                break;
+            }
+        }
+        if (uniformSteps && result >= 100) {
+            return result;
+        }
+        if (result + fuzz < widthZoom && widthZoom < current - fuzz && widthZoom != pageZoom) {
+            return kZoomFitWidth;
+        }
+        if (result + fuzz < pageZoom && pageZoom < current - fuzz) {
+            return kZoomFitPage;
+        }
+    }
+    return result;
 }
 
 float DisplayModel::GetNextZoomStep(float towardsLevel) const {
@@ -3222,39 +3261,8 @@ float DisplayModel::GetNextZoomStep(float towardsLevel) const {
     pageZoom *= 100 / dpiFactor;
     widthZoom *= 100 / dpiFactor;
 
-    const float FUZZ = 0.01f;
-    float newZoom = towardsLevel;
-    if (currZoom + FUZZ < towardsLevel) {
-        for (int i = 0; i < nZoomLevels; i++) {
-            float zoom = zoomLevels[i];
-            if (zoom - FUZZ > currZoom) {
-                newZoom = zoom;
-                break;
-            }
-        }
-        if (currZoom + FUZZ < pageZoom && pageZoom < newZoom - FUZZ) {
-            newZoom = kZoomFitPage;
-        } else if (currZoom + FUZZ < widthZoom && widthZoom < newZoom - FUZZ) {
-            newZoom = kZoomFitWidth;
-        }
-    } else if (currZoom - FUZZ > towardsLevel) {
-        for (int i = nZoomLevels - 1; i >= 0; i--) {
-            float zoom = zoomLevels[i];
-            if (zoom + FUZZ < currZoom) {
-                newZoom = zoom;
-                break;
-            }
-        }
-        // skip Fit Width if it results in the same value as Fit Page (same as when zooming in)
-        if (newZoom + FUZZ < widthZoom && widthZoom < currZoom - FUZZ && widthZoom != pageZoom) {
-            newZoom = kZoomFitWidth;
-        } else if (newZoom + FUZZ < pageZoom && pageZoom < currZoom - FUZZ) {
-            newZoom = kZoomFitPage;
-        }
-    }
-
-    // logf("currZoom: %.2f, towardsLevel: %.2f, newZoom: %.2f\n", currZoom, towardsLevel, newZoom);
-    return newZoom;
+    bool uniformSteps = len(*gSettings->zoomLevels) == 0;
+    return NextZoomStep(currZoom, towardsLevel, zoomLevels, nZoomLevels, pageZoom, widthZoom, uniformSteps);
 }
 
 /* a "virtual" zoom level. Can be either a real zoom level in percent
@@ -3721,3 +3729,48 @@ void DisplayModel::ScrollTo(int pageNo, RectF rect, float zoom) {
         ScrollScreenToRect(pageNo, destScreen);
     }
 }
+
+#if IS_DEBUG
+void DisplayModelZoom_UnitTests() {
+    Vec<float> custom;
+    Settings local{};
+    local.zoomLevels = &custom;
+    Settings* saved = gSettings;
+    gSettings = &local;
+    defer {
+        gSettings = saved;
+    };
+    int count;
+    float* levels = GetDefaultZoomLevels(&count);
+    utassert(!(count != 261));
+    utassert(!(levels[count - 1] != kZoomMax));
+    for (int i = 9; i < count; i++) {
+        utassert(!(levels[i] - levels[i - 1] != 25));
+    }
+    utassert(!(NextZoomStep(100, kZoomMax, levels, count, 80, 165, true) != 125));
+    utassert(!(NextZoomStep(150, kZoomMax, levels, count, 80, 165, true) != 175));
+    utassert(!(NextZoomStep(200, kZoomMax, levels, count, 80, 215, true) != 225));
+    utassert(!(NextZoomStep(225, kZoomMin, levels, count, 80, 215, true) != 200));
+    utassert(!(NextZoomStep(165, kZoomMax, levels, count, 80, 165, true) != 175));
+    utassert(!(NextZoomStep(100, kZoomMin, levels, count, 80, 90, true) != kZoomFitWidth));
+    Vec<float> choices;
+    CollectZoomLevels(choices, false);
+    utassert(VecFind(choices, 175.f) >= 0 && VecFind(choices, 225.f) >= 0);
+    float previous = 0;
+    for (float level : choices) {
+        if (level < 100) continue;
+        if (previous) utassert(previous - level == 25);
+        previous = level;
+    }
+    VecAppend(custom, 100.f);
+    VecAppend(custom, 150.f);
+    VecAppend(custom, 200.f);
+    levels = GetDefaultZoomLevels(&count);
+    utassert(!(count != 3 || levels != VecData(custom)));
+    utassert(!(NextZoomStep(150, kZoomMax, levels, count, 80, 165, false) != kZoomFitWidth));
+    local.zoomIncrement = 10;
+    float zoom = 200;
+    utassert(!(!MaybeGetNextZoomByIncrement(&zoom, kZoomMax)));
+    utassert(!(fabsf(zoom - 220) > 0.01f));
+}
+#endif

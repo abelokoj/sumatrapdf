@@ -39,6 +39,7 @@
 #include "SvgIcons.h"
 #include "PagePosition.h"
 #include "HomePage.h"
+#include "Vocabulary.h"
 
 // how the shared tip code (TipText.cpp) opens a url link
 static void OpenTipUrl(Str url) {
@@ -502,11 +503,9 @@ void AboutCtrl::Sync() {
             right.alignV = CrossAxisAlign::CrossCenter;
         }
     }
-
-    logo->font = GetUserGuiFont(kSumatraTxtFont, DpiScale(kSumatraTxtFontSize));
-
-    PlatformFont* fontLeftTxt = GetUserGuiFont(Str(kLeftTextFont), DpiScale(kLeftTextFontSize));
-    PlatformFont* fontRightTxt = GetUserGuiFont(Str(kRightTextFont), DpiScale(kRightTextFontSize));
+    logo->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(kSumatraTxtFontSize));
+    PlatformFont* fontLeftTxt = GetUserGuiFont(GetAppFontFamily(), DpiScale(kLeftTextFontSize));
+    PlatformFont* fontRightTxt = GetUserGuiFont(GetAppFontFamily(), DpiScale(kRightTextFontSize));
     Color colText = ThemeWindowTextColor();
     Color colLink = ThemeWindowLinkColor();
 
@@ -911,7 +910,7 @@ void DrawAboutPage(MainWindow* win, Gfx* gfx) {
     if (about->showFreqRead) {
         VirtLink* link = about->showFreqRead;
         link->visibility = showLink ? Visibility::Visible : Visibility::Collapse;
-        link->font = GetUserGuiFont(StrL("MS Shell Dlg"), DpiScale(16));
+        link->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(16));
         link->sz = {0, 0}; // re-measure: the font may have changed with the DPI
         Size txtSize = link->GetIdealSize(true);
         Rect r = {0, 0, txtSize.dx, txtSize.dy};
@@ -1151,6 +1150,11 @@ struct HomeSearchBorderCtrl : VirtCtrl {
     void Paint(VirtPaintCtx&) override;
 };
 
+struct HomeLearningCtrl : VirtCtrl {
+    HomeLearningCtrl() { cursor = CursorId::Hand; }
+    void Paint(VirtPaintCtx&) override;
+};
+
 static Kind kindHomeChromeCtrl = "homeChromeCtrl";
 
 struct HomeChromeCtrl : VirtCtrl {
@@ -1164,6 +1168,8 @@ struct HomeChromeCtrl : VirtCtrl {
     HomeViewIconCtrl* listView = nullptr;
     HomeOpenDocCtrl* openDoc = nullptr;
     VirtButton* resumeBtn = nullptr;
+    HomeLearningCtrl* learning = nullptr;
+    VirtButton* dictionary = nullptr;
     VirtButton* smallerBtn = nullptr;
     VirtButton* largerBtn = nullptr;
     VirtText* sizeLabel = nullptr;
@@ -1215,7 +1221,7 @@ static int HomeTitleSize(Rect rc) {
 }
 
 static PlatformFont* HomePageFont(int size) {
-    return GetUserGuiFont(StrL("MS Shell Dlg"), DpiScale(size));
+    return GetUserGuiFont(GetAppFontFamily(), DpiScale(size));
 }
 
 static void HomeSelectFromSearchReturnCol(MainWindow* win);
@@ -1374,7 +1380,7 @@ void HomePageOnDpiChanged(MainWindow* win, int dpi) {
     }
     if (win->homeSearch) {
         int fontSize = DpiScaleByDpi(dpi, 18);
-        win->homeSearch->SetFont(GetUserGuiFont(StrL("MS Shell Dlg"), fontSize));
+        win->homeSearch->SetFont(GetUserGuiFont(GetAppFontFamily(), fontSize));
         int margin = DpiScaleByDpi(dpi, 6);
         EditSetMargins(win->homeSearch, margin, margin);
     }
@@ -1569,6 +1575,9 @@ static void CollectHomePageFiles(MainWindow* win, Vec<FileState*>& fileStates, S
             }
         }
         VecAppend(fileStates, fs);
+        if (!hasFilter && len(fileStates) >= limitValue(gSettings->homePageMaxRecentItems, 1, 200)) {
+            break;
+        }
     }
 }
 
@@ -1641,8 +1650,7 @@ static void ApplyHomeLayoutCache(HomePageLayout& l, int scrollY) {
     l.thumbnails = c.thumbs;
     l.filterWords = c.filterWords;
     l.highlighted = c.highlighted;
-
-    PlatformFont* hdrFont = GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(21));
+    PlatformFont* hdrFont = GetUserGuiFont(GetAppFontFamily(), DpiScale(21));
     PlatformFont* fontText = HomePageFont(14);
 
     Str txt = Tr("Recent Documents");
@@ -1661,7 +1669,7 @@ static void ApplyHomeLayoutCache(HomePageLayout& l, int scrollY) {
     str::RemoveCharsInPlace(openTxt, StrL("&"));
     VirtText* openDoc = chrome->openDoc->text;
     openDoc->SetText(openTxt);
-    openDoc->font = GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(17));
+    openDoc->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(17));
     openDoc->isRtl = isRtl;
     openDoc->withUnderline = false;
     openDoc->SetBounds(c.rcOpenDoc);
@@ -1699,6 +1707,9 @@ static void LayoutHomePage(HomePageLayout& l) {
             }
         }
         VecAppend(fileStates, fs);
+        if (!hasFilter && len(fileStates) >= limitValue(gSettings->homePageMaxRecentItems, 1, 200)) {
+            break;
+        }
     }
 
     bool isRtl = IsUIRtl();
@@ -1729,7 +1740,7 @@ static void LayoutHomePage(HomePageLayout& l) {
     HomeChromeCtrl* chrome = EnsureHomeChrome(win);
     VirtText* hdr = chrome->hdr;
     hdr->SetText(gSettings->homePageSortByFrequentlyRead ? Tr("Frequently Read") : Tr("Recent Documents"));
-    hdr->font = GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(21));
+    hdr->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(21));
     hdr->isRtl = isRtl;
     l.freqRead = hdr;
 
@@ -1738,7 +1749,7 @@ static void LayoutHomePage(HomePageLayout& l) {
 
     // [command palette] SumatraPDF [keyboard shortcuts], centered like the old
     // title. The HBox in logoRow sizes the three virt controls.
-    chrome->logo->font = GetUserGuiFont(kSumatraTxtFont, DpiScale(HomeTitleSize(l.rc)));
+    chrome->logo->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(HomeTitleSize(l.rc)));
     Size logoRowSize = chrome->logoRow->GetIdealSize();
     bool spacious = rc.dy >= DpiScale(760);
     bool hero = rc.dy >= DpiScale(520);
@@ -1765,7 +1776,7 @@ static void LayoutHomePage(HomePageLayout& l) {
     str::RemoveCharsInPlace(openTxt, StrL("&"));
     VirtText* openDoc = chrome->openDoc->text;
     openDoc->SetText(openTxt);
-    openDoc->font = GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(17));
+    openDoc->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(17));
     openDoc->isRtl = isRtl;
     openDoc->withUnderline = false;
     Size txtSize = openDoc->GetIdealSize(true);
@@ -1794,7 +1805,7 @@ static void LayoutHomePage(HomePageLayout& l) {
     rcIconOpen.y = actionY;
     rcOpenDoc = {actionX + rcIconOpen.dx + DpiScale(8), actionY + ((rcIconOpen.dy - txtSize.dy) / 2), txtSize.dx,
                  txtSize.dy};
-    int sectionY = actionY + rcIconOpen.dy + DpiScale(56);
+    int sectionY = actionY + rcIconOpen.dy + DpiScale(136);
     hdr->SetBounds(
         {thumbsStartX, sectionY, std::max(1, thumbsContentWidth - viewIconsDx - DpiScale(148)), DpiScale(28)});
     l.rcIconThumbnailView.y = sectionY;
@@ -2155,6 +2166,7 @@ static void DrawHomeListRow(Gfx* gfx, ThumbnailLayout& thumb, const StrVec& filt
     }
 
     // LoadThumbnail only hits disk the first time; result stays on fs->thumbnail
+    RequestHomeThumbnail(fs);
     Pixmap* thumbImg = LoadThumbnail(fs);
     Rect thumbBox = thumb.rcListThumb;
     if (thumbImg) {
@@ -2226,6 +2238,7 @@ static void DrawHomeThumbnail(Gfx* gfx, ThumbnailLayout& thumb, const StrVec& fi
     gfx->FillRoundedRect(card, DpiScale(16), ThemeControlBackgroundColor(), ThemeEdgeColor());
     backgroundColor = ThemeControlBackgroundColor();
     // disk load only first time; stays on fs->thumbnail afterwards
+    RequestHomeThumbnail(fs);
     Pixmap* thumbImg = LoadThumbnail(fs);
     if (thumbImg) {
         thumb.szThumb = Size(thumbImg->width, thumbImg->height);
@@ -2444,6 +2457,26 @@ Size HomeCircleBtnCtrl::GetIdealSize() {
     return {d, d};
 }
 
+void HomeLearningCtrl::Paint(VirtPaintCtx& ctx) {
+    Gfx* gfx = ctx.gfx;
+    Rect r = ctx.bounds;
+    gfx->FillRoundedRect(r, DpiScale(14),
+                         HasFlag(vwfHovered) ? ThemeHotBackgroundColor() : ThemeControlBackgroundColor(),
+                         ThemeEdgeColor());
+    int pad = DpiScale(16);
+    Rect title{r.x + pad, r.y + DpiScale(9), r.dx - pad * 2, DpiScale(23)};
+    gfx->DrawText(Tr("Learning hub"), title, gfxTextVCenter | gfxTextSingleLine | gfxTextEllipsis, HomePageFont(16),
+                  ThemeBrandColor());
+    Vec<VocabularyWord*> due;
+    VocabularyDue({}, due);
+    VocabularyWord* word = VocabularyWordOfDay();
+    TempStr detail = word ? fmt("%s: %s · %d %s", Tr("Word of the day"), word->word, len(due), Tr("due for review"))
+                          : fmt("%s · %d %s", Tr("Save words while reading"), len(due), Tr("due for review"));
+    Rect stats{title.x, title.Bottom() + DpiScale(4), title.dx, DpiScale(24)};
+    gfx->DrawText(detail, stats, gfxTextVCenter | gfxTextSingleLine | gfxTextEllipsis, HomePageFont(13),
+                  ThemeWindowTextColor());
+}
+
 void HomeCircleBtnCtrl::Paint(VirtPaintCtx& ctx) {
     DrawHomeCircleButton(ctx.gfx, ctx.bounds, pixmap, glyph);
 }
@@ -2630,6 +2663,14 @@ static void HomeThumbSizeClicked(MainWindow* win, VirtMouseEvent* ev) {
 
 static void HomeOpenDocClicked(MainWindow* win, VirtMouseEvent*) {
     HwndSendCommand(win->hwndFrame, CmdOpenFile);
+}
+
+static void HomeLearningClicked(MainWindow* win, VirtMouseEvent*) {
+    HwndSendCommand(win->hwndFrame, CmdVocabularyHome);
+}
+
+static void HomeDictionaryClicked(MainWindow* win, VirtMouseEvent*) {
+    HwndSendCommand(win->hwndFrame, CmdDictionaryLookup);
 }
 
 static void HomeResumeClicked(MainWindow* win, VirtMouseEvent*) {
@@ -3043,6 +3084,14 @@ static HomeChromeCtrl* EnsureHomeChrome(MainWindow* win) {
     chrome->resumeBtn->cornerRadius = DpiScale(12);
     chrome->resumeBtn->onClick = MkFunc1(HomeResumeClicked, win);
     chrome->AddChild(chrome->resumeBtn);
+    chrome->learning = new HomeLearningCtrl();
+    chrome->learning->onClick = MkFunc1(HomeLearningClicked, win);
+    chrome->learning->SetTooltip(Tr("Your saved words, study decks, flashcards and practice games"));
+    chrome->AddChild(chrome->learning);
+    chrome->dictionary = new VirtButton(Tr("Dictionary"), HomePageFont(14));
+    chrome->dictionary->onClick = MkFunc1(HomeDictionaryClicked, win);
+    chrome->dictionary->SetTooltip(Tr("Look up meanings offline (Shift + D)"));
+    chrome->AddChild(chrome->dictionary);
 
     chrome->smallerBtn = new VirtButton(StrL("−"), HomePageFont(18));
     chrome->largerBtn = new VirtButton(StrL("+"), HomePageFont(18));
@@ -3201,7 +3250,7 @@ static void HomePageSyncChrome(HomePageLayout& l) {
 
     // font also set here so the cached-layout path (ApplyHomeLayoutCache)
     // repaints the logo without a full relayout
-    chrome->logo->font = GetUserGuiFont(kSumatraTxtFont, DpiScale(HomeTitleSize(l.rc)));
+    chrome->logo->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(HomeTitleSize(l.rc)));
     int iconSz = DpiScale(16);
     chrome->paletteBtn->pixmap = GetCachedPixmapForSvg(Str(gIconCommandPalette), iconSz, iconSz, ThemeWindowTextColor(),
                                                        ThemeControlBackgroundColor());
@@ -3237,7 +3286,7 @@ static void HomePageSyncChrome(HomePageLayout& l) {
                                        ThemeBrandColor());
     od->SetBounds(rcOpen);
     VirtButton* resume = chrome->resumeBtn;
-    resume->font = GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(17));
+    resume->font = GetUserGuiFont(GetAppFontFamily(), DpiScale(17));
     resume->cornerRadius = DpiScale(12);
     resume->SetColor(kColBtnBg, ThemeControlBackgroundColor());
     resume->SetColor(kColBtnBgHover, ThemeHotBackgroundColor());
@@ -3249,6 +3298,22 @@ static void HomePageSyncChrome(HomePageLayout& l) {
     Vec<FileState*> recent;
     FileHistoryGetRecentlyOpenedOrder(recent);
     resume->SetIsEnabled(len(recent) > 0);
+    int learningDx = std::max(1, std::min(DpiScale(650), l.rc.dx - DpiScale(64)));
+    int learningX = l.rc.x + (l.rc.dx - learningDx) / 2;
+    int learningY = l.rcIconThumbnailView.y - DpiScale(96);
+    bool showDictionary = learningDx >= DpiScale(360);
+    int dictionaryDx = showDictionary ? DpiScale(130) : 0;
+    int learningGap = showDictionary ? DpiScale(12) : 0;
+    chrome->dictionary->visibility = showDictionary ? Visibility::Visible : Visibility::Collapse;
+    chrome->learning->SetBounds(
+        {learningX, learningY, std::max(1, learningDx - dictionaryDx - learningGap), DpiScale(72)});
+    chrome->dictionary->font = HomePageFont(14);
+    chrome->dictionary->cornerRadius = DpiScale(14);
+    chrome->dictionary->SetColor(kColBtnBg, ThemeControlBackgroundColor());
+    chrome->dictionary->SetColor(kColBtnBgHover, ThemeHotBackgroundColor());
+    chrome->dictionary->SetColor(kColBtnBorder, ThemeEdgeColor());
+    chrome->dictionary->SetBounds(
+        {learningX + learningDx - dictionaryDx, learningY, std::max(1, dictionaryDx), DpiScale(72)});
     od->rcIconLocal = {l.rcIconOpen.x - rcOpen.x, l.rcIconOpen.y - rcOpen.y, l.rcIconOpen.dx, l.rcIconOpen.dy};
     // "Open a document" acts as a link, so it is drawn in the link color
     od->text->SetColor(kColText, ThemeBrandTextColor());

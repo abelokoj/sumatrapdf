@@ -216,6 +216,7 @@ struct AnnotPlacement {
     RectF rect;
     Vec<PointF> points;
     Vec<int> strokeCounts;
+    Rect inkScreenBounds;
     float pressureTotal = 0;
     int pressureSamples = 0;
     bool circle = false;

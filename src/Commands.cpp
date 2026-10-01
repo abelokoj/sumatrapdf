@@ -355,6 +355,8 @@ static SeqStrings gCommandNames =
     "CmdLaserSolid\0"
     "CmdLaserHollow\0"
     "CmdLaserDot\0"
+    "CmdDictionaryLookup\0"
+    "CmdVocabularyHome\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -699,6 +701,8 @@ static i32 gCommandIds[] = {
     CmdLaserSolid,
     CmdLaserHollow,
     CmdLaserDot,
+    CmdDictionaryLookup,
+    CmdVocabularyHome,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1043,6 +1047,8 @@ SeqStrings gCommandDescriptions =
     "Laser Pointer: Solid Trail\0"
     "Laser Pointer: Hollow Trail\0"
     "Laser Pointer: Single Dot\0"
+    "Dictionary: Define Selected Word\0"
+    "Vocabulary: Learn and Practice\0"
     "\0";
 
 SeqStrings gCommandAltDescs =
