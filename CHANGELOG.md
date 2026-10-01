@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a large, theme-aware title banner with the green logo, followed by release badges and navigation links.
+
 - Reorganized the repository homepage with status badges, icon-led feature sections, download comparisons and a getting-started guide.
 
 ## v0.1.1

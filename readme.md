@@ -1,15 +1,21 @@
-<h1 align="center">SumatraPDF Enhanced</h1>
-
-<p align="center"><img src="src/gfx/SumatraPDF-Enhanced-green.png" width="180" alt="SumatraPDF Enhanced green logo"></p>
-
-<p align="center"><strong>Read, annotate and learn in one place.</strong><br>A Windows document reader built on official SumatraPDF, with a Pretty-style native interface, richer pen tools and offline vocabulary learning.</p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/enhanced-wordmark-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/enhanced-wordmark-light.svg">
+    <img src="docs/images/enhanced-wordmark-light.svg" width="960" alt="SumatraPDF Enhanced">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://github.com/abelokoj/sumatrapdf/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf?label=release&amp;color=168349" alt="Latest release"></a>
   <a href="https://github.com/abelokoj/sumatrapdf/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf/total?color=168349" alt="Total release downloads"></a>
   <a href="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf?style=flat&amp;color=eab308" alt="GitHub stars"></a>
+  <a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
   <img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
 </p>
+
+<p align="center"><strong>Read, annotate and learn in one place.</strong><br>A native Windows document reader with customizable pen tools, offline dictionaries and vocabulary practice.<br><em>Built on <a href="https://github.com/sumatrapdfreader/sumatrapdf">SumatraPDF</a>, with visual inspiration from <a href="https://github.com/JaviLendi/PrettySumatraPDF">PrettySumatraPDF</a>.</em></p>
 
 <p align="center"><a href="#overview">Overview</a> · <a href="#download">Download</a> · <a href="#features">Features</a> · <a href="#get-started">Get started</a> · <a href="#upstream">Upstream source</a> · <a href="#development">Development</a> · <a href="#support">Support</a></p>
 
