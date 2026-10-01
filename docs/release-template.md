@@ -2,6 +2,7 @@
 
 Original SumatraPDF version: <version from the upstream snapshot's src/Version.h; indicate development snapshot if applicable>.
 Upstream commit: <full SHA and upstream commit link>.
+Upstream source snapshot date: <commit date, with timezone; distinguish any official release date>.
 Enhanced tag/source commit: <tag / SHA>.
 
 ## Download and run

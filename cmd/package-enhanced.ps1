@@ -32,6 +32,7 @@ Original SumatraPDF: 3.7 source snapshot, a0d8bcaed0412ce803d9c213845e710fcbe3c7
 @"
 Original SumatraPDF version: 3.7 source snapshot
 Upstream commit: a0d8bcaed0412ce803d9c213845e710fcbe3c7a5
+Upstream source snapshot date: 2026-09-30 09:55:54 UTC
 Enhanced source commit: $sourceSha
 Architecture: $Architecture
 Build: GitHub-hosted Windows runner
