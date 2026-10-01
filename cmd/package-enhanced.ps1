@@ -1,8 +1,8 @@
-param([ValidateSet('x64','arm64')][string]$Architecture = 'x64')
+param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.0')
 $ErrorActionPreference = 'Stop'
 $repoDir = Split-Path $PSScriptRoot -Parent
 $binaryDir = Join-Path $repoDir $(if ($Architecture -eq 'arm64') { 'out/arm64' } else { 'out/rel64' })
-$stageDir = Join-Path $repoDir "dist/stage-$Architecture/SumatraPDF-Enhanced-preview-03"
+$stageDir = Join-Path $repoDir "dist/stage-$Architecture/SumatraPDF-Enhanced-$Version"
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 $machine = if ($Architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
 foreach ($name in @('SumatraPDF.exe','libsumatrapdf.dll','PdfFilter.dll','PdfPreview.dll','sumatrapdf-tool.exe')) {
@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stageDir 'data') | Out-Nul
 Copy-Item -LiteralPath (Join-Path $repoDir 'data/vocabulary') -Destination (Join-Path $stageDir 'data/vocabulary') -Recurse
 $sourceSha = git -C $repoDir rev-parse HEAD
 @"
-SumatraPDF Enhanced Preview 03 - Windows $Architecture
+SumatraPDF Enhanced $Version - Windows $Architecture
 Extract the entire folder and run SumatraPDF.exe. Keep dictionaries beside it.
 Select a word and press Shift+D for offline dictionary lookup.
 The home learning hub opens vocabulary and practice activities.
@@ -45,6 +45,6 @@ UseTabs = true
 ReuseInstance = false
 UIFontFamily = system
 "@ | Set-Content -LiteralPath (Join-Path $stageDir 'SumatraPDF-settings.txt') -Encoding utf8
-$archive = Join-Path $repoDir "dist/SumatraPDF-Enhanced-preview-03-windows-$Architecture.zip"
+$archive = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-windows-$Architecture.zip"
 Compress-Archive -Path $stageDir -DestinationPath $archive -Force
 Write-Output $archive
