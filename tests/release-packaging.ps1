@@ -17,7 +17,8 @@ function gh {
             @{ name = $_.Name; digest = 'sha256:' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
         })
         $global:LASTEXITCODE = 0
-        return (@{ assets = $assets } | ConvertTo-Json -Depth 4)
+        if ($args[1] -notmatch '/releases\?per_page=100$') { throw 'Drafts must be read from the release list, not the published-tag endpoint' }
+        return (ConvertTo-Json -InputObject @(@{ tag_name = "enhanced-$version"; draft = $true; assets = $assets }) -Depth 4)
     }
     $global:ReleasePackagingTestCommands.Add(@($args)); $global:LASTEXITCODE = 0
 }

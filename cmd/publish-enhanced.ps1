@@ -70,9 +70,11 @@ if ($LASTEXITCODE -eq 0) {
     & gh release create $tag --target $SourceCommit --title "SumatraPDF Enhanced $Version" --notes-file $notesPath --draft @files
 }
 if ($LASTEXITCODE -ne 0) { throw 'Release upload failed; any draft remains unpublished' }
-$releaseJson = & gh api "repos/$env:GH_REPO/releases/tags/$tag"
+$releaseJson = & gh api "repos/$env:GH_REPO/releases?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to verify uploaded release files' }
-$release = $releaseJson | ConvertFrom-Json
+$release = @($releaseJson | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag })
+if ($release.Count -ne 1 -or -not $release[0].draft) { throw 'Expected one unpublished draft for this version' }
+$release = $release[0]
 if ($release.assets.Count -ne 6) { throw 'Expected exactly six uploaded app packages' }
 foreach ($file in $files) {
     $name = Split-Path $file -Leaf
