@@ -1,5 +1,7 @@
 # SumatraPDF Enhanced
 
+<p align="center"><img src="src/gfx/SumatraPDF-Enhanced-green.png" width="240" alt="SumatraPDF Enhanced green logo"></p>
+
 [![Windows builds](https://github.com/abelokoj/sumatrapdf/actions/workflows/build-windows.yml/badge.svg?branch=master)](https://github.com/abelokoj/sumatrapdf/actions/workflows/build-windows.yml)
 
 A Windows document reader built on official SumatraPDF, with a Pretty-style native interface, richer pen tools and offline dictionary and vocabulary learning. Supports the upstream reader's PDF, EPUB, MOBI, CBZ, CBR, FB2, CHM, XPS and DjVu formats.
@@ -8,13 +10,12 @@ A Windows document reader built on official SumatraPDF, with a Pretty-style nati
 
 **[Latest release and notes](https://github.com/abelokoj/sumatrapdf/releases/latest)**
 
-- [x64 portable (Intel and AMD computers)](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.0/SumatraPDF-Enhanced-v0.1.0-x64-portable.zip)
-- [ARM64 portable (ARM devices)](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.0/SumatraPDF-Enhanced-v0.1.0-arm64-portable.zip)
+| Device | Installer | Standalone portable | Portable ZIP |
+| --- | --- | --- | --- |
+| x64 (Intel and AMD) | [Installer EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-install.exe) | [Portable EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.exe) | [Portable ZIP](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.zip) |
+| ARM64 | [Installer EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-install.exe) | [Portable EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.exe) | [Portable ZIP](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.zip) |
 
-- [x64 installer](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.0/SumatraPDF-Enhanced-v0.1.0-x64-install.exe)
-- [ARM64 installer](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.0/SumatraPDF-Enhanced-v0.1.0-arm64-install.exe)
-
-Run the installer for your device to install the application. For a portable copy, extract the entire ZIP archive and run **SumatraPDF.exe**, keeping the supplied `dictionaries` folder beside it. Both formats include offline dictionary data and required licenses.
+Run the installer to install the application, or run the standalone portable EXE directly. Both include the offline dictionary. The ZIP includes the reader, dictionary data, license notices and optional shell integration helpers; extract the entire folder before running **SumatraPDF.exe**.
 
 ## Features included in Enhanced
 
@@ -39,6 +40,7 @@ Run the installer for your device to install the application. For a portable cop
 
 ### Interface and reading improvements
 
+- Green application logo across the reader, home page, dialogs, installer and PDF file associations.
 - Pretty-style welcome page, document search, Resume last and recent-document cards.
 - Rounded toolbar groups, expandable controls, twelve Pretty theme presets and right-side day, night and document-inversion actions.
 - Rounded Lucide core icons and bundled **Manrope, Pretendard Std and Public Sans**, alongside System font selection.
@@ -47,17 +49,23 @@ Run the installer for your device to install the application. For a portable cop
 - Inline custom zoom entry and 25-percentage-point default zoom steps above 100%.
 - Reference hover previews built on upstream functionality, with configurable delay and document-cache fixes.
 
-Dictionary and vocabulary learning, the temporary laser, pen profiles and pinned presets and bundled UI-font selection are Enhanced additions. Existing upstream features such as native annotations, text search, document inversion and reference previews are retained and extended; they are not presented as entirely new inventions.
+Dictionary and vocabulary learning, the temporary laser, pen profiles, pinned presets and bundled interface-font selection are Enhanced additions. Existing upstream features such as native annotations, text search, document inversion and reference previews are retained and extended; they are not presented as entirely new inventions.
 
 ## Upstream basis and development
 
-**v0.1.0 is based on the original SumatraPDF 3.7 source snapshot**, commit [`a0d8bcaed0412ce803d9c213845e710fcbe3c7a5`](https://github.com/sumatrapdfreader/sumatrapdf/commit/a0d8bcaed0412ce803d9c213845e710fcbe3c7a5), dated **30 September 2026, 09:55:54 UTC**. This identifies the upstream source snapshot, not an official upstream stable-release date. Every Enhanced release records its upstream version, commit and date.
+**v0.1.1 is based on the original SumatraPDF 3.7 source snapshot**, commit [`a0d8bcaed0412ce803d9c213845e710fcbe3c7a5`](https://github.com/sumatrapdfreader/sumatrapdf/commit/a0d8bcaed0412ce803d9c213845e710fcbe3c7a5), dated **September 30, 2026, 09:55:54 UTC**. This identifies the upstream source snapshot, not an official upstream stable-release date. Every Enhanced release records its upstream version, commit and date.
 
-`master` contains the accepted Enhanced version. [GitHub-hosted Windows builds](https://github.com/abelokoj/sumatrapdf/actions/workflows/build-windows.yml) produce x64 and ARM64 installers and portable packages on pushes/pull requests and manual runs. Build locally through `bun cmd/build.ts -dbg`, `bun cmd/build.ts -rel` or `bun cmd/build.ts -rel -arm64`, following [agents.md](agents.md).
+`master` contains the current Enhanced source. [GitHub-hosted Windows builds](https://github.com/abelokoj/sumatrapdf/actions/workflows/build-windows.yml) produce x64 and ARM64 installers, standalone portable executables and portable ZIP packages on pushes/pull requests and manual runs. Build locally through `bun cmd/build.ts -dbg`, `bun cmd/build.ts -rel` or `bun cmd/build.ts -rel -arm64`, following [agents.md](agents.md). Standalone builds use `bun cmd/build.ts -rel -static` and `bun cmd/build.ts -rel -arm64 -static`.
 
 The native reader and interface do not require the Microsoft Edge browser. Optional upstream AI, manual and CHM browser integrations need the separate WebView2 runtime.
 
 Reference previews require supported local destinations. Advanced handwriting recognition and cleanup are not available in this release. Laser behavior and pen responsiveness are still being refined.
+
+## Automatic releases
+
+To publish a new version, update `enhanced-version.txt` (for example, `v0.1.2`), add a matching public entry to [CHANGELOG.md](CHANGELOG.md), and push both changes to `master`. GitHub builds and checks x64 and ARM64, creates the `enhanced-vX.Y.Z` tag at the source commit, and publishes four executables plus two portable ZIPs. The release notes include the matching changelog entry and the upstream version, commit and date.
+
+A release can also be started through **Actions > Enhanced release > Run workflow** on `master`, using the version recorded in `enhanced-version.txt`. Failed builds or package checks block publication. An upload failure leaves any incomplete release as a draft. Existing published versions are preserved; choose a new version for subsequent changes. Release notes appear in the release description, and the downloads contain only application packages.
 
 ## Credits and license
 

@@ -1,4 +1,4 @@
-param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.0')
+param([ValidateSet('x64','arm64')][string]$Architecture = 'x64', [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../enhanced-version.txt') -Raw).Trim())
 $ErrorActionPreference = 'Stop'
 $repoDir = Split-Path $PSScriptRoot -Parent
 $binaryDir = Join-Path $repoDir $(if ($Architecture -eq 'arm64') { 'out/arm64' } else { 'out/rel64' })
@@ -9,12 +9,12 @@ if (-not $resolvedStage.StartsWith($expectedStage + [IO.Path]::DirectorySeparato
 if (Test-Path -LiteralPath $stageDir) { Remove-Item -LiteralPath $stageDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 $machine = if ($Architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
-foreach ($name in @('SumatraPDF.exe','libsumatrapdf.dll','PdfFilter.dll','PdfPreview.dll','sumatrapdf-tool.exe')) {
+foreach ($name in @('SumatraPDF.exe','libsumatrapdf.dll','PdfFilter.dll','PdfPreview.dll','sumatrapdf-tool.exe','SumatraPDF-static.exe')) {
     $source = Join-Path $binaryDir $name
     $bytes = [IO.File]::ReadAllBytes($source)
     $offset = [BitConverter]::ToInt32($bytes, 0x3C)
     if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne $machine) { throw "Wrong binary architecture: $name" }
-    Copy-Item -LiteralPath $source -Destination $stageDir
+    if ($name -ne 'SumatraPDF-static.exe') { Copy-Item -LiteralPath $source -Destination $stageDir }
 }
 foreach ($name in @('AUTHORS','COPYING','COPYING.BSD')) {
     Copy-Item -LiteralPath (Join-Path $repoDir $name) -Destination $stageDir
@@ -57,5 +57,8 @@ $archive = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-$Architecture-p
 Compress-Archive -Path $stageDir -DestinationPath $archive -Force
 $installer = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-$Architecture-install.exe"
 Copy-Item -LiteralPath (Join-Path $binaryDir 'SumatraPDF.exe') -Destination $installer
+$portable = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-$Architecture-portable.exe"
+Copy-Item -LiteralPath (Join-Path $binaryDir 'SumatraPDF-static.exe') -Destination $portable
+Write-Output $portable
 Write-Output $archive
 Write-Output $installer

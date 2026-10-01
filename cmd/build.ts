@@ -18,6 +18,7 @@ interface BuildOptions {
   msbuild: boolean;
   win32: boolean;
   arm64: boolean;
+  static: boolean;
   run: boolean;
   runArgs: string[];
   buildNo?: string;
@@ -53,7 +54,8 @@ General options:
   -ninja                  Use Ninja instead of MSBuild
   -msbuild                Use MSBuild (the default)
   -32                     Select Win32 (valid only with Windows -rel)
-  -arm64                  Select ARM64 (Windows -rel with MSBuild only)`;
+  -arm64                  Select ARM64 (Windows -rel with MSBuild only)
+  -static                 Build a standalone portable EXE (Windows -rel)`;
 
 class CliError extends Error {}
 
@@ -94,6 +96,7 @@ function parseArgs(args: string[]): BuildOptions | undefined {
     msbuild: false,
     win32: false,
     arm64: false,
+    static: false,
     run: false,
     runArgs: [],
   };
@@ -125,6 +128,9 @@ function parseArgs(args: string[]): BuildOptions | undefined {
     } else if (arg === "-arm64") {
       if (opts.arm64) throw new CliError("-arm64 can only be specified once");
       opts.arm64 = true;
+    } else if (arg === "-static") {
+      if (opts.static) throw new CliError("-static can only be specified once");
+      opts.static = true;
     } else if (arg === "-rel-32") {
       if (opts.win32) throw new CliError("-32 can only be specified once");
       setConfig(opts, "release");
@@ -188,6 +194,10 @@ function validateOptions(opts: BuildOptions): void {
   reject(opts.arm64 && opts.win32, "-arm64 and -32 cannot be used together");
   reject(opts.arm64 && (opts.config !== "release" || opts.asan), "-arm64 requires a non-ASan -rel build");
   reject(opts.arm64 && opts.ninja, "-arm64 requires MSBuild; Ninja does not support ARM64");
+  reject(
+    opts.static && (mode !== "windows" || opts.config !== "release" || opts.asan),
+    "-static requires a non-ASan Windows -rel build",
+  );
   reject(opts.run && mode !== "wine", "-run is only valid with -wine");
   reject(opts.runArgs.length > 0 && mode !== "wine", "arguments after -- are only valid with -wine");
   reject(opts.runArgs.length > 0 && !opts.run, "arguments after -- require -run");
@@ -232,19 +242,30 @@ async function buildWindows(
   arm64: boolean,
   clean: boolean,
   ninja: boolean,
+  staticBuild: boolean,
 ): Promise<void> {
   const configName = windowsConfigName(config);
   const platform = arm64 ? "ARM64" : win32 ? "Win32" : "x64";
   const outDir = join("out", windowsOutDir(config, win32, arm64));
-  console.log(`${configName} ${platform} build`);
+  const target = staticBuild ? "SumatraPDF-static" : "SumatraPDF";
+  console.log(`${configName} ${platform} ${target} build`);
   if (clean) clearDirPreserveSettings(outDir);
   if (ninja) {
-    await buildNinja([join(ninjaToRoot, outDir, "SumatraPDF.exe")]);
+    await buildNinja([join(ninjaToRoot, outDir, `${target}.exe`)]);
   } else {
     const { msbuildPath } = detectVisualStudio();
-    await buildApp(msbuildPath, configName, platform, "SumatraPDF");
+    if (staticBuild) {
+      await runLogged(msbuildPath, [
+        String.raw`vs2022\SumatraPDF.sln`,
+        `/t:${target}`,
+        `/p:Configuration=${configName};Platform=${platform}`,
+        "/m",
+      ]);
+    } else {
+      await buildApp(msbuildPath, configName, platform, target);
+    }
   }
-  printBinaries(outDir, new Set(["SumatraPDF.exe"]));
+  printBinaries(outDir, new Set([`${target}.exe`]));
 }
 
 async function buildNinja(targets: string[]): Promise<void> {
@@ -418,7 +439,7 @@ async function runBuild(opts: BuildOptions): Promise<void> {
   if (mode === "windows") {
     const config = opts.config ?? "debug";
     if (opts.asan) await buildWindowsAsan(config, opts.clean, opts.ninja);
-    else await buildWindows(config, opts.win32, opts.arm64, opts.clean, opts.ninja);
+    else await buildWindows(config, opts.win32, opts.arm64, opts.clean, opts.ninja, opts.static);
   } else if (mode === "all") await buildAll(opts.clean, opts.ninja);
   else if (mode === "smoke") await buildSmoke(opts.ninja);
   else if (mode === "ci") {

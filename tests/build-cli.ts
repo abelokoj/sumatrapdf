@@ -27,6 +27,21 @@ export async function testit(): Promise<void> {
   const conflict = run(["-mingw", "-dbg", "-rel"]);
   check(conflict.code !== 0, "conflicting configurations succeeded");
   check(conflict.stderr.includes("cannot be used together"), "configuration conflict did not explain the error");
+  for (const args of [
+    ["-dbg", "-static"],
+    ["-rel", "-asan", "-static"],
+    ["-mingw", "-rel", "-static"],
+  ]) {
+    const invalidStatic = run(args);
+    check(invalidStatic.code !== 0, `invalid static build succeeded: ${args.join(" ")}`);
+    check(invalidStatic.stderr.includes("-static requires"), "static validation did not explain the error");
+  }
+  const duplicateStatic = run(["-rel", "-static", "-static"]);
+  check(duplicateStatic.code !== 0, "duplicate static option succeeded");
+  check(
+    duplicateStatic.stderr.includes("-static can only be specified once"),
+    "duplicate static option did not explain the error",
+  );
   console.log("PASS: unified build CLI validation");
 }
 

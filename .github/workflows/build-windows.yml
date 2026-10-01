@@ -4,10 +4,11 @@ on:
     branches: [master, 'feature/**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: enhanced-windows-${{ github.ref }}
+  group: enhanced-windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -27,19 +28,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Check build command options
+        run: bun tests/build-cli.ts
+      - name: Check release packaging guards
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: ./tests/release-packaging.ps1
       - name: Generate Windows projects
         run: bun cmd/premake.ts
-      - name: Build native Windows release
+      - name: Build native installer
         run: bun cmd/build.ts ${{ matrix.flags }}
+      - name: Build standalone portable executable
+        run: bun cmd/build.ts ${{ matrix.flags }} -static
+      - name: Run native headless tests
+        if: matrix.arch == 'x64'
+        run: bun cmd/run-unit-tests.ts -dbg
       - name: Package installer and portable app
         shell: pwsh
         run: ./cmd/package-enhanced.ps1 -Architecture '${{ matrix.arch }}'
-      - name: Upload installer and portable ZIP
+      - name: Upload executables and portable ZIP
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: enhanced-windows-${{ matrix.arch }}
+          name: enhanced-${{ matrix.arch }}
           path: |
             dist/*.zip
-            dist/*-install.exe
+            dist/*.exe
           if-no-files-found: error
           retention-days: 14

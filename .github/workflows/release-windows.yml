@@ -1,0 +1,66 @@
+name: Enhanced release
+on:
+  push:
+    branches: [master]
+    paths: [enhanced-version.txt]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: enhanced-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/master' && github.repository == 'abelokoj/sumatrapdf'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: version
+        name: Check release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(tr -d '\r\n' < enhanced-version.txt)
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Invalid enhanced-version.txt'; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          release_tags=$(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName')
+          if grep -Fxq "enhanced-$version" <<< "$release_tags"; then
+            echo 'Version already published. Update enhanced-version.txt for a new release.'
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    uses: ./.github/workflows/build-windows.yml
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: enhanced-*
+          path: release-packages
+          merge-multiple: true
+      - name: Validate and publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./cmd/publish-enhanced.ps1 -Version '${{ needs.prepare.outputs.version }}' -PackageDirectory release-packages -SourceCommit '${{ github.sha }}'

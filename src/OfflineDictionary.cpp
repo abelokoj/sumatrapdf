@@ -5,6 +5,8 @@
 #include "base/Http.h"
 #include "base/Zip.h"
 #include "base/JsonParser.h"
+#include "base/LzmaSimpleArchive.h"
+#include "EmbeddedResources.h"
 #include "Settings.h"
 #include "AppSettings.h"
 #include "VocabularyDecks.h"
@@ -463,11 +465,34 @@ static bool LoadDictionaryFile(DictionaryIndex& target, Str filePath, Str* error
               : FailDictionary(error, StrL("Malformed dictionary or unsupported StarDict fields/64-bit offsets."));
 }
 
+static bool ReadWordNetFile(Str folder, Str name, Str& data) {
+    if (len(folder) > 0) {
+        return ReadDictionary(path::JoinTemp(folder, name), data);
+    }
+    int size = 0;
+    u8* bytes = GetEmbeddedFileData(fmt("dictionaries\\wordnet-en\\%s", name), &size);
+    data = Str((char*)bytes, size);
+    return bytes != nullptr;
+}
+
+static bool HasEmbeddedWordNet() {
+    auto* archive = GetEmbeddedArchive();
+    if (!archive) {
+        return false;
+    }
+    for (const char* name : kWordNetPackFiles) {
+        if (lzma::GetIdxFromName(archive, fmt("dictionaries\\wordnet-en\\%s", Str(name))) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool LoadWordNet(DictionaryIndex& index, Str folder) {
     int start = len(index.entries);
     for (const char* name : kWordNetFiles) {
         Str data;
-        if (!ReadDictionary(path::JoinTemp(folder, Str(name)), data)) {
+        if (!ReadWordNetFile(folder, Str(name), data)) {
             VecRemoveAtN(index.entries, start, len(index.entries) - start);
             return false;
         }
@@ -480,7 +505,7 @@ static bool LoadWordNet(DictionaryIndex& index, Str folder) {
     }
     for (const char* name : kWordNetExceptions) {
         Str data;
-        if (ReadDictionary(path::JoinTemp(folder, Str(name)), data)) {
+        if (ReadWordNetFile(folder, Str(name), data)) {
             index.Exceptions(data);
             str::Free(data);
         }
@@ -558,7 +583,11 @@ bool LookupOfflineWord(Str word, Vec<OfflineMeaning>& out, Str* error) {
         gDictionaryIndex = new DictionaryIndex();
         bool wordNet = LoadWordNet(*gDictionaryIndex, path::JoinTemp(GetDictionaryDirTemp(), kWordNetId));
         if (!wordNet) {
-            LoadWordNet(*gDictionaryIndex, path::JoinTemp(GetSelfExeDirTemp(), StrL("dictionaries\\wordnet-en")));
+            wordNet =
+                LoadWordNet(*gDictionaryIndex, path::JoinTemp(GetSelfExeDirTemp(), StrL("dictionaries\\wordnet-en")));
+        }
+        if (!wordNet) {
+            LoadWordNet(*gDictionaryIndex, Str());
         }
         StrVec files;
         ImportPaths(files);
@@ -640,7 +669,8 @@ void GetDictionaryCatalog(Vec<OfflineDictPack>& packs) {
                           Str(source.id))),
              true, true});
     }
-    bool bundled = file::Exists(path::JoinTemp(GetSelfExeDirTemp(), StrL("dictionaries\\wordnet-en\\data.noun")));
+    bool bundled = HasEmbeddedWordNet() ||
+                   file::Exists(path::JoinTemp(GetSelfExeDirTemp(), StrL("dictionaries\\wordnet-en\\data.noun")));
     bool installed = file::Exists(path::JoinTemp(GetDictionaryDirTemp(), StrL("wordnet-en\\data.noun")));
     VecAppend(packs, {str::Dup(kWordNetId), str::Dup(kWordNetTitle), str::Dup(StrL("English")),
                       str::Dup(StrL("Princeton WordNet license")), str::Dup(StrL("https://wordnet.princeton.edu/")),
@@ -843,6 +873,16 @@ bool OfflineDictionary_UnitTests() {
     DictionaryIndex net;
     ok = ok && net.WordNet(StrL("00001740 03 n 01 entity 0 000 | that which exists\n")) && len(net.entries) == 1;
     ok = ok && !net.WordNet(StrL("00001740 03 n FF entity 0 | invalid word count\n"));
+    {
+        DictionaryIndex embedded;
+        ok = ok && HasEmbeddedWordNet() && LoadWordNet(embedded, Str());
+        ok = ok && len(embedded.entries) > 100000 && len(embedded.inflections) > 0;
+        bool entityFound = false;
+        for (const DictEntry& entry : embedded.entries) {
+            entityFound |= str::Eq(entry.key, StrL("entity")) && len(entry.definition) > 0;
+        }
+        ok = ok && entityFound;
+    }
     DictionaryIndex wm;
     ok = ok &&
          LoadWmJson(
