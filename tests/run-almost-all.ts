@@ -19,6 +19,7 @@
 import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type SuiteOptions } from "./util.ts";
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
+import { testit as themePresets } from "./theme-presets.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
 import { testit as lintMingwSources } from "./lint-mingw-sources.ts";
 import { testit as buildCli } from "./build-cli.ts";
@@ -455,6 +456,7 @@ export const tests: NamedTest[] = [
   ["issue-5989", issue5989],
 
   // --- no Sumatra process -------------------------------------------------
+  ["theme-presets", themePresets],
   ["lint-command-ids", lintCommandIds],
   ["build-cli", buildCli],
   ["parse-tip-brackets", parseTipBrackets],

@@ -49,6 +49,8 @@ static UINT_PTR gNoDocWhitelist[] = {
     CmdOpenSettingsFile,
     CmdChangeLanguage,
     CmdChangeTheme,
+    CmdThemeLight,
+    CmdThemeDark,
     CmdCheckUpdate,
     CmdHelpOpenManual,
     CmdHelpOpenManualOnWebsite,
@@ -252,6 +254,20 @@ static UINT_PTR removeIfAnnotsNotSupported[] = {
     CmdInsertImage,
     CmdSignWithImage,
     CmdAnnotationHighlightBrush,
+    CmdInkPen,
+    CmdInkFountain,
+    CmdInkBrush,
+    CmdInkPencil,
+    CmdInkHighlighter,
+    CmdInkEraser,
+    CmdHighlightEraser,
+    CmdInkBlack,
+    CmdInkBlue,
+    CmdInkRed,
+    CmdInkThin,
+    CmdInkMedium,
+    CmdInkThick,
+    CmdTogglePenOnly,
     CmdFindAnnotation,
     CmdCutAnnotation,
     CmdCopyAnnotation,
@@ -607,6 +623,10 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
 
     if (!ctx.isDocLoaded) {
         return CommandVisibility::Hide;
+    }
+
+    if (cmdId == CmdToggleLaserPointer || cmdId == CmdLaserSolid || cmdId == CmdLaserHollow || cmdId == CmdLaserDot) {
+        return ctx.isFixedPage ? CommandVisibility::Show : CommandVisibility::Hide;
     }
 
     if (cmdId == CmdNavigateThumbnail && !ctx.isFixedPage) {

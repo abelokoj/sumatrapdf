@@ -187,6 +187,25 @@ enum class AnnotPlacementKind {
     Highlighter,
 };
 
+enum class LaserPointerMode {
+    Solid,
+    Hollow,
+    Dot
+};
+struct LaserTrailPoint {
+    Point point;
+    DWORD time;
+    bool start;
+};
+
+enum class InkPenStyle {
+    Ballpoint,
+    Fountain,
+    Brush,
+    Pencil,
+    Highlighter
+};
+
 struct AnnotPlacement {
     AnnotPlacementKind kind = AnnotPlacementKind::None;
     int cmdId = 0;
@@ -197,6 +216,8 @@ struct AnnotPlacement {
     RectF rect;
     Vec<PointF> points;
     Vec<int> strokeCounts;
+    float pressureTotal = 0;
+    int pressureSamples = 0;
     bool circle = false;
     bool mouseDown = false;
     bool didDrag = false;
@@ -513,6 +534,20 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     bool isToolbarVisible = false;
     bool pdfAnnotationsToolbarEnabled = false;
     AnnotPlacement annotPlacement;
+    int inkEraseMode = 0;
+    InkPenStyle inkPenStyle = InkPenStyle::Ballpoint;
+    bool penOnly = true;
+    bool laserPointerActive = false;
+    bool laserPointerDown = false;
+    LaserPointerMode laserPointerMode = LaserPointerMode::Solid;
+    Color laserPointerColor = kColRed;
+    Vec<LaserTrailPoint> laserTrail;
+    bool laserPointerRepaint = false;
+    WindowTab* laserTrailTab = nullptr;
+    Rect laserTrailViewport;
+    float laserTrailZoom = 0;
+    int laserTrailRotation = 0;
+    int laserTrailPage = 0;
     // overlay toolbar mode: the toolbar floats over the page (doesn't reserve
     // space) and is only revealed when the mouse is near the top
     bool isToolbarOverlay = false;

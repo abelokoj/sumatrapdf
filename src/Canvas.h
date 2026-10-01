@@ -1,6 +1,8 @@
 /* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
+enum class LaserPointerMode;
+
 void UpdateDeltaPerLine();
 
 LRESULT CALLBACK WndProcCanvas(HWND, UINT, WPARAM, LPARAM);
@@ -19,8 +21,11 @@ void SetShowPageGrid(bool);
 void RedrawPageGridWindows();
 bool ShowFitContentArea();
 void ToggleShowFitContentArea();
-bool IsLaserPointerActive();
+bool IsLaserPointerActive(MainWindow* win = nullptr);
 void ToggleLaserPointer(MainWindow*);
+void StopLaserPointer(MainWindow*);
+void SetLaserPointerColor(MainWindow*, Color);
+void SetLaserPointerMode(MainWindow*, LaserPointerMode);
 void DeleteLaserPointerCursor();
 void DrawCanvasKeyboardFocusIfNeeded(MainWindow* win, HDC hdc);
 void InvalidateCanvasKeyboardFocus(MainWindow* win);
@@ -50,6 +55,7 @@ constexpr uint kSelectionToolbarShowDelayInMs = 500;
 constexpr UINT_PTR kTouchLongPressTimerID = 14;
 // Debounce PDF page rendering while an annotation resize is in progress.
 constexpr UINT_PTR kAnnotationResizeRerenderTimerID = 15;
+constexpr UINT_PTR kLaserTrailTimerID = 17;
 constexpr uint kAnnotationResizeRerenderDelayMs = 125;
 
 void CancelAnnotationResizeRerender(MainWindow* win);

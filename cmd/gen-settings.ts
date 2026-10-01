@@ -909,18 +909,18 @@ const annotations: Field[] = [
   field(
     "InkColor",
     Color,
-    rgba(0xff, 0xff, 0x0, 0x66),
+    "#000000",
     "color of newly created ink annotations, as #aarrggbb: the alpha is how translucent the stroke is " +
       "(00 = transparent, FF = opaque), so the color is exactly what ends up on the page",
   ).ver("3.7"),
   field(
     "InkColors",
     Str,
-    "#66ffff00 #668bf05d #6699defa #66f199d2 #66e24745",
+    "#000000 #2563eb #dc2626 #facc15 #22c55e #a855f7 #ec4899 #ffffff",
     "colors offered by the ink button's drop-down, separated by space. Use #aarrggbb values: " +
       "the alpha is the stroke's opacity. The color ink currently draws in is added when it is missing",
   ).ver("3.7"),
-  field("InkBorderWidth", Int, 16, "width of the stroke of new ink annotations, in points").ver("3.7"),
+  field("InkBorderWidth", Int, 2, "width of the stroke of new ink annotations, in points").ver("3.7"),
   field(
     "StampColor",
     Color,
@@ -1320,6 +1320,12 @@ const globalPrefs: Field[] = [
     .ver("3.7")
     .doc("valid values: thumbnails, list"),
   field(
+    "HomePageThumbnailSize",
+    Int,
+    100,
+    "home grid preview size in percent, from 75 to 250; Ctrl+wheel also adjusts it",
+  ),
+  field(
     "FilePicker",
     Str,
     "",
@@ -1665,20 +1671,16 @@ const globalPrefs: Field[] = [
   field(
     "Theme",
     Str,
-    "Light",
+    "Sumatra Light",
     "the name of the theme to use. System follows the Windows light/dark app mode " +
       "and switches between LastLightTheme and LastDarkTheme. Built-in themes: " +
-      "Light, Dark, Light Warm, Dark from 3.5, Charcoal, Solarized Light, " +
-      "Solarized Dark, Dracula, Nebula, Greeny, Choco, Purpy, One Dark, Monokai, " +
-      "Nord, GitHub Dark, Catppuccin Mocha, Tokyo Night, Gruvbox, Night Owl, Ayu, " +
-      "Palenight, System (custom Themes[] entries can add more)",
+      "Sumatra Light, Sumatra Dark, Modern Slate Light, Modern Slate Dark, " +
+      "Modern Blue Light, Modern Blue Dark, Modern Green Light, Modern Green Dark, " +
+      "Modern Purple Light, Modern Purple Dark, Modern Amber Light, Modern Amber Dark, " +
+      "System (custom Themes[] entries can add more)",
   )
     .ver("3.5")
-    .doc(
-      "valid themes: Light, Dark, Light Warm, Dark from 3.5, Charcoal, Solarized Light, " +
-        "Solarized Dark, Dracula, Nebula, Greeny, Choco, Purpy, One Dark, Monokai, Nord, " +
-        "GitHub Dark, Catppuccin Mocha, Tokyo Night, Gruvbox, Night Owl, Ayu, Palenight, System",
-    ),
+    .doc("valid themes: Sumatra Light/Dark, Modern Slate/Blue/Green/Purple/Amber Light/Dark, System"),
   field(
     "HelpTheme",
     Str,
@@ -2034,6 +2036,7 @@ const globalPrefsLayout = [
   "DefaultZoom",
   "InverseSearchCmdLine",
   "HomePageViewMode",
+  "HomePageThumbnailSize",
   "FilePicker",
   "CustomColors",
   "Toolbar",

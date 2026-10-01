@@ -14,6 +14,11 @@
 #include "base/Timer.h"
 
 #include "gui/UIModels.h"
+#include "gui/Layout.h"
+#include "gui/Gfx.h"
+#include "gui/VirtCtrl.h"
+#include "gui/win/WinGui.h"
+#include "gui/win/TabsCtrl.h"
 
 #define INCLUDE_SETTINGSSTRUCTS_METADATA
 #include "Settings.h"
@@ -195,6 +200,54 @@ static void ResetCachedFonts() {
     // Fonts are interned PlatformFonts, so just drop these per-DPI references;
     // old fonts stay valid for windows that still hold them.
     VecReset(gUiFontsAtDpi);
+}
+
+void RefreshUiFonts() {
+    ResetCachedFonts();
+    HomePageInvalidateLayoutCache();
+    for (MainWindow* win : gWindows) {
+        int dpi = win->frameDpi > 0 ? win->frameDpi : DpiGetForHwnd(win->hwndFrame);
+        PlatformFont* appFont = GetAppFontForDpi(dpi);
+        PlatformFont* treeFont = GetAppTreeFontForDpi(dpi);
+        PlatformFont* labelFont = GetAppSidebarLabelFontForDpi(dpi);
+        if (win->tabsCtrl) {
+            win->tabsCtrl->SetFont(appFont);
+            UpdateTabWidth(win);
+        }
+        if (win->tocTreeView && win->tocTreeView->hwnd) {
+            HwndSetTreeFontForDpi(win->tocTreeView->hwnd, treeFont->GetHFont(), dpi);
+        }
+        if (win->favTreeView && win->favTreeView->hwnd) {
+            HwndSetTreeFontForDpi(win->favTreeView->hwnd, treeFont->GetHFont(), dpi);
+        }
+        if (win->tocLabel) {
+            win->tocLabel->font = labelFont;
+        }
+        if (win->favLabel) {
+            win->favLabel->font = labelFont;
+        }
+        ApplyLabelWithCloseDpi(win->tocLabel, win->tocCloseBtn, dpi);
+        ApplyLabelWithCloseDpi(win->favLabel, win->favCloseBtn, dpi);
+        if (win->tocLayout) {
+            win->tocLayout->lastBounds = {};
+        }
+        if (win->favLayout) {
+            win->favLayout->lastBounds = {};
+        }
+        if (win->tocFilterEdit) {
+            win->tocFilterEdit->SetFont(appFont);
+        }
+        if (win->favFilterEdit) {
+            win->favFilterEdit->SetFont(appFont);
+        }
+        if (win->hwndTocBox) {
+            SendMessageW(win->hwndTocBox, WM_SIZE, 0, 0);
+        }
+        if (win->hwndFavBox) {
+            SendMessageW(win->hwndFavBox, WM_SIZE, 0, 0);
+        }
+        HomePageOnDpiChanged(win, dpi);
+    }
 }
 
 // number of weeks past since 2011-01-01

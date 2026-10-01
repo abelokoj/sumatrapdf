@@ -143,6 +143,8 @@ void AnnotPlacement::Reset() {
     rect = {};
     VecClear(points);
     VecClear(strokeCounts);
+    pressureTotal = 0;
+    pressureSamples = 0;
     circle = false;
     mouseDown = false;
     didDrag = false;
@@ -361,7 +363,11 @@ static void SetPlacementCursor(MainWindow* win) {
             SetTextAnnotationPlacementCursor();
             break;
         case AnnotPlacementKind::Ink:
-            SetInkAnnotationPlacementCursor();
+            if (win->inkEraseMode != 0) {
+                SetCursorCached(IDC_CROSS);
+            } else {
+                SetInkAnnotationPlacementCursor();
+            }
             break;
         case AnnotPlacementKind::FreeText:
         case AnnotPlacementKind::Stamp:
@@ -556,7 +562,9 @@ void StartAnnotationPlacement(MainWindow* win, int cmdId) {
         return;
     }
 
+    StopLaserPointer(win);
     EndCurrentPlacement(win);
+    win->inkEraseMode = 0;
 
     AnnotPlacement& p = win->annotPlacement;
     p.Reset();
@@ -805,7 +813,12 @@ static bool HandleShapeUp(MainWindow* win, Point pt, WPARAM key) {
     return true;
 }
 
-static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt) {
+enum class InkSample {
+    Move,
+    End
+};
+
+static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt, InkSample sample = InkSample::Move) {
     AnnotPlacement& p = win->annotPlacement;
     int pageNo = p.pageNo;
     if (!dm || !dm->ValidPageNo(pageNo) || dm->GetPageNoByPoint(pt) != pageNo || len(p.strokeCounts) == 0) {
@@ -817,7 +830,13 @@ static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt) {
             return false;
         }
     }
-    VecAppend(p.points, dm->CvtFromScreen(pt, pageNo));
+    PointF point = dm->CvtFromScreen(pt, pageNo);
+    if (sample == InkSample::Move && win->inkPenStyle == InkPenStyle::Brush && VecLast(p.strokeCounts) > 0) {
+        PointF previous = VecLast(p.points);
+        point.x = previous.x + (point.x - previous.x) * 0.6f;
+        point.y = previous.y + (point.y - previous.y) * 0.6f;
+    }
+    VecAppend(p.points, point);
     VecLast(p.strokeCounts)++;
     HwndInvalidate(win->hwndCanvas);
     return true;
@@ -847,7 +866,7 @@ bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
     float radius = (float)DpiScale(kInkEraserRadiusPx) / PxPerPagePt(dm, pageNo);
     AnnotPlacement& p = win->annotPlacement;
     bool pendingChanged = false;
-    if (p.pageNo == pageNo) {
+    if (p.pageNo == pageNo && win->inkEraseMode != 2) {
         pendingChanged = EraseInkStrokes(p.strokeCounts, p.points, pagePt, radius);
         if (len(p.strokeCounts) == 0) {
             p.pageNo = -1;
@@ -858,7 +877,28 @@ bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
     Vec<Annotation*> annots;
     EngineMupdfGetLoadedAnnotations(engine, annots);
     for (Annotation* annot : annots) {
-        if (Type(annot) != AnnotationType::Ink || PageNo(annot) != pageNo) {
+        if (PageNo(annot) != pageNo) {
+            continue;
+        }
+        if (win->inkEraseMode == 2) {
+            if (Type(annot) == AnnotationType::Highlight) {
+                Vec<RectF> quads = GetQuadPointsAsRect(annot);
+                for (RectF quad : quads) {
+                    if (quad.Contains(pagePt)) {
+                        DeleteAnnotationAndUpdateUI(tab, annot);
+                        savedChanged = true;
+                        break;
+                    }
+                }
+                continue;
+            }
+            int style = InkPenStyleTag(annot);
+            bool marker = style == (int)InkPenStyle::Highlighter || (style < 0 && Opacity(annot) <= 128);
+            if (Type(annot) != AnnotationType::Ink || !marker) {
+                continue;
+            }
+        }
+        if (Type(annot) != AnnotationType::Ink) {
             continue;
         }
         InkEraseResult result = EraseAnnotationInk(annot, pagePt, radius);
@@ -883,6 +923,11 @@ static bool HandleInkDown(MainWindow* win, Point pt) {
         return false;
     }
     HwndSetFocus(win->hwndFrame);
+    if (win->inkEraseMode != 0) {
+        win->annotPlacement.mouseDown = true;
+        SetCapture(win->hwndCanvas);
+        return AnnotationPlacementEraseAt(win, pt);
+    }
     DisplayModel* dm = win->AsFixed();
     AnnotPlacement& p = win->annotPlacement;
     int pageNo = dm ? dm->GetPageNoByPoint(pt) : -1;
@@ -908,7 +953,15 @@ static bool HandleInkUp(MainWindow* win, Point pt) {
     if (!IsPlacingInkAnnotation(win) || !win->annotPlacement.mouseDown) {
         return false;
     }
-    AppendInkPoint(win, win->AsFixed(), pt);
+    if (win->inkEraseMode != 0) {
+        AnnotationPlacementEraseAt(win, pt);
+        win->annotPlacement.mouseDown = false;
+        if (GetCapture() == win->hwndCanvas) {
+            ReleaseCapture();
+        }
+        return true;
+    }
+    AppendInkPoint(win, win->AsFixed(), pt, InkSample::End);
     if (GetCapture() == win->hwndCanvas) {
         ReleaseCapture();
     }
@@ -1012,7 +1065,11 @@ bool AnnotationPlacementOnMouseMove(MainWindow* win, Point pt, WPARAM key) {
     switch (p.kind) {
         case AnnotPlacementKind::Ink:
             if (p.mouseDown && bit::IsMaskSet(key, (WPARAM)MK_LBUTTON)) {
-                AppendInkPoint(win, dm, pt);
+                if (win->inkEraseMode != 0) {
+                    AnnotationPlacementEraseAt(win, pt);
+                } else {
+                    AppendInkPoint(win, dm, pt);
+                }
             }
             break;
         case AnnotPlacementKind::Shape:
@@ -1322,6 +1379,27 @@ static void PaintShapePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     gs.DrawEllipse(&pen, start.x - markerHalf, start.y - markerHalf, markerSize, markerSize);
 }
 
+static int InkStrokeWidth(MainWindow* win) {
+    int width = std::max(1, gSettings->annotations.inkBorderWidth);
+    AnnotPlacement& p = win->annotPlacement;
+    bool fountain = win->inkPenStyle == InkPenStyle::Fountain;
+    bool brush = win->inkPenStyle == InkPenStyle::Brush;
+    if ((!fountain && !brush) || p.pressureSamples == 0) {
+        return width;
+    }
+    // PDF ink stores one width per stroke, so save its mean pressure.
+    float pressure = p.pressureTotal / (float)p.pressureSamples;
+    float factor = fountain ? 0.3f + pressure : 0.25f + 1.5f * pressure;
+    return std::max(1, (int)roundf((float)width * factor));
+}
+
+static int InkStrokeOpacity(MainWindow* win) {
+    if (win->inkPenStyle == InkPenStyle::Highlighter) {
+        return 40;
+    }
+    return win->inkPenStyle == InkPenStyle::Pencil ? 65 : 100;
+}
+
 static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     AnnotPlacement& p = win->annotPlacement;
     int pageNo = p.pageNo;
@@ -1336,14 +1414,9 @@ static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     Color col = GetParsedColor(gSettings->annotations.inkColor, kInkDefaultColor);
     u8 r, g, b;
     UnpackColor(col, r, g, b);
-    u8 a = GetAlpha(col);
-    // no alpha written out is opaque
-    Gdiplus::Color strokeCol(a == 0 ? 255 : a, r, g, b);
-    Gdiplus::REAL width = (Gdiplus::REAL)std::max(DpiScale(2), 1);
-    int bw = gSettings->annotations.inkBorderWidth;
-    if (bw > 0) {
-        width = (Gdiplus::REAL)std::max(1.f, (float)bw * PxPerPagePt(dm, pageNo));
-    }
+    u8 a = (u8)(InkStrokeOpacity(win) * 255 / 100);
+    Gdiplus::Color strokeCol(a, r, g, b);
+    Gdiplus::REAL width = std::max(1.f, (float)InkStrokeWidth(win) * PxPerPagePt(dm, pageNo));
     Gdiplus::Pen pen(strokeCol, width);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
@@ -1367,7 +1440,7 @@ static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
             continue;
         }
         if (len(pts) == 1) {
-            int dotSize = std::max(DpiScale(3), 2);
+            int dotSize = std::max((int)roundf(width), 1);
             int dotHalf = dotSize / 2;
             Gdiplus::SolidBrush brush(strokeCol);
             gs.FillEllipse(&brush, pts[0].X - dotHalf, pts[0].Y - dotHalf, dotSize, dotSize);
@@ -1410,6 +1483,14 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             }
             ptOnPage = p.points[0];
             pt = dm->CvtToScreen(pageNo, VecLast(p.points));
+            args.borderWidth = InkStrokeWidth(win);
+            args.opacity = InkStrokeOpacity(win);
+            if (args.col.parsedOk) {
+                u8 r, g, b, a;
+                UnpackPdfColor(args.col.pdfCol, r, g, b, a);
+                args.col.pdfCol = MkPdfColor(r, g, b, (u8)(args.opacity * 255 / 100));
+            }
+            args.inkPenStyle = (int)win->inkPenStyle;
             args.inkStrokeCounts = &p.strokeCounts;
             args.inkPoints = &p.points;
             return true;
@@ -1630,4 +1711,104 @@ TempStr AnnotationPlacementStateTemp(MainWindow* win) {
                        on ? p.cmdId : 0, message));
     }
     return ToStrTemp(out);
+}
+
+bool SuppressTouchForPen(MainWindow* win) {
+    return win && win->penOnly &&
+           (IsPlacingInkAnnotation(win) || IsPlacingHighlighterAnnotation(win) || win->laserPointerActive);
+}
+
+void AddInkPressure(MainWindow* win, UINT32 pressure) {
+    if (!IsPlacingInkAnnotation(win) || !win->annotPlacement.mouseDown || win->inkEraseMode != 0 || pressure == 0) {
+        return;
+    }
+    AnnotPlacement& p = win->annotPlacement;
+    p.pressureTotal += (float)std::min(pressure, (UINT32)1024) / 1024.f;
+    p.pressureSamples++;
+}
+
+bool HandlePenToolCommand(MainWindow* win, int cmdId) {
+    bool profile = cmdId == CmdInkFountain || cmdId == CmdInkBrush || cmdId == CmdInkPencil;
+    if (!profile && (cmdId < CmdInkPen || cmdId > CmdTogglePenOnly)) {
+        return false;
+    }
+    if (cmdId == CmdTogglePenOnly) {
+        win->penOnly = !win->penOnly;
+        NotificationCreateArgs args;
+        args.hwndParent = win->hwndCanvas;
+        args.msg =
+            win->penOnly ? Tr("Palm rejection on while writing.") : Tr("Touch navigation enabled while writing.");
+        args.timeoutMs = 2500;
+        ShowNotification(args);
+        return true;
+    }
+    bool restart = IsPlacingInkAnnotation(win);
+    if (restart) {
+        FinishInkAnnotationPlacement(win);
+    }
+    auto& a = gSettings->annotations;
+    switch (cmdId) {
+        case CmdInkPen:
+            win->inkPenStyle = InkPenStyle::Ballpoint;
+            a.inkBorderWidth = 2;
+            break;
+        case CmdInkFountain:
+            win->inkPenStyle = InkPenStyle::Fountain;
+            a.inkBorderWidth = 3;
+            break;
+        case CmdInkBrush:
+            win->inkPenStyle = InkPenStyle::Brush;
+            a.inkBorderWidth = 5;
+            break;
+        case CmdInkPencil:
+            win->inkPenStyle = InkPenStyle::Pencil;
+            a.inkBorderWidth = 1;
+            break;
+        case CmdInkHighlighter:
+            win->inkPenStyle = InkPenStyle::Highlighter;
+            SetColorText(a.inkColor, StrL("#ffff00"));
+            a.inkBorderWidth = 12;
+            break;
+        case CmdInkBlack:
+            SetColorText(a.inkColor, StrL("#000000"));
+            break;
+        case CmdInkBlue:
+            SetColorText(a.inkColor, StrL("#2563eb"));
+            break;
+        case CmdInkRed:
+            SetColorText(a.inkColor, StrL("#dc2626"));
+            break;
+        case CmdInkThin:
+            a.inkBorderWidth = 1;
+            break;
+        case CmdInkMedium:
+            a.inkBorderWidth = 3;
+            break;
+        case CmdInkThick:
+            a.inkBorderWidth = 6;
+            break;
+        default:
+            break;
+    }
+    StartAnnotationPlacement(win, CmdCreateAnnotInk);
+    if (IsPlacingInkAnnotation(win)) {
+        win->inkEraseMode = cmdId == CmdInkEraser ? 1 : cmdId == CmdHighlightEraser ? 2 : 0;
+        if (win->inkEraseMode != 0) {
+            NotificationCreateArgs args;
+            args.hwndParent = win->hwndCanvas;
+            args.msg = win->inkEraseMode == 2
+                           ? Tr("Erase highlighting. Handwritten ink is preserved. **Esc** to finish.")
+                           : Tr("Erase ink strokes. **Esc** to finish.");
+            args.timeoutMs = kNotifNoTimeout;
+            args.groupId = kNotifInkAnnotationPlacement;
+            args.corner = NotifCorner::BottomBar;
+            args.tab = win->CurrentTab();
+            args.onClosed = MkFunc1(OnPlacementNotifClosed, win);
+            ShowNotification(args);
+            SetPlacementCursor(win);
+        }
+    }
+    ToolbarUpdateStateForWindow(win, false);
+    ScheduleSaveSettings();
+    return true;
 }

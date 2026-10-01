@@ -99,9 +99,12 @@ static LRESULT CALLBACK WndProcVirtHost(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 }
             }
             break;
-        case WM_SIZE:
+        case WM_SIZE: {
+            Size size{LOWORD(lp), HIWORD(lp)};
+            host->onSizeChanged.Call(size);
             host->Relayout();
             return 0;
+        }
         case WM_ERASEBKGND:
             // WM_PAINT draws the whole client area into a back buffer
             return 1;

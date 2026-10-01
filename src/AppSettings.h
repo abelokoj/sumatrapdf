@@ -24,6 +24,7 @@ void FlushScheduledSaveSettings();
 void ForceReloadSettings();
 void ReloadDeferredSettings();
 void ApplySettingsToOpenWindows();
+void RefreshUiFonts();
 void CleanUpSettings();
 void RegisterSettingsForFileChanges();
 void UnregisterSettingsForFileChanges();

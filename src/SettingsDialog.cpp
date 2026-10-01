@@ -46,6 +46,12 @@ struct SettingsWnd : WindowBase {
     DropDown* dropLayout = nullptr;
     DropDown* dropZoom = nullptr;
     DropDown* dropInverse = nullptr;
+    DropDown* dropUiSize = nullptr;
+    DropDown* dropTreeSize = nullptr;
+    DropDown* dropThumbnailSize = nullptr;
+    Vec<int> uiSizes;
+    Vec<int> treeSizes;
+    Vec<int> thumbnailSizes;
 
     Checkbox* chkShowToc = nullptr;
     Checkbox* chkRememberState = nullptr;
@@ -66,6 +72,34 @@ struct SettingsWnd : WindowBase {
     void OnCancel(VirtMouseEvent* ev = nullptr);
     void OnOk(VirtMouseEvent* ev = nullptr);
 };
+
+static void FillSizeChoices(DropDown* drop, Vec<int>& sizes, int current, bool percentage) {
+    const int fontSizes[] = {0, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48};
+    const int thumbnailSizes[] = {75, 100, 125, 150, 175, 200, 250};
+    if (percentage) {
+        for (int value : thumbnailSizes) {
+            VecAppend(sizes, value);
+        }
+    } else {
+        for (int value : fontSizes) {
+            VecAppend(sizes, value);
+        }
+    }
+    if (VecFind(sizes, current) < 0) {
+        VecAppend(sizes, current);
+    }
+    StrVec labels;
+    for (int value : sizes) {
+        labels.Append(value == 0 ? Tr("Automatic (Windows)") : fmt(percentage ? "%d%%" : "%d px", value));
+    }
+    drop->SetItems(labels);
+    CbSetCurrentSelection(drop, VecFind(sizes, current));
+}
+
+static int SelectedSize(DropDown* drop, const Vec<int>& sizes, int fallback) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < len(sizes) ? sizes[index] : fallback;
+}
 
 static SettingsWnd* gSettingsWnd = nullptr;
 
@@ -191,6 +225,16 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         str::ReplaceWithCopy(&gSettings->defaultDisplayMode, DisplayModeToString(gSettings->defaultDisplayModeEnum));
     }
     gSettings->defaultZoomFloat = SelectedZoom();
+    int uiSize = SelectedSize(dropUiSize, uiSizes, gSettings->uIFontSize);
+    int treeSize = SelectedSize(dropTreeSize, treeSizes, gSettings->treeFontSize);
+    bool fontsChanged = uiSize != gSettings->uIFontSize || treeSize != gSettings->treeFontSize;
+    gSettings->uIFontSize = uiSize;
+    gSettings->treeFontSize = treeSize;
+    gSettings->homePageThumbnailSize =
+        SelectedSize(dropThumbnailSize, thumbnailSizes, gSettings->homePageThumbnailSize);
+    if (fontsChanged) {
+        RefreshUiFonts();
+    }
     if (chkShowToc) {
         gSettings->showToc = chkShowToc->IsChecked();
     }
@@ -335,6 +379,41 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(table);
         FillLayout();
         FillZoom();
+    }
+
+    {
+        vbox->AddChild(NewVirtText({
+            .s = Tr("Appearance"),
+            .font = font,
+            .isRtl = isRtl,
+            .padding = DpiScaledInsets(12, 0, 4, 0),
+        }));
+        auto* table = new Table();
+        table->SetSize(3, 2);
+        table->colGap = DpiScale(8);
+        table->rowGap = DpiScale(4);
+        const Str names[] = {Tr("&Interface text size:"), Tr("&Sidebar text size:"), Tr("Home &thumbnail size:")};
+        DropDown** controls[] = {&dropUiSize, &dropTreeSize, &dropThumbnailSize};
+        for (int row = 0; row < 3; row++) {
+            auto* label = NewVirtText({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
+            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, false);
+            *controls[row] = drop;
+            auto& labelCell = table->SetCell(row, 0, label);
+            labelCell.alignV = CrossAxisAlign::CrossCenter;
+            auto& dropCell = table->SetCell(row, 1, drop);
+            dropCell.alignH = CrossAxisAlign::Stretch;
+            dropCell.alignV = CrossAxisAlign::CrossCenter;
+        }
+        FillSizeChoices(dropUiSize, uiSizes, gSettings ? gSettings->uIFontSize : 0, false);
+        FillSizeChoices(dropTreeSize, treeSizes, gSettings ? gSettings->treeFontSize : 0, false);
+        FillSizeChoices(dropThumbnailSize, thumbnailSizes, gSettings ? gSettings->homePageThumbnailSize : 100, true);
+        vbox->AddChild(table);
+        vbox->AddChild(NewVirtText({
+            .s = Tr("Interface: menus, toolbar and dialogs. Sidebar: bookmarks."),
+            .font = font,
+            .isRtl = isRtl,
+            .padding = DpiScaledInsets(4, 0, 0, 0),
+        }));
     }
 
     chkShowToc =

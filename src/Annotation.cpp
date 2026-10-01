@@ -2082,6 +2082,26 @@ void SetBorderWidth(Annotation* annot, int newWidth) {
     MarkNotificationAsModified(e, annot);
 }
 
+int InkPenStyleTag(Annotation* annot) {
+    if (!AnnotationIsLive(annot) || Type(annot) != AnnotationType::Ink) {
+        return -1;
+    }
+    EngineMupdf* e = annot->engine;
+    auto* ctx = e->Ctx();
+    AutoUnlockRecursiveMutex cs(&e->docLock);
+    int style = -1;
+    fz_try(ctx) {
+        pdf_obj* obj = pdf_dict_gets(ctx, pdf_annot_obj(ctx, annot->pdfannot), "SumatraPenStyle");
+        if (pdf_is_int(ctx, obj)) {
+            style = pdf_to_int(ctx, obj);
+        }
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return style;
+}
+
 int Opacity(Annotation* annot) {
     if (!AnnotationIsLive(annot)) {
         return 0;
@@ -2548,6 +2568,10 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
             }
 
             if (typ == AnnotationType::Ink) {
+                if (args->inkPenStyle >= 0) {
+                    pdf_dict_puts_drop(ctx, pdf_annot_obj(ctx, annot), "SumatraPenStyle",
+                                       pdf_new_int(ctx, args->inkPenStyle));
+                }
                 // the highlighter brush is an ink stroke as wide and as
                 // translucent as a marker
                 if (args->opacity < 100) {

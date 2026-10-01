@@ -28,7 +28,7 @@ void HomePageRelayout(MainWindow* win);
 void HomePageHideSearch(MainWindow* win);
 void PickAnotherRandomPromotion();
 void HomePageOnVScroll(MainWindow* win, WPARAM wp);
-void HomePageOnMouseWheel(MainWindow* win, int delta);
+void HomePageOnMouseWheel(MainWindow* win, int delta, bool isCtrl = false);
 void HomePageFocusSearch(MainWindow* win);
 void HomePageUpdateSearchColors(MainWindow* win);
 void HomePageOnDpiChanged(MainWindow* win, int dpi);

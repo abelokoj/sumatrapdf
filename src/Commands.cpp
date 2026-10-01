@@ -336,6 +336,25 @@ static SeqStrings gCommandNames =
     "CmdZoomFitVisible\0"
     "CmdSignWithImage\0"
     "CmdInsertTextSnippet\0"
+    "CmdInkPen\0"
+    "CmdInkHighlighter\0"
+    "CmdInkEraser\0"
+    "CmdHighlightEraser\0"
+    "CmdInkBlack\0"
+    "CmdInkBlue\0"
+    "CmdInkRed\0"
+    "CmdInkThin\0"
+    "CmdInkMedium\0"
+    "CmdInkThick\0"
+    "CmdTogglePenOnly\0"
+    "CmdThemeLight\0"
+    "CmdThemeDark\0"
+    "CmdInkFountain\0"
+    "CmdInkBrush\0"
+    "CmdInkPencil\0"
+    "CmdLaserSolid\0"
+    "CmdLaserHollow\0"
+    "CmdLaserDot\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -661,6 +680,25 @@ static i32 gCommandIds[] = {
     CmdZoomFitVisible,
     CmdSignWithImage,
     CmdInsertTextSnippet,
+    CmdInkPen,
+    CmdInkHighlighter,
+    CmdInkEraser,
+    CmdHighlightEraser,
+    CmdInkBlack,
+    CmdInkBlue,
+    CmdInkRed,
+    CmdInkThin,
+    CmdInkMedium,
+    CmdInkThick,
+    CmdTogglePenOnly,
+    CmdThemeLight,
+    CmdThemeDark,
+    CmdInkFountain,
+    CmdInkBrush,
+    CmdInkPencil,
+    CmdLaserSolid,
+    CmdLaserHollow,
+    CmdLaserDot,
 };
 
 SeqStrings gCommandDescriptions =
@@ -986,6 +1024,25 @@ SeqStrings gCommandDescriptions =
     "Zoom: Fit Visible\0"
     "Sign With Image\0"
     "Insert Text Snippet\0"
+    "Pen: Write\0"
+    "Pen: Freehand Highlighter\0"
+    "Pen: Stroke Eraser\0"
+    "Pen: Highlighter-only Eraser\0"
+    "Pen Color: Black\0"
+    "Pen Color: Blue\0"
+    "Pen Color: Red\0"
+    "Pen Width: Thin\0"
+    "Pen Width: Medium\0"
+    "Pen Width: Thick\0"
+    "Pen: Toggle Palm Rejection\0"
+    "Theme: Light\0"
+    "Theme: Dark\0"
+    "Pen: Fountain\0"
+    "Pen: Brush\0"
+    "Pen: Pencil\0"
+    "Laser Pointer: Solid Trail\0"
+    "Laser Pointer: Hollow Trail\0"
+    "Laser Pointer: Single Dot\0"
     "\0";
 
 SeqStrings gCommandAltDescs =

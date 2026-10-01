@@ -192,7 +192,7 @@ LRESULT WndProcCanvasAbout(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LPAR
         case WM_MOUSEWHEEL: {
             HomePageClearActiveEntry(win);
             int delta = GET_WHEEL_DELTA_WPARAM(wp);
-            HomePageOnMouseWheel(win, delta);
+            HomePageOnMouseWheel(win, delta, (LOWORD(wp) & MK_CONTROL) || IsCtrlPressed());
             return 0;
         }
 

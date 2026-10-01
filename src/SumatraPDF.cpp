@@ -149,7 +149,7 @@ constexpr const WCHAR* kCanvasClassName = L"SUMATRA_PDF_CANVAS";
 constexpr const char* kRestrictionsFileName = "sumatrapdfrestrict.ini";
 
 constexpr const char* kSumatraWindowTitle = "SumatraPDF";
-constexpr const WCHAR* kSumatraWindowTitleW = L"SumatraPDF";
+constexpr const WCHAR* kSumatraWindowTitleW = L"SumatraPDF Enhanced";
 
 // used to show it in debug, but is not very useful,
 // so always disable
@@ -9551,6 +9551,11 @@ static WCHAR SingleCharLowerW(WCHAR c) {
 }
 
 static void OnFrameKeyEsc(MainWindow* win) {
+    if (win->laserPointerActive) {
+        StopLaserPointer(win);
+        HideToolbarHoverDropdown(win);
+        return;
+    }
     if (win->isQuickLook) {
         CloseWindow(win, true, false);
         return;
@@ -11974,6 +11979,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         cmdId = cmd->origId;
     }
 
+    if (HandlePenToolCommand(win, cmdId)) {
+        return 0;
+    }
+
     // a favorite in the Favorites menu carries its file path and page as arguments
     if (cmdId == CmdFavorite) {
         GoToFavoriteByCmd(win, cmd);
@@ -13565,6 +13574,14 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             ToggleKeyboardLinkFollowing(win);
             break;
 
+        case CmdLaserSolid:
+        case CmdLaserHollow:
+        case CmdLaserDot:
+            SetLaserPointerMode(win, cmdId == CmdLaserSolid    ? LaserPointerMode::Solid
+                                     : cmdId == CmdLaserHollow ? LaserPointerMode::Hollow
+                                                               : LaserPointerMode::Dot);
+            break;
+
         case CmdToggleLaserPointer:
             // the cursor itself is the feedback, so no notification
             ToggleLaserPointer(win);
@@ -13846,6 +13863,12 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             lastCreatedAnnot = CreateImageStampAnnotation(win, tab, dm, image, lp);
             FreePixmap(image);
         } break;
+
+        case CmdThemeLight:
+        case CmdThemeDark:
+            SetLightDarkTheme(cmdId == CmdThemeDark);
+            ScheduleSaveSettings();
+            break;
 
         case CmdToggleLightDarkTheme:
             ToggleLightDarkTheme();

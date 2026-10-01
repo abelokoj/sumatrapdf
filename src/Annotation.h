@@ -120,6 +120,7 @@ struct AnnotCreateArgs {
     RectF rect;
     const Vec<int>* inkStrokeCounts = nullptr;
     const Vec<PointF>* inkPoints = nullptr;
+    int inkPenStyle = -1;
 };
 
 int PageNo(Annotation*);
@@ -166,6 +167,7 @@ int Quadding(Annotation*);
 int BorderWidth(Annotation*);
 Str IconName(Annotation*); // empty if no icon
 int Opacity(Annotation*);
+int InkPenStyleTag(Annotation*);
 void GetLineEndingStyles(Annotation*, int* start, int* end);
 bool GetLinePoints(Annotation*, PointF& start, PointF& end);
 void SetLinePoints(Annotation*, PointF start, PointF end);

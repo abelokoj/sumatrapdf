@@ -8,6 +8,7 @@ int ThemeGetCount();
 Str ThemeGetNameAt(int idx);
 int ThemeGetCurrentIndex();
 void ToggleLightDarkTheme();
+void SetLightDarkTheme(bool dark);
 Str ToggleLightDarkThemeTargetName();
 void SumatraUpdateTheme();
 void UpdateThemeAfterSystemColorChange();
@@ -66,3 +67,6 @@ VirtButton* NewThemedButton(HWND hwndForDpi, Str text, PlatformFont*, bool isDef
 extern int gFirstSetThemeCmdId;
 extern int gLastSetThemeCmdId;
 extern int gCurrSetThemeCmdId;
+
+Color ThemeBrandColor();
+Color ThemeBrandTextColor();

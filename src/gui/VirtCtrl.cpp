@@ -2703,9 +2703,13 @@ Color VirtButton::TextColor(Color bg) const {
 void VirtButton::Paint(VirtPaintCtx& ctx) {
     bool isEnabled = HasFlag(vwfEnabled);
     Color bg = GetColor((isEnabled && HasFlag(vwfHovered)) ? kColBtnBgHover : kColBtnBg);
-    ctx.gfx->FillRect(ctx.bounds, bg);
     Color borderCol = GetColor(kColBtnBorder);
-    if (!ColorSkipsPaint(borderCol)) {
+    if (cornerRadius > 0) {
+        ctx.gfx->FillRoundedRect(ctx.bounds, cornerRadius, bg, borderCol);
+    } else {
+        ctx.gfx->FillRect(ctx.bounds, bg);
+    }
+    if (cornerRadius == 0 && !ColorSkipsPaint(borderCol)) {
         Rect b = ctx.bounds;
         ctx.gfx->FillRect({b.x, b.y, b.dx, 1}, borderCol);
         ctx.gfx->FillRect({b.x, b.Bottom() - 1, b.dx, 1}, borderCol);
@@ -2795,10 +2799,16 @@ Size VirtIconButton::GetIdealSize() {
     sz.dx += padding.left + padding.right;
     sz.dy += padding.top + padding.bottom;
     sz.dx += DropdownDx();
+    if (len(label) > 0 && labelFont) {
+        Size text = PlatformFontMeasureText(labelFont, label);
+        sz.dx += DpiScale(8) + text.dx;
+        sz.dy = std::max(sz.dy, text.dy + padding.top + padding.bottom);
+    }
     return sz;
 }
 
 void VirtIconButton::Paint(VirtPaintCtx& ctx) {
+    ctx.gfx->FillRoundedRect(ctx.bounds, cornerRadius, backgroundColor);
     bool enabled = IsEnabled();
     int dropDx = DropdownDx();
     Rect action = ctx.bounds;
@@ -2812,12 +2822,12 @@ void VirtIconButton::Paint(VirtPaintCtx& ctx) {
     // a disabled button's last checked state is leftover (e.g. Fit Single Page
     // after switching to the home page); don't paint it as selected
     if (isSelected && enabled && bgSel != kColorUnset) {
-        ctx.gfx->FillRect(action, bgSel);
+        ctx.gfx->FillRoundedRect(action, cornerRadius, bgSel);
     }
     Color bgHover = GetColor(kColIconBtnBgHover);
     if (enabled && HasFlag(vwfHovered) && bgHover != kColorUnset) {
         Rect hi = (dropDx > 0 && hoverOnDropdown) ? drop : action;
-        ctx.gfx->FillRect(hi, bgHover);
+        ctx.gfx->FillRoundedRect(hi, cornerRadius, bgHover);
     }
     Pixmap* px = (!enabled && pixmapDisabled) ? pixmapDisabled : pixmap;
     Rect r = ctx.content;
@@ -2826,9 +2836,16 @@ void VirtIconButton::Paint(VirtPaintCtx& ctx) {
         // blit falls back to an opaque copy, which paints the transparent fringe black
         Size s2 = {px->width, px->height};
         int iconDx = r.dx - dropDx;
-        int x = r.x + ((iconDx - s2.dx) / 2);
+        int textDx = (len(label) > 0 && labelFont) ? PlatformFontMeasureText(labelFont, label).dx : 0;
+        int contentDx = s2.dx + (textDx > 0 ? DpiScale(8) + textDx : 0);
+        int x = r.x + ((iconDx - contentDx) / 2);
         int y = r.y + ((r.dy - s2.dy) / 2);
         ctx.gfx->DrawPixmap(px, {x, y, s2.dx, s2.dy});
+        if (textDx > 0) {
+            Rect text{x + s2.dx + DpiScale(8), r.y, textDx, r.dy};
+            Color textCol = GetColor(enabled ? kColIconBtnChevron : kColIconBtnChevronDisabled);
+            ctx.gfx->DrawText(label, text, gfxTextVCenter, labelFont, textCol);
+        }
     }
     if (dropDx > 0) {
         Color col = GetColor(enabled ? kColIconBtnChevron : kColIconBtnChevronDisabled);

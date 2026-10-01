@@ -23,6 +23,7 @@
 #include "TextSelection.h"
 #include "TextSearch.h"
 #include "SumatraPDF.h"
+#include "SumatraConfig.h"
 #include "MainWindow.h"
 #include "AnnotPlacement.h"
 #include "Notifications.h"
@@ -56,7 +57,7 @@
 
 // https://docs.microsoft.com/en-us/windows/win32/controls/toolbar-control-reference
 
-constexpr int kButtonSpacingX = 4;
+constexpr int kButtonSpacingX = 6;
 
 // distance between label and edit field
 constexpr int kTextPaddingRight = 6;
@@ -69,29 +70,68 @@ struct ToolbarButtonInfo {
     bool isText = false;
 };
 
+static const char* kEnhancedLaserIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m4 16 4 4 8-8-4-4zM14 6l2-2M19 9h3M19 4l2-2M8 20l-4 1-1-4"/><circle cx="18" cy="6" r="1"/></svg>)";
+static const char* kEnhancedThemeIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="8"/><path d="M12 4v16"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>)";
+static const char* kEnhancedStarIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>)";
+static const char* kEnhancedBookmarkIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h12v18l-6-4-6 4z"/></svg>)";
+
+static const char* kEnhancedSettingsIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></svg>)";
+
+static const char* kEnhancedSunIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/></svg>)";
+static const char* kEnhancedMoonIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11z"/></svg>)";
+static const char* kEnhancedGridIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>)";
+static const char* kEnhancedEraserIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 14 10-11 8 8-9 10H8zM9 8l8 8M12 21h10"/></svg>)";
+
 static ToolbarButtonInfo gToolbarButtons[] = {
     {gIconFileOpen, CmdOpenFile, TrN("Open")},
-    {gIconPrint, CmdPrint, TrN("Print")},
-    {nullptr, 0, {}},          // separator
-    {nullptr, PageInfoId, {}}, // text box for page number + show current page / no of pages
+    {gIconSearch, CmdFindFirst, TrN("Find")},
+    {nullptr, 0, {}},
     {gIconPagePrev, CmdGoToPrevPage, TrN("Previous Page")},
+    {nullptr, PageInfoId, {}},
     {gIconPageNext, CmdGoToNextPage, TrN("Next Page")},
-    {nullptr, 0, {}}, // separator
-    {gIconNavigateBack, CmdNavigateBack, TrN("Back")},
-    {gIconNavigateForward, CmdNavigateForward, TrN("Forward")},
-    {nullptr, 0, {}}, // separator
-    {gIconSpeak, CmdToggleReadAloud, TrN("Read Aloud")},
-    {nullptr, 0, {}}, // separator
-    {gIconLayoutContinuous, CmdZoomFitWidthAndContinuous, TrN("Fit Width and Show Pages Continuously")},
-    {gIconLayoutSinglePage, CmdZoomFitPageAndSinglePage, TrN("Fit a Single Page")},
-    {gIconRotateLeft, CmdRotateLeft, TrN("Rotate &Left")},
-    {gIconRotateRight, CmdRotateRight, TrN("Rotate &Right")},
+    {nullptr, 0, {}},
     {gIconZoomOut, CmdZoomOut, TrN("Zoom Out")},
     {gIconZoomIn, CmdZoomIn, TrN("Zoom In")},
-    {nullptr, 0, {}}, // separator
-    {gIconSearch, CmdFindFirst, TrN("Find")},
-    {nullptr, 0, {}}, // separator
+    {gIconLayoutContinuous, CmdZoomFitWidthAndContinuous, TrN("Fit Width")},
+    {gIconLayoutSinglePage, CmdSinglePageView, TrN("Reading layout")},
+    {nullptr, 0, {}},
+    {gIconRotateLeft, CmdRotateLeft, TrN("Rotate Left")},
+    {gIconRotateRight, CmdRotateRight, TrN("Rotate Right")},
+    {nullptr, 0, {}},
     {gIconEditAnnotations, CmdToggleEditPDF, TrN("Edit PDF")},
+    {gIconAnnotInk, CmdCreateAnnotInk, TrN("Pen: tools, colors and thickness")},
+    {gIconAnnotHighlightBrush, CmdAnnotationHighlightBrush, TrN("Text highlighter")},
+    {gIconAnnotUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
+    {gIconAnnotStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
+    {kEnhancedEraserIcon, CmdInkEraser, TrN("Stroke eraser")},
+    {kEnhancedLaserIcon, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
+    {nullptr, 0, {}},
+    {kEnhancedBookmarkIcon, CmdToggleBookmarks, TrN("Bookmarks")},
+    {kEnhancedStarIcon, CmdCommandPaletteFavorites, TrN("Favorites")},
+    {gIconCommandPalette, CmdCommandPalette, TrN("Command Palette")},
+    {gIconPrint, CmdPrint, TrN("Print")},
+    {nullptr, 0, {}},
+    {kEnhancedSettingsIcon, CmdOptions, TrN("Settings")},
+    {kEnhancedSunIcon, CmdThemeLight, TrN("Day mode")},
+    {kEnhancedMoonIcon, CmdThemeDark, TrN("Night mode")},
+    {kEnhancedGridIcon, CmdChangeTheme, TrN("Theme presets")},
+    {kEnhancedThemeIcon, CmdInvertColors, TrN("Invert document colors")},
+    // Available to custom layouts without widening the default toolbar.
+    {gIconHome, CmdGoToHomePage, TrN("Home")},
+    {gIconNavigateBack, CmdNavigateBack, TrN("Back")},
+    {gIconNavigateForward, CmdNavigateForward, TrN("Forward")},
+    {gIconSpeak, CmdToggleReadAloud, TrN("Read Aloud")},
+    {gIconLayoutSinglePage, CmdZoomFitPageAndSinglePage, TrN("Fit a Single Page")},
+    {kEnhancedThemeIcon, CmdToggleLightDarkTheme, TrN("Light / Dark")},
 };
 // unicode chars: https://www.compart.com/en/unicode/U+25BC
 
@@ -181,7 +221,7 @@ static Color TbSubtleBgColor() {
 }
 
 static Color TbSelectedColor() {
-    return AccentColor(TbBgColor(), 28);
+    return ThemeHotBackgroundColor();
 }
 
 static Color TbEdgeColor() {
@@ -191,11 +231,11 @@ static Color TbEdgeColor() {
 // Old Win32 toolbar: TBMETRICS.cyPad defaults to 6, then we added DpiScale(2).
 // TB_SETBUTTONSIZE cannot go below image + 2*cyPad, so that was the bar height.
 static int ToolbarCyPad() {
-    return 6 + DpiScale(2);
+    return DpiScale(4);
 }
 
 static int ToolbarRowDy(int iconSize) {
-    return iconSize + (2 * ToolbarCyPad());
+    return iconSize + (2 * ToolbarCyPad()) + DpiScale(12);
 }
 
 static bool HasToolbarButtonContent(const ToolbarButtonInfo& tbi) {
@@ -363,6 +403,9 @@ static void PopulateToolbarLayout() {
     };
     auto useDefaultLayout = [&addButton]() {
         for (const ToolbarButtonInfo& tbi : gToolbarButtons) {
+            if (tbi.cmdId == CmdGoToHomePage) {
+                break;
+            }
             addButton(tbi);
         }
     };
@@ -475,6 +518,9 @@ static bool IsCmdAvailable(MainWindow* win, int cmdId, AppCommandCtx* ctx) {
 
 static bool IsCmdEnabled(MainWindow* win, int cmdId, AppCommandCtx* ctx) {
     switch (cmdId) {
+        case CmdCreateAnnotUnderline:
+        case CmdCreateAnnotStrikeOut:
+            return ctx->isDocLoaded && ctx->supportsAnnots;
         case CmdNextTab:
         case CmdPrevTab:
         case CmdNextTabSmart:
@@ -685,10 +731,14 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
         }
     }
 
+    SetToolbarButtonCheckedState(win, CmdCreateAnnotInk, IsPlacingInkAnnotation(win) && win->inkEraseMode == 0);
+    SetToolbarButtonCheckedState(win, CmdInkEraser, win->inkEraseMode == 1);
+    SetToolbarButtonCheckedState(win, CmdToggleLaserPointer, IsLaserPointerActive(win));
+
     bool showPdfAnnotationsToolbar = win->pdfAnnotationsToolbarEnabled && ctx->isPdf && ctx->supportsAnnots;
     SetPdfAnnotationsToolbarVisible(win, showPdfAnnotationsToolbar);
     // a placement mode (ink, shape, highlighter...) owns the page until it ends
-    bool annotButtonsEnabled = showPdfAnnotationsToolbar && !IsPlacingAnnotation(win);
+    bool annotButtonsEnabled = showPdfAnnotationsToolbar;
     bool annotVisibilityChanged = false;
     for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
         const ToolbarButtonInfo& bi = gPdfAnnotationButtons[i];
@@ -1265,13 +1315,22 @@ static void ApplyToolbarItemColors(VirtCtrl* w) {
     Color hover = TbHoverColor();
     Color sel = TbSelectedColor();
     if (auto* ib = AsVirtIconButton(w)) {
+        if (w->id == CmdThemeLight) ib->isSelected = IsLightColor(ThemeWindowBackgroundColor());
+        if (w->id == CmdThemeDark) ib->isSelected = !IsLightColor(ThemeWindowBackgroundColor());
+        if (w->id == CmdInvertColors) ib->isSelected = GetInvertPageColors();
+        ib->cornerRadius = DpiScale(8);
+        ib->backgroundColor = w->id == CmdOpenFile ? ThemeBrandColor() : kColorTransparent;
+        if (w->id == CmdOpenFile) {
+            hover = AccentColor(ThemeBrandColor(), 12);
+        }
         ib->SetColor(kColIconBtnBgHover, hover);
         ib->SetColor(kColIconBtnBgSelected, sel);
-        ib->SetColor(kColIconBtnChevron, TbTextColor());
+        ib->SetColor(kColIconBtnChevron, w->id == CmdOpenFile ? ThemeBrandTextColor() : TbTextColor());
         ib->SetColor(kColIconBtnChevronDisabled, TbDisabledColor());
         return;
     }
     if (auto* b = AsVirtButton(w)) {
+        b->cornerRadius = DpiScale(8);
         // a toolbar button is a label that highlights on hover, not a box
         b->SetColor(kColBtnBg, kColorTransparent);
         b->SetColor(kColBtnBorder, kColorTransparent);
@@ -1309,7 +1368,7 @@ static void RefreshToolbarIcons(MainWindow* win) {
             continue;
         }
         Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.icon);
-        ib->pixmap = GetCachedPixmapForSvg(svg, sz, sz, fg, TbBgColor());
+        ib->pixmap = GetCachedPixmapForSvg(svg, sz, sz, w->id == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
         ib->pixmapDisabled = GetCachedPixmapForSvg(svg, sz, sz, dis, TbBgColor());
     }
     for (int i = 0; i < len(tb->annotationItems); i++) {
@@ -1504,9 +1563,38 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
         ev->didHandle = true;
         return;
     }
-    // annotation buttons are disabled while a placement mode is on
-    ToolbarVirt* tbv = win->toolbarVirt;
-    if (tbv && IsPlacingAnnotation(win) && VecContains(tbv->annotationItems, w)) {
+    if (w->IsEnabled() && ev->button == 0 &&
+        (cmdId == CmdCreateAnnotInk || cmdId == CmdAnnotationHighlightBrush || cmdId == CmdCreateAnnotUnderline ||
+         cmdId == CmdCreateAnnotStrikeOut)) {
+        if (win->toolbarVirt && win->toolbarVirt->hoverCmdId == cmdId) {
+            HideToolbarHoverDropdown(win);
+            ev->didHandle = true;
+            return;
+        }
+        bool ink = cmdId == CmdCreateAnnotInk;
+        bool started = ink ? IsPlacingInkAnnotation(win) : IsPlacingHighlighterAnnotation(win);
+        if (!started || !ink) {
+            HwndSendCommand(win->hwndFrame, cmdId);
+        }
+        ShowToolbarButtonDropdown(win, cmdId);
+        ev->didHandle = true;
+        return;
+    }
+    if (w->IsEnabled() && ev->button == 0 && cmdId == CmdToggleLaserPointer) {
+        if (win->toolbarVirt && win->toolbarVirt->hoverCmdId == cmdId) {
+            HideToolbarHoverDropdown(win);
+        } else {
+            if (!IsLaserPointerActive(win)) {
+                HwndSendCommand(win->hwndFrame, cmdId);
+            }
+            ShowToolbarButtonDropdown(win, cmdId);
+        }
+        ev->didHandle = true;
+        return;
+    }
+    if (w->IsEnabled() && ev->button == 0 && cmdId == CmdSinglePageView) {
+        ShowToolbarButtonDropdown(win, cmdId);
+        ev->didHandle = true;
         return;
     }
     // right-click: the drop-down, not the button's command
@@ -1565,6 +1653,7 @@ struct ToolbarHoverRow : VirtCtrl {
     Str shortcut;             // owned; empty when the command has no key
     PlatformFont* font = nullptr;
     int iconSize = 0;
+    bool isCurrent = false;
 
     ToolbarHoverRow() = default;
     ~ToolbarHoverRow() override {
@@ -1589,8 +1678,8 @@ struct ToolbarHoverRow : VirtCtrl {
     void Paint(VirtPaintCtx& ctx) override {
         bool enabled = IsEnabled();
         Rect r = ctx.bounds;
-        if (enabled && HasFlag(vwfHovered)) {
-            ctx.gfx->FillRect(r, TbHoverColor());
+        if (isCurrent || (enabled && HasFlag(vwfHovered))) {
+            ctx.gfx->FillRoundedRect(r, DpiScale(6), TbHoverColor(), isCurrent ? ThemeBrandColor() : TbHoverColor());
         }
         int x = r.x + DpiScale(kHoverRowPadX);
         if (pixmap) {
@@ -1692,6 +1781,7 @@ ILayout* NewToolbarHoverMenu(MainWindow* win, const Vec<ToolbarHoverMenuItem>& i
         auto* row = new ToolbarHoverRow();
         row->id = it.cmdId;
         row->font = tb->platformFont;
+        row->isCurrent = it.isCurrent;
         row->iconSize = iconSize;
         str::ReplaceWithCopy(&row->text, it.text);
         str::ReplaceWithCopy(&row->shortcut, ShortcutsForCmdTemp(it.cmdId, 1));
@@ -2120,10 +2210,6 @@ static void ToolbarHoverDropdownOnMouseMove(MainWindow* win, const Point* client
     if (w && FindHoverReg(tb, w->id)) {
         cmdId = w->id;
     }
-    // except annotation buttons disabled by a placement mode
-    if (w && IsPlacingAnnotation(win) && VecContains(tb->annotationItems, w)) {
-        cmdId = 0;
-    }
 
     if (tb->hoverCmdId != 0) {
         // one is open: keep it while the mouse is on its button or in it
@@ -2306,6 +2392,21 @@ static void UpdateZoomHoverDropdown(MainWindow* win) {
 }
 
 // The Save button's drop-down: the three ways to end an editing session.
+static void BuildLayoutHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    if (!win->ctrl) {
+        return;
+    }
+    DisplayMode mode = win->ctrl->GetDisplayMode();
+    Vec<ToolbarHoverMenuItem> items;
+    VecAppend(items, {Str(gIconLayoutSinglePage), Tr("Single Page"), CmdSinglePageView, true, IsSingle(mode)});
+    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Facing"), CmdFacingView, true, IsFacing(mode)});
+    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Book View"), CmdBookView, true, IsBookView(mode)});
+    VecAppend(items, {Str(gIconLayoutContinuous), Tr("Continuous scrolling"), CmdToggleContinuousView, true,
+                      IsContinuous(mode)});
+    ev->layout = NewToolbarHoverMenu(win, items);
+    ev->centerOnButton = true;
+}
+
 static void BuildSaveHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     WindowTab* tab = win ? win->CurrentTab() : nullptr;
     auto* ctx = NewBuildMenuCtx(tab, Point{0, 0});
@@ -2896,6 +2997,158 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, int thickn
     return vbox;
 }
 
+struct InkPenTile : VirtCtrl {
+    Str text;                 // owned
+    Pixmap* pixmap = nullptr; // cached
+    PlatformFont* font = nullptr;
+    bool isCurrent = false;
+    ~InkPenTile() override { str::Free(text); }
+    Size GetIdealSize() override {
+        return {std::max(DpiScale(70), PlatformFontMeasureText(font, text).dx + DpiScale(16)), DpiScale(76)};
+    }
+    void Paint(VirtPaintCtx& ctx) override {
+        Rect r = ctx.bounds;
+        if (isCurrent || HasFlag(vwfHovered)) {
+            ctx.gfx->FillRoundedRect(r, DpiScale(10), TbHoverColor(), isCurrent ? ThemeBrandColor() : TbHoverColor());
+        }
+        if (pixmap) {
+            ctx.gfx->DrawPixmap(pixmap,
+                                {r.x + (r.dx - pixmap->width) / 2, r.y + DpiScale(8), pixmap->width, pixmap->height});
+        }
+        Rect label{r.x, r.Bottom() - DpiScale(28), r.dx, DpiScale(24)};
+        ctx.gfx->DrawText(text, label, gfxTextCenter | gfxTextVCenter, font,
+                          isCurrent ? ThemeBrandColor() : TbTextColor());
+    }
+    void OnMouseEnter() { Invalidate(); }
+    void OnMouseLeave() { Invalidate(); }
+};
+
+static void OnHidePenSettings(MainWindow* win, VirtMouseEvent* ev) {
+    uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide pen settings");
+    ev->didHandle = true;
+}
+
+static ILayout* BuildInkPenTypes(MainWindow* win) {
+    ToolbarVirt* tb = win->toolbarVirt;
+    const char* icons[] = {
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M13 25l-6 1 1-6L23 5l4 4zM10 18l4 4M7 26l-2 2" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M16 3l9 16-9 10-9-10zM16 3v13" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="18" r="2" fill="currentColor"/></svg>)",
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M12 18L25 4l3 3-13 14M12 18c-8 0-2 8-8 10 10 1 14-5 11-7z" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M5 27l2-8L23 3l6 6-16 16zM7 19l6 6M10 22L26 6M5 27l4-1" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M11 21l-3-3L21 5l7 7-13 13-3-3-6 5H3zM17 9l7 7M4 29h22" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
+    };
+    Str labels[] = {Tr("Ballpoint"), Tr("Fountain"), Tr("Brush"), Tr("Pencil"), Tr("Highlighter")};
+    int cmds[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
+    InkPenStyle styles[] = {InkPenStyle::Ballpoint, InkPenStyle::Fountain, InkPenStyle::Brush, InkPenStyle::Pencil,
+                            InkPenStyle::Highlighter};
+    auto* row = new HBox();
+    row->alignCross = CrossAxisAlign::Stretch;
+    for (int i = 0; i < dimof(cmds); i++) {
+        auto* tile = new InkPenTile();
+        tile->id = cmds[i];
+        tile->font = tb->platformFont;
+        tile->isCurrent = win->inkEraseMode == 0 && win->inkPenStyle == styles[i];
+        str::ReplaceWithCopy(&tile->text, labels[i]);
+        tile->SetTooltip(labels[i]);
+        tile->pixmap = GetCachedPixmapForSvg(Str(icons[i]), DpiScale(32), DpiScale(32),
+                                             tile->isCurrent ? ThemeBrandColor() : TbTextColor(), TbBgColor());
+        tile->onClick = MkFunc1(OnHoverRowClicked, win);
+        row->AddChild(tile);
+        RecordHoverItem(tb, tile, tile->text, {{}, labels[i], cmds[i], true, tile->isCurrent});
+    }
+    return new Padding(row, Insets{DpiScale(8), DpiScale(8), DpiScale(8), DpiScale(8)});
+}
+
+static void OnLaserColorClicked(MainWindow* win, VirtMouseEvent* ev) {
+    auto* sw = ev ? (ToolbarColorSwatch*)ev->target : nullptr;
+    if (sw) {
+        SetLaserPointerColor(win, sw->col);
+        uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide laser settings");
+        ev->didHandle = true;
+    }
+}
+
+static void OnLaserCustomColorPicked(MainWindow* win, ChangeColorsArgs* args) {
+    if (IsMainWindowValidAndNotClosing(win) && args->didSelect && args->color != kColorUnset) {
+        SetLaserPointerColor(win, args->color);
+    }
+}
+
+static void OnLaserCustomColor(MainWindow* win, VirtMouseEvent* ev) {
+    uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide laser settings");
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Laser pointer color");
+    args->color = win->laserPointerColor;
+    args->onClose = MkFunc1(OnLaserCustomColorPicked, win);
+    ShowChangeColorsDialog(args);
+    ev->didHandle = true;
+}
+
+static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    ToolbarVirt* tb = win->toolbarVirt;
+    auto* panel = new VBox();
+    panel->alignCross = CrossAxisAlign::Stretch;
+    auto* header = new HBox();
+    header->alignMain = MainAxisAlign::SpaceBetween;
+    header->alignCross = CrossAxisAlign::CrossCenter;
+    header->AddChild(NewVirtText({.s = Tr("Laser pointer"), .font = tb->platformFont, .textColor = TbTextColor()}));
+    auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
+    close->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
+    close->cornerRadius = DpiScale(6);
+    close->onClick = MkFunc1(OnHidePenSettings, win);
+    header->AddChild(close);
+    panel->AddChild(header);
+    Vec<ToolbarHoverMenuItem> modes;
+    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Solid line"), CmdLaserSolid, true,
+                      win->laserPointerMode == LaserPointerMode::Solid});
+    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Hollow line"), CmdLaserHollow, true,
+                      win->laserPointerMode == LaserPointerMode::Hollow});
+    VecAppend(modes, {Str(kEnhancedLaserIcon), Tr("Single dot"), CmdLaserDot, true,
+                      win->laserPointerMode == LaserPointerMode::Dot});
+    panel->AddChild(NewToolbarHoverMenu(win, modes));
+    panel->AddChild(NewVirtText({.s = Tr("Color"), .font = tb->platformFont, .textColor = TbTextColor()}));
+    auto* colors = new HBox();
+    colors->alignCross = CrossAxisAlign::CrossCenter;
+    Color palette[] = {MkRgb(244, 67, 54),  MkRgb(255, 193, 7),  MkRgb(76, 175, 80),
+                       MkRgb(33, 150, 243), MkRgb(156, 39, 176), MkRgb(255, 255, 255)};
+    bool custom = true;
+    for (Color col : palette) {
+        auto* sw = new ToolbarColorSwatch();
+        sw->id = CmdToggleLaserPointer;
+        sw->col = col;
+        sw->isCurrent = SameColorAndAlpha(col, win->laserPointerColor);
+        custom = custom && !sw->isCurrent;
+        str::ReplaceWithCopy(&sw->text, SerializeColorTemp(col));
+        sw->SetTooltip(sw->text);
+        sw->onClick = MkFunc1(OnLaserColorClicked, win);
+        colors->AddChild(sw);
+        RecordHoverItem(tb, sw, sw->text, {{}, sw->text, CmdToggleLaserPointer, true, sw->isCurrent});
+    }
+    if (custom) {
+        auto* sw = new ToolbarColorSwatch();
+        sw->id = CmdToggleLaserPointer;
+        sw->col = win->laserPointerColor;
+        sw->isCurrent = true;
+        str::ReplaceWithCopy(&sw->text, SerializeColorTemp(sw->col));
+        sw->SetTooltip(sw->text);
+        sw->onClick = MkFunc1(OnLaserColorClicked, win);
+        colors->AddChild(sw);
+        RecordHoverItem(tb, sw, sw->text, {{}, sw->text, CmdToggleLaserPointer, true, true});
+    }
+    panel->AddChild(colors);
+    auto* customButton = new VirtButton(Tr("Custom color..."), tb->platformFont);
+    customButton->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
+    customButton->cornerRadius = DpiScale(6);
+    customButton->onClick = MkFunc1(OnLaserCustomColor, win);
+    panel->AddChild(customButton);
+    panel->AddChild(NewVirtText({.s = Tr("Temporary marks fade away. Press Esc to stop."),
+                                 .font = tb->platformFont,
+                                 .textColor = TbDisabledColor()}));
+    ev->layout = new Padding(panel, Insets{DpiScale(10), DpiScale(10), DpiScale(10), DpiScale(10)});
+    ev->centerOnButton = true;
+}
+
 static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     ParsedColor* setting = AnnotPresetColorSetting(ev->cmdId);
@@ -2918,6 +3171,29 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
                                       MkFunc1(OnAnnotColorsEditClicked, win), extra, title);
     if (slider) {
         RecordHoverItem(tb, slider, slider->text, {{}, slider->text, ev->cmdId, true, false});
+    }
+    if (ev->cmdId == CmdCreateAnnotInk) {
+        auto* panel = new VBox();
+        panel->alignCross = CrossAxisAlign::Stretch;
+        auto* header = new HBox();
+        header->alignMain = MainAxisAlign::SpaceBetween;
+        header->alignCross = CrossAxisAlign::CrossCenter;
+        header->AddChild(NewVirtText({.s = Tr("Pen types"), .font = tb->platformFont, .textColor = TbTextColor()}));
+        auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
+        close->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
+        close->cornerRadius = DpiScale(6);
+        close->onClick = MkFunc1(OnHidePenSettings, win);
+        header->AddChild(close);
+        panel->AddChild(new Padding(header, Insets{DpiScale(8), DpiScale(8), 0, DpiScale(8)}));
+        panel->AddChild(BuildInkPenTypes(win));
+        panel->AddChild(ev->layout);
+        Vec<ToolbarHoverMenuItem> tools;
+        VecAppend(tools, {Str(kEnhancedEraserIcon), Tr("Stroke eraser"), CmdInkEraser, true, win->inkEraseMode == 1});
+        VecAppend(tools, {Str(kEnhancedEraserIcon), Tr("Erase highlights only"), CmdHighlightEraser, true,
+                          win->inkEraseMode == 2});
+        VecAppend(tools, {{}, Tr("Ignore touch while writing"), CmdTogglePenOnly, true, win->penOnly});
+        panel->AddChild(NewToolbarHoverMenu(win, tools));
+        ev->layout = panel;
     }
     ev->centerOnButton = true;
 }
@@ -3231,13 +3507,38 @@ static void PaintToolbarSeparator(VirtCustom*, VirtPaintCtx* ctx) {
 
 static VirtCtrl* MakeToolbarSeparator(int rowDy) {
     auto* sep = new VirtCustom();
-    sep->idealSize = {DpiScale(8), rowDy};
+    sep->idealSize = {DpiScale(8), rowDy - DpiScale(12)};
     sep->onPaint = MkFunc1(PaintToolbarSeparator, sep);
     sep->SetFlag(vwfNoHitTest, true);
     return sep;
 }
 
 // (re)build the tree of virtual controls the toolbar is made of, one per button
+static bool IsAppearanceCmd(int cmdId) {
+    return cmdId == CmdOptions || cmdId == CmdThemeLight || cmdId == CmdThemeDark || cmdId == CmdChangeTheme ||
+           cmdId == CmdInvertColors;
+}
+
+static void PaintToolbarBrand(VirtCustom*, VirtPaintCtx* ctx) {
+    Rect r = ctx->bounds;
+    int sz = DpiScale(28);
+    HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, sz, sz, 0);
+    Pixmap* badge = icon ? PixmapFromHICON(icon) : nullptr;
+    if (badge) {
+        ctx->gfx->DrawPixmap(badge, {r.x, r.y + (r.dy - sz) / 2, sz, sz});
+    }
+    delete badge;
+    if (icon) {
+        DestroyIcon(icon);
+    }
+    Rect title{r.x + sz + DpiScale(6), r.y + DpiScale(2), r.dx - sz - DpiScale(6), DpiScale(17)};
+    ctx->gfx->DrawText(StrL("SumatraPDF Enhanced"), title, gfxTextEllipsis,
+                       GetUserGuiFont(StrL("Segoe UI Semibold"), DpiScale(13)), TbTextColor());
+    title.y += DpiScale(17);
+    title.dy = DpiScale(13);
+    ctx->gfx->DrawText(Tr("Focused reading"), title, gfxTextEllipsis, GetAppFont(), TbDisabledColor());
+}
+
 static void BuildToolbarLayout(MainWindow* win) {
     PopulateToolbarLayout();
     PopulateCustomToolbarButtons();
@@ -3259,10 +3560,21 @@ static void BuildToolbarLayout(MainWindow* win) {
     Color fg = TbTextColor();
     Color dis = TbDisabledColor();
 
-    auto* box = new HBox();
+    auto* box = new Wrap();
+    box->colGap = DpiScale(6);
+    box->rowGap = DpiScale(6);
     box->alignCross = CrossAxisAlign::CrossCenter;
     box->rtl = IsUIRtl();
 
+    auto newGroup = [&]() {
+        auto* group = new HBox();
+        group->alignCross = CrossAxisAlign::CrossCenter;
+        group->rtl = box->rtl;
+        return group;
+    };
+    HBox* group = newGroup();
+    bool prettyLayout = str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout);
+    HBox* appearance = newGroup();
     int n = TotalButtonsCount();
     for (int i = 0; i < n; i++) {
         const ToolbarButtonInfo& bi = GetToolbarButtonInfoByIdx(i);
@@ -3278,13 +3590,13 @@ static void BuildToolbarLayout(MainWindow* win) {
             label->padding = {0, pageGap, 0, DpiScale(4)};
             label->id = PageInfoId;
             tb->pageLabel = label;
-            box->AddChild(label);
+            group->AddChild(label);
 
             // chapter box: [chapterEdit] / N, hidden unless HasChapters()
             Edit* chapterEdit = ToolbarCreateChapterEdit(win, tb->platformFont, tb->iconSize);
             chapterEdit->SetVisibility(Visibility::Collapse);
             win->chapterEdit = chapterEdit;
-            box->AddChild(chapterEdit);
+            group->AddChild(chapterEdit);
 
             auto* chapterTotal = new VirtText(StrL(" "), tb->platformFont);
             chapterTotal->isRtl = box->rtl;
@@ -3293,7 +3605,7 @@ static void BuildToolbarLayout(MainWindow* win) {
             chapterTotal->id = PageInfoId;
             chapterTotal->SetVisibility(Visibility::Collapse);
             tb->chapterTotal = chapterTotal;
-            box->AddChild(chapterTotal);
+            group->AddChild(chapterTotal);
 
             // second "Page:" label, shown before pageEdit only for HasChapters() docs
             auto* label2 = new VirtText(Tr("Page:"), tb->platformFont);
@@ -3303,11 +3615,11 @@ static void BuildToolbarLayout(MainWindow* win) {
             label2->id = PageInfoId;
             label2->SetVisibility(Visibility::Collapse);
             tb->pageLabel2 = label2;
-            box->AddChild(label2);
+            group->AddChild(label2);
 
             Edit* pageEdit = ToolbarCreatePageEdit(win, tb->platformFont, tb->iconSize);
             win->pageEdit = pageEdit;
-            box->AddChild(pageEdit);
+            group->AddChild(pageEdit);
 
             auto* total = new VirtText(StrL(" "), tb->platformFont);
             total->isRtl = box->rtl;
@@ -3315,7 +3627,7 @@ static void BuildToolbarLayout(MainWindow* win) {
             total->padding = {0, DpiScale(4), 0, pageGap};
             total->id = PageInfoId;
             tb->pageTotal = total;
-            box->AddChild(total);
+            group->AddChild(total);
             VecAppend(tb->items, label);
             continue;
         }
@@ -3330,13 +3642,18 @@ static void BuildToolbarLayout(MainWindow* win) {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
             ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud);
+            if (bi.cmdId == CmdOpenFile) {
+                ib->label = Tr("Open");
+                ib->labelFont = tb->platformFont;
+            }
             Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.icon);
-            ib->pixmap = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, fg, TbBgColor());
+            ib->pixmap = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize,
+                                               bi.cmdId == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
             ib->pixmapDisabled = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, dis, TbBgColor());
             w = ib;
         }
-        ApplyToolbarItemColors(w);
         w->id = bi.cmdId;
+        ApplyToolbarItemColors(w);
         if (bi.toolTip) {
             bool translate = !noTranslate && !bi.isText;
             w->SetTooltip(ToolbarTipTemp(bi.cmdId, bi.toolTip, translate));
@@ -3345,11 +3662,21 @@ static void BuildToolbarLayout(MainWindow* win) {
             w->onClick = MkFunc1(OnToolbarButtonClicked, win);
         }
         VecAppend(tb->items, w);
-        box->AddChild(w);
+        if (prettyLayout && IsAppearanceCmd(bi.cmdId)) {
+            appearance->AddChild(w);
+        } else {
+            group->AddChild(w);
+        }
+        if (bi.cmdId == 0) {
+            box->AddChild(group);
+            group = newGroup();
+        }
     }
+    box->AddChild(group);
 
-    auto* annotationBox = new HBox();
-    annotationBox->alignMain = MainAxisAlign::MainCenter;
+    auto* annotationBox = new Wrap();
+    annotationBox->colGap = DpiScale(4);
+    annotationBox->rowGap = DpiScale(4);
     annotationBox->alignCross = CrossAxisAlign::CrossCenter;
     annotationBox->rtl = box->rtl;
     for (const ToolbarButtonInfo& bi : gPdfAnnotationButtons) {
@@ -3363,8 +3690,8 @@ static void BuildToolbarLayout(MainWindow* win) {
             ib->pixmapDisabled = GetCachedPixmapForSvg(Str(bi.icon), tb->iconSize, tb->iconSize, dis, TbBgColor());
             w = ib;
         }
-        ApplyToolbarItemColors(w);
         w->id = bi.cmdId;
+        ApplyToolbarItemColors(w);
         if (bi.toolTip) {
             w->SetTooltip(ToolbarTipTemp(bi.cmdId, bi.toolTip, true));
         }
@@ -3378,8 +3705,18 @@ static void BuildToolbarLayout(MainWindow* win) {
     auto* mainRow = new HBox();
     mainRow->alignCross = CrossAxisAlign::CrossCenter;
     mainRow->gap = DpiScale(kButtonSpacingX);
+    if (prettyLayout) {
+        auto* brand = new VirtCustom();
+        brand->idealSize = {DpiScale(176), DpiScale(36)};
+        brand->SetFlag(vwfNoHitTest, true);
+        brand->onPaint = MkFunc1(PaintToolbarBrand, brand);
+        mainRow->AddChild(brand);
+    }
     mainRow->AddChild(box, 1);
+    mainRow->AddChild(appearance);
 
+    SetToolbarHoverDropdown(win, CmdToggleLaserPointer, MkFunc1(BuildLaserHoverMenu, win));
+    SetToolbarHoverDropdown(win, CmdSinglePageView, MkFunc1(BuildLayoutHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSaveAnnotations, MkFunc1(BuildSaveHoverMenu, win));
     // one strip for the two of them, so it doesn't jump when the mouse crosses
     // from one to the other
@@ -3392,15 +3729,35 @@ static void BuildToolbarLayout(MainWindow* win) {
 
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
-    root->AddChild(new Padding(mainRow, Insets{0, DpiScale(4), 0, DpiScale(4)}));
-    tb->annotationRow = new Padding(annotationBox, Insets{0, DpiScale(4), 0, DpiScale(4)});
+    root->AddChild(new Padding(mainRow, Insets{DpiScale(6), DpiScale(8), DpiScale(6), DpiScale(8)}));
+    tb->annotationRow = new Padding(annotationBox, Insets{DpiScale(6), DpiScale(8), DpiScale(6), DpiScale(8)});
     tb->annotationRow->SetVisibility(Visibility::Collapse);
     root->AddChild(tb->annotationRow);
     tb->host->SetLayout(root);
 }
 
-static void PaintToolbarBackground(MainWindow*, VirtHostPaintEvent* ev) {
+static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
     ev->gfx->FillRect(ev->clientRect, TbBgColor());
+    ToolbarVirt* tb = win->toolbarVirt;
+    Rect group;
+    auto paintGroup = [&]() {
+        if (!group.IsEmpty()) {
+            ev->gfx->FillRoundedRect(group, DpiScale(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
+        }
+        group = {};
+    };
+    for (VirtCtrl* w : tb->items) {
+        if (w->visibility != Visibility::Visible) {
+            continue;
+        }
+        if (w->id == 0) {
+            paintGroup();
+            continue;
+        }
+        Rect r = w->lastBounds;
+        group = group.IsEmpty() ? r : group.Union(r);
+    }
+    paintGroup();
 }
 
 // the default theme separates the toolbar from the canvas with a hairline.
@@ -3415,6 +3772,18 @@ static void PaintToolbarEdge(MainWindow*, VirtHostPaintEvent* ev) {
     Rect rc = ev->clientRect;
     int y = ToolbarAtBottom() ? rc.y : (rc.Bottom() - 1);
     ev->gfx->FillRect({rc.x, y, rc.dx, 1}, canvasBg);
+}
+
+static void OnToolbarSize(MainWindow* win, Size size) {
+    VirtHost* host = ToolbarHost(win);
+    if (!host || !host->layout || size.dx <= 0) {
+        return;
+    }
+    int height = host->layout->MinIntrinsicHeight(size.dx);
+    if (height > 0 && height != size.dy) {
+        ToolbarSetHeight(win, height);
+        ScheduleUiUpdate(win, kUiForceRelayout);
+    }
 }
 
 static const WStr kToolbarHostClass = WStrL(L"SUMATRA_VIRT_TOOLBAR");
@@ -3448,6 +3817,7 @@ void CreateToolbar(MainWindow* win) {
     host->onPaintBackground = MkFunc1(PaintToolbarBackground, win);
     host->onPaint = MkFunc1(PaintToolbarEdge, win);
     host->onTimer = MkFunc1(OnToolbarTimer, win);
+    host->onSizeChanged = MkFunc1(OnToolbarSize, win);
     host->onMouseMove = MkFunc1(OnToolbarMouseMove, win);
     host->onMouseLeave = MkFunc0(OnToolbarMouseLeave, win);
     ToolbarSetNativeHooks(win, host);

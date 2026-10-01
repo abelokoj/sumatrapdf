@@ -671,6 +671,7 @@ struct VirtLink : VirtText {
 };
 
 struct VirtButton : VirtText {
+    int cornerRadius = 0;
     // colors: kColBtn*, defaulting to gColsBtnDefault when isDefault
     Insets textPadding{.top = 4, .right = 8, .bottom = 4, .left = 8};
 
@@ -697,6 +698,10 @@ struct VirtButton : VirtText {
 VirtButton* AsVirtButton(ILayout*);
 
 struct VirtIconButton : VirtCtrl {
+    int cornerRadius = 0;
+    Color backgroundColor = kColorTransparent;
+    Str label;
+    PlatformFont* labelFont = nullptr;
     // not owned; in SumatraPDF it comes from GetCachedPixmapForSvg()
     Pixmap* pixmap = nullptr;
     // drawn when !IsEnabled(); if null, pixmap is used

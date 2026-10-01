@@ -37,6 +37,7 @@ VirtButton* NewThemedButton(HWND hwndForDpi, Str text, PlatformFont* font, bool 
     DpiSetFromHwnd(hwndForDpi);
     auto* b = new VirtButton(text, font);
     b->SetIsDefault(isDefault);
+    b->cornerRadius = DpiScale(8);
     b->textPadding = DpiScaledInsets(5, 12);
     return b;
 }
@@ -53,443 +54,99 @@ TrN("Charcoal")
 // Empty optional fields still fall back to AccentColor / blend of the four base colors.
 static Str themesTxt = StrL(R"(Themes [
     [
-        Name = Light
-        TextColor = #000000
-        BackgroundColor = #f2f2f2
+        Name = Sumatra Light
+        TextColor = #1f2937
+        BackgroundColor = #f4f6f8
         ControlBackgroundColor = #ffffff
-        ActiveTabBackgroundColor = #ffffff
-        InactiveTabBackgroundColor = #e6e6e6
-        LinkColor = #0020a0
-        DisabledTextColor = #808080
-        DarkerTextColor = #404040
-        HotBackgroundColor = #e8e8e8
-        EdgeColor = #c0c0c0
-        HotEdgeColor = #808080
-        DisabledEdgeColor = #d0d0d0
-        ErrorBackgroundColor = #ffe0e0
-        NotificationBackgroundColor = #fafafa
-        NotificationHighlightColor = #ffee70
-        NotificationHighlightTextColor = #8d0801
-        ColorizeControls = false
+        LinkColor = #eab308
+        ColorizeControls = true
     ]
     [
-        Name = Dark
-        TextColor = #F9FAFB
+        Name = Sumatra Dark
+        TextColor = #f8fafc
         BackgroundColor = #000000
-        ControlBackgroundColor = #000000
-        ActiveTabBackgroundColor = #000000
-        InactiveTabBackgroundColor = #191919
-        LinkColor = #6B7280
-        DisabledTextColor = #6B7280
-        DarkerTextColor = #9CA3AF
-        HotBackgroundColor = #1F2937
-        EdgeColor = #374151
-        HotEdgeColor = #6B7280
-        DisabledEdgeColor = #1F2937
-        ErrorBackgroundColor = #7F1D1D
-        NotificationBackgroundColor = #111827
-        NotificationHighlightColor = #422006
-        NotificationHighlightTextColor = #fde68a
+        ControlBackgroundColor = #222222
+        LinkColor = #eab308
         ColorizeControls = true
     ]
     [
-        Name = Light Warm
-        TextColor = #333333
-        BackgroundColor = #ebe6da
-        ControlBackgroundColor = #f5f1e8
-        ActiveTabBackgroundColor = #f5f1e8
-        InactiveTabBackgroundColor = #e6dcc5
-        LinkColor = #0020a0
-        DisabledTextColor = #8a8578
-        DarkerTextColor = #5c574c
-        HotBackgroundColor = #e8e2d4
-        EdgeColor = #c9c2b0
-        HotEdgeColor = #8a8578
-        DisabledEdgeColor = #ddd6c6
-        ErrorBackgroundColor = #f5d6d0
-        NotificationBackgroundColor = #f8f4ea
-        NotificationHighlightColor = #e8d48b
-        NotificationHighlightTextColor = #5c3a0a
+        Name = Modern Slate Light
+        TextColor = #243041
+        BackgroundColor = #f4f6f8
+        ControlBackgroundColor = #e0f0ee
+        LinkColor = #0f766e
         ColorizeControls = true
     ]
     [
-        Name = Dark from 3.5
-        TextColor = #bac9d0
-        BackgroundColor = #263238
-        ControlBackgroundColor = #263238
-        ActiveTabBackgroundColor = #263238
-        InactiveTabBackgroundColor = #4d3a56
-        LinkColor = #8aa3b0
-        DisabledTextColor = #6b7c85
-        DarkerTextColor = #8aa3b0
-        HotBackgroundColor = #324047
-        EdgeColor = #37474f
-        HotEdgeColor = #546e7a
-        DisabledEdgeColor = #1e272c
-        ErrorBackgroundColor = #5c2b2b
-        NotificationBackgroundColor = #2e3c43
-        NotificationHighlightColor = #4a3a12
-        NotificationHighlightTextColor = #ffdf9e
+        Name = Modern Slate Dark
+        TextColor = #dbe4ee
+        BackgroundColor = #0f172a
+        ControlBackgroundColor = #05557a
+        LinkColor = #38bdf8
         ColorizeControls = true
     ]
     [
-        Name = Charcoal
-        TextColor = #ffffff
-        BackgroundColor = #2d2d30
-        ControlBackgroundColor = #2d2d30
-        ActiveTabBackgroundColor = #2d2d30
-        InactiveTabBackgroundColor = #45454a
-        LinkColor = #9999a0
-        DisabledTextColor = #808088
-        DarkerTextColor = #b0b0b8
-        HotBackgroundColor = #3e3e42
-        EdgeColor = #505058
-        HotEdgeColor = #808088
-        DisabledEdgeColor = #252528
-        ErrorBackgroundColor = #5a1d1d
-        NotificationBackgroundColor = #38383c
-        NotificationHighlightColor = #4a3c16
-        NotificationHighlightTextColor = #ffe2a0
+        Name = Modern Blue Light
+        TextColor = #1e293b
+        BackgroundColor = #f8fafc
+        ControlBackgroundColor = #daebff
+        LinkColor = #0f62fe
         ColorizeControls = true
     ]
     [
-        Name = Solarized Light
-        TextColor = #212323
-        BackgroundColor = #fdf6e3
-        ControlBackgroundColor = #eee8d5
-        ActiveTabBackgroundColor = #eee8d5
-        InactiveTabBackgroundColor = #e0d5b1
-        LinkColor = #268bd2
-        DisabledTextColor = #93a1a1
-        DarkerTextColor = #586e75
-        HotBackgroundColor = #e6dfc8
-        EdgeColor = #93a1a1
-        HotEdgeColor = #657b83
-        DisabledEdgeColor = #eee8d5
-        ErrorBackgroundColor = #f8d0c8
-        NotificationBackgroundColor = #f5efdc
-        NotificationHighlightColor = #f3e2b3
-        NotificationHighlightTextColor = #5c4405
+        Name = Modern Blue Dark
+        TextColor = #e2e8f0
+        BackgroundColor = #0b1120
+        ControlBackgroundColor = #1c3d74
+        LinkColor = #60a5fa
         ColorizeControls = true
     ]
     [
-        Name = Solarized Dark
-        TextColor = #839496
-        BackgroundColor = #002b36
-        ControlBackgroundColor = #073642
-        ActiveTabBackgroundColor = #073642
-        InactiveTabBackgroundColor = #5b0c6f
-        LinkColor = #268bd2
-        DisabledTextColor = #586e75
-        DarkerTextColor = #657b83
-        HotBackgroundColor = #0a4a58
-        EdgeColor = #586e75
-        HotEdgeColor = #839496
-        DisabledEdgeColor = #002b36
-        ErrorBackgroundColor = #5c1a1a
-        NotificationBackgroundColor = #003543
-        NotificationHighlightColor = #3d3208
-        NotificationHighlightTextColor = #eec97a
+        Name = Modern Green Light
+        TextColor = #1f2937
+        BackgroundColor = #f4f6f8
+        ControlBackgroundColor = #d1fae5
+        LinkColor = #16a34a
         ColorizeControls = true
     ]
     [
-        Name = Dracula
-        TextColor = #f8f8f2
-        BackgroundColor = #282a36
-        ControlBackgroundColor = #44475a
-        ActiveTabBackgroundColor = #44475a
-        InactiveTabBackgroundColor = #5d5a76
-        LinkColor = #8be9fd
-        DisabledTextColor = #6272a4
-        DarkerTextColor = #6272a4
-        HotBackgroundColor = #565a73
-        EdgeColor = #6272a4
-        HotEdgeColor = #bd93f9
-        DisabledEdgeColor = #343746
-        ErrorBackgroundColor = #ff5555
-        NotificationBackgroundColor = #343746
-        NotificationHighlightColor = #4a3c14
-        NotificationHighlightTextColor = #f1fa8c
+        Name = Modern Green Dark
+        TextColor = #e5f3ea
+        BackgroundColor = #10251b
+        ControlBackgroundColor = #0f5529
+        LinkColor = #4ade80
         ColorizeControls = true
     ]
     [
-        Name = Nebula
-        TextColor = #CBE3E7
-        BackgroundColor = #100E23
-        ControlBackgroundColor = #1E1C31
-        ActiveTabBackgroundColor = #1E1C31
-        InactiveTabBackgroundColor = #312e51
-        LinkColor = #91DDFF
-        DisabledTextColor = #6b6b8a
-        DarkerTextColor = #a0a0c0
-        HotBackgroundColor = #2a2745
-        EdgeColor = #3e3a5c
-        HotEdgeColor = #91DDFF
-        DisabledEdgeColor = #15132a
-        ErrorBackgroundColor = #5c1a2e
-        NotificationBackgroundColor = #1a1830
-        NotificationHighlightColor = #3d2f12
-        NotificationHighlightTextColor = #f0d9a0
+        Name = Modern Purple Light
+        TextColor = #29223a
+        BackgroundColor = #f4f6f8
+        ControlBackgroundColor = #f3e8ff
+        LinkColor = #7c3aed
         ColorizeControls = true
     ]
     [
-        Name = Greeny
-        TextColor = #FDD085
-        BackgroundColor = #4F6232
-        ControlBackgroundColor = #1E3304
-        ActiveTabBackgroundColor = #1E3304
-        InactiveTabBackgroundColor = #086139
-        LinkColor = #A2E53B
-        DisabledTextColor = #8a9a60
-        DarkerTextColor = #c0c878
-        HotBackgroundColor = #2a4210
-        EdgeColor = #6a7a40
-        HotEdgeColor = #A2E53B
-        DisabledEdgeColor = #152808
-        ErrorBackgroundColor = #5c2810
-        NotificationBackgroundColor = #3a4a28
-        NotificationHighlightColor = #5c4a18
-        NotificationHighlightTextColor = #fde7b0
+        Name = Modern Purple Dark
+        TextColor = #ede9fe
+        BackgroundColor = #1c122b
+        ControlBackgroundColor = #4e4558
+        LinkColor = #c084fc
         ColorizeControls = true
     ]
     [
-        Name = Choco
-        TextColor = #D7AD62
-        BackgroundColor = #2A1104
-        ControlBackgroundColor = #172736
-        ActiveTabBackgroundColor = #172736
-        InactiveTabBackgroundColor = #402659
-        LinkColor = #E8CD12
-        DisabledTextColor = #8a7040
-        DarkerTextColor = #b09050
-        HotBackgroundColor = #243848
-        EdgeColor = #3a4a58
-        HotEdgeColor = #E8CD12
-        DisabledEdgeColor = #0e1820
-        ErrorBackgroundColor = #5c2010
-        NotificationBackgroundColor = #1e2e3c
-        NotificationHighlightColor = #4a3208
-        NotificationHighlightTextColor = #f5d89b
+        Name = Modern Amber Light
+        TextColor = #31251a
+        BackgroundColor = #f4f6f8
+        ControlBackgroundColor = #fff7ed
+        LinkColor = #d97706
         ColorizeControls = true
     ]
     [
-        Name = Purpy
-        TextColor = #E2C3C3
-        BackgroundColor = #20222A
-        ControlBackgroundColor = #1E0126
-        ActiveTabBackgroundColor = #1E0126
-        InactiveTabBackgroundColor = #440257
-        LinkColor = #EFF0B8
-        DisabledTextColor = #8a7088
-        DarkerTextColor = #b0a0b0
-        HotBackgroundColor = #2e1838
-        EdgeColor = #4a3060
-        HotEdgeColor = #EFF0B8
-        DisabledEdgeColor = #140018
-        ErrorBackgroundColor = #5c1a2a
-        NotificationBackgroundColor = #28203a
-        NotificationHighlightColor = #46360f
-        NotificationHighlightTextColor = #f0d9a8
-        ColorizeControls = true
-    ]
-    [
-        Name = One Dark
-        TextColor = #abb2bf
-        BackgroundColor = #282c34
-        ControlBackgroundColor = #21252b
-        ActiveTabBackgroundColor = #21252b
-        InactiveTabBackgroundColor = #3d3747
-        LinkColor = #61afef
-        DisabledTextColor = #5c6370
-        DarkerTextColor = #7f848e
-        HotBackgroundColor = #2c313c
-        EdgeColor = #181a1f
-        HotEdgeColor = #528bff
-        DisabledEdgeColor = #1b1d23
-        ErrorBackgroundColor = #be5046
-        NotificationBackgroundColor = #2c313a
-        NotificationHighlightColor = #40351a
-        NotificationHighlightTextColor = #e5c07b
-        ColorizeControls = true
-    ]
-    [
-        Name = Monokai
-        TextColor = #f8f8f2
-        BackgroundColor = #272822
-        ControlBackgroundColor = #3e3d32
-        ActiveTabBackgroundColor = #3e3d32
-        InactiveTabBackgroundColor = #5a5848
-        LinkColor = #66d9ef
-        DisabledTextColor = #75715e
-        DarkerTextColor = #a6a68a
-        HotBackgroundColor = #49483e
-        EdgeColor = #75715e
-        HotEdgeColor = #a6e22e
-        DisabledEdgeColor = #1e1f1c
-        ErrorBackgroundColor = #f92672
-        NotificationBackgroundColor = #34352f
-        NotificationHighlightColor = #46411c
-        NotificationHighlightTextColor = #e6db74
-        ColorizeControls = true
-    ]
-    [
-        Name = Nord
-        TextColor = #d8dee9
-        BackgroundColor = #2e3440
-        ControlBackgroundColor = #3b4252
-        ActiveTabBackgroundColor = #3b4252
-        InactiveTabBackgroundColor = #59506f
-        LinkColor = #88c0d0
-        DisabledTextColor = #4c566a
-        DarkerTextColor = #81a1c1
-        HotBackgroundColor = #434c5e
-        EdgeColor = #4c566a
-        HotEdgeColor = #88c0d0
-        DisabledEdgeColor = #2e3440
-        ErrorBackgroundColor = #bf616a
-        NotificationBackgroundColor = #3b4252
-        NotificationHighlightColor = #4a3f26
-        NotificationHighlightTextColor = #ebcb8b
-        ColorizeControls = true
-    ]
-    [
-        Name = GitHub Dark
-        TextColor = #e6edf3
-        BackgroundColor = #0d1117
-        ControlBackgroundColor = #161b22
-        ActiveTabBackgroundColor = #161b22
-        InactiveTabBackgroundColor = #332a40
-        LinkColor = #2f81f7
-        DisabledTextColor = #6e7681
-        DarkerTextColor = #8b949e
-        HotBackgroundColor = #21262d
-        EdgeColor = #30363d
-        HotEdgeColor = #58a6ff
-        DisabledEdgeColor = #21262d
-        ErrorBackgroundColor = #da3633
-        NotificationBackgroundColor = #161b22
-        NotificationHighlightColor = #3d2a04
-        NotificationHighlightTextColor = #e3b341
-        ColorizeControls = true
-    ]
-    [
-        Name = Catppuccin Mocha
-        TextColor = #cdd6f4
-        BackgroundColor = #1e1e2e
-        ControlBackgroundColor = #181825
-        ActiveTabBackgroundColor = #181825
-        InactiveTabBackgroundColor = #2c2c43
-        LinkColor = #89b4fa
-        DisabledTextColor = #6c7086
-        DarkerTextColor = #a6adc8
-        HotBackgroundColor = #313244
-        EdgeColor = #45475a
-        HotEdgeColor = #cba6f7
-        DisabledEdgeColor = #11111b
-        ErrorBackgroundColor = #f38ba8
-        NotificationBackgroundColor = #181825
-        NotificationHighlightColor = #45391f
-        NotificationHighlightTextColor = #f9e2af
-        ColorizeControls = true
-    ]
-    [
-        Name = Tokyo Night
-        TextColor = #c0caf5
-        BackgroundColor = #1a1b26
-        ControlBackgroundColor = #16161e
-        ActiveTabBackgroundColor = #16161e
-        InactiveTabBackgroundColor = #2b2b3b
-        LinkColor = #7aa2f7
-        DisabledTextColor = #565f89
-        DarkerTextColor = #a9b1d6
-        HotBackgroundColor = #292e42
-        EdgeColor = #3b4261
-        HotEdgeColor = #7dcfff
-        DisabledEdgeColor = #0f0f14
-        ErrorBackgroundColor = #f7768e
-        NotificationBackgroundColor = #16161e
-        NotificationHighlightColor = #3d3117
-        NotificationHighlightTextColor = #e0af68
-        ColorizeControls = true
-    ]
-    [
-        Name = Gruvbox
-        TextColor = #ebdbb2
-        BackgroundColor = #282828
-        ControlBackgroundColor = #3c3836
-        ActiveTabBackgroundColor = #3c3836
-        InactiveTabBackgroundColor = #56514e
-        LinkColor = #83a598
-        DisabledTextColor = #928374
-        DarkerTextColor = #a89984
-        HotBackgroundColor = #504945
-        EdgeColor = #665c54
-        HotEdgeColor = #fabd2f
-        DisabledEdgeColor = #1d2021
-        ErrorBackgroundColor = #fb4934
-        NotificationBackgroundColor = #3c3836
-        NotificationHighlightColor = #4a3a1a
-        NotificationHighlightTextColor = #fabd2f
-        ColorizeControls = true
-    ]
-    [
-        Name = Night Owl
-        TextColor = #d6deeb
-        BackgroundColor = #011627
-        ControlBackgroundColor = #0b2942
-        ActiveTabBackgroundColor = #0b2942
-        InactiveTabBackgroundColor = #44126d
-        LinkColor = #82aaff
-        DisabledTextColor = #5f7e97
-        DarkerTextColor = #7fdbca
-        HotBackgroundColor = #1d3b53
-        EdgeColor = #122d42
-        HotEdgeColor = #c792ea
-        DisabledEdgeColor = #01111d
-        ErrorBackgroundColor = #ef5350
-        NotificationBackgroundColor = #0b2942
-        NotificationHighlightColor = #3a2d16
-        NotificationHighlightTextColor = #ecc48d
-        ColorizeControls = true
-    ]
-    [
-        Name = Ayu
-        TextColor = #bfbdb6
-        BackgroundColor = #0b0e14
-        ControlBackgroundColor = #0d1017
-        ActiveTabBackgroundColor = #0d1017
-        InactiveTabBackgroundColor = #261f37
-        LinkColor = #59c2ff
-        DisabledTextColor = #565b66
-        DarkerTextColor = #acb6bf
-        HotBackgroundColor = #1b2733
-        EdgeColor = #1b2733
-        HotEdgeColor = #e6b450
-        DisabledEdgeColor = #06070a
-        ErrorBackgroundColor = #f07178
-        NotificationBackgroundColor = #0d1017
-        NotificationHighlightColor = #362a12
-        NotificationHighlightTextColor = #e6b450
-        ColorizeControls = true
-    ]
-    [
-        Name = Palenight
-        TextColor = #a6accd
-        BackgroundColor = #292d3e
-        ControlBackgroundColor = #1b1e2b
-        ActiveTabBackgroundColor = #1b1e2b
-        InactiveTabBackgroundColor = #332e4a
-        LinkColor = #82aaff
-        DisabledTextColor = #676e95
-        DarkerTextColor = #8796b0
-        HotBackgroundColor = #32374d
-        EdgeColor = #3c435e
-        HotEdgeColor = #c792ea
-        DisabledEdgeColor = #151820
-        ErrorBackgroundColor = #ff5370
-        NotificationBackgroundColor = #1b1e2b
-        NotificationHighlightColor = #3f3520
-        NotificationHighlightTextColor = #ffcb6b
+        Name = Modern Amber Dark
+        TextColor = #f9ede1
+        BackgroundColor = #23160d
+        ControlBackgroundColor = #634106
+        LinkColor = #fbbf24
         ColorizeControls = true
     ]
 ]
@@ -658,8 +315,14 @@ void SetThemeByIndex(int themeIdx) {
 
 // Map removed / renamed themes so existing settings keep working.
 static Str ResolveThemeAlias(Str name) {
+    if (str::EqI(name, StrL("Light"))) {
+        return StrL("Sumatra Light");
+    }
+    if (str::EqI(name, StrL("Dark")) || str::EqI(name, StrL("Charcoal"))) {
+        return StrL("Sumatra Dark");
+    }
     if (str::EqI(name, StrL("Darker")) || str::EqI(name, StrL("Dark background Bright text"))) {
-        return StrL("Charcoal");
+        return StrL("Sumatra Dark");
     }
     return name;
 }
@@ -776,6 +439,10 @@ void ToggleLightDarkTheme() {
     SetThemeByIndex(idx);
 }
 
+void SetLightDarkTheme(bool dark) {
+    SetThemeByIndex(dark ? GetPreferredDarkThemeIndex() : GetPreferredLightThemeIndex());
+}
+
 // name of the theme ToggleLightDarkTheme() would switch to, for the command
 // palette: ": set to true" says nothing useful when a toggle picks a theme
 Str ToggleLightDarkThemeTargetName() {
@@ -817,10 +484,10 @@ static void UpdateGuiColorsFromTheme() {
     gColsBtn[kColBtnBorder] = edge;
     gColsBtn[kColBtnTextDisabled] = disabled;
 
-    gColsBtnDefault[kColBtnText] = text;
-    gColsBtnDefault[kColBtnBg] = AccentColor(ctlBg, 26);
-    gColsBtnDefault[kColBtnBgHover] = AccentColor(ctlBg, 40);
-    gColsBtnDefault[kColBtnBorder] = hotEdge;
+    gColsBtnDefault[kColBtnText] = ThemeBrandTextColor();
+    gColsBtnDefault[kColBtnBg] = ThemeBrandColor();
+    gColsBtnDefault[kColBtnBgHover] = AccentColor(ThemeBrandColor(), 12);
+    gColsBtnDefault[kColBtnBorder] = ThemeBrandColor();
     gColsBtnDefault[kColBtnTextDisabled] = disabled;
 
     gColsIconBtn[kColIconBtnBgHover] = AccentColor(ctlBg, 20);
@@ -907,7 +574,7 @@ void SetCurrentThemeFromSettings() {
     ParsedColor* bgParsed = GetPrefsColor(gSettings->mainWindowBackground);
     bool isDefault = IsDefaultMainWinColor(bgParsed);
     if (isDefault) {
-        gThemeLight->colorizeControls = false;
+        gThemeLight->colorizeControls = true;
         gThemeLight->controlBackgroundColor.wasParsed = true;
         gThemeLight->controlBackgroundColor.parsedOk = true;
         gThemeLight->controlBackgroundColor.col = kColWhite;
@@ -1257,4 +924,34 @@ Color SysHighlightBgColor() {
 
 Color SysHighlightTextColor() {
     return GetSysColor(COLOR_HIGHLIGHTTEXT);
+}
+
+Color ThemeBrandColor() {
+    if (ThemeUsesHighContrastColors()) {
+        return SysHighlightBgColor();
+    }
+    static const struct {
+        Str name;
+        Color color;
+    } brands[] = {
+        {StrL("Sumatra Light"), MkRgb(0xfa, 0xcc, 0x15)},       {StrL("Sumatra Dark"), MkRgb(0xfa, 0xcc, 0x15)},
+        {StrL("Modern Slate Light"), MkRgb(0x14, 0xb8, 0xa6)},  {StrL("Modern Slate Dark"), MkRgb(0x0e, 0xa5, 0xe9)},
+        {StrL("Modern Blue Light"), MkRgb(0x25, 0x63, 0xeb)},   {StrL("Modern Blue Dark"), MkRgb(0x3b, 0x82, 0xf6)},
+        {StrL("Modern Green Light"), MkRgb(0x22, 0xc5, 0x5e)},  {StrL("Modern Green Dark"), MkRgb(0x22, 0xc5, 0x5e)},
+        {StrL("Modern Purple Light"), MkRgb(0x8b, 0x5c, 0xf6)}, {StrL("Modern Purple Dark"), MkRgb(0xa8, 0x55, 0xf7)},
+        {StrL("Modern Amber Light"), MkRgb(0xf5, 0x9e, 0x0b)},  {StrL("Modern Amber Dark"), MkRgb(0xf5, 0x9e, 0x0b)},
+    };
+    for (auto& brand : brands) {
+        if (str::Eq(gCurrentTheme->name, brand.name)) {
+            return brand.color;
+        }
+    }
+    return IsLightColor(ThemeWindowBackgroundColor()) ? MkRgb(0xea, 0xb3, 0x08) : MkRgb(0xfa, 0xcc, 0x15);
+}
+
+Color ThemeBrandTextColor() {
+    if (ThemeUsesHighContrastColors()) {
+        return SysHighlightTextColor();
+    }
+    return IsLightColor(ThemeBrandColor()) ? MkRgb(0x1d, 0x1d, 0x1f) : kColWhite;
 }

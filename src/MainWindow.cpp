@@ -131,6 +131,8 @@ void CreateMovePatternLazy(MainWindow* win) {
 }
 
 MainWindow::~MainWindow() {
+    KillTimer(hwndCanvas, kLaserTrailTimerID);
+    VecClear(laserTrail);
     CancelAnnotationResizeRerender(this);
     KillTimer(hwndCanvas, kSmoothScrollTimerID);
     KillTimer(hwndCanvas, kReadingAutoScrollTimerID);

@@ -82,6 +82,7 @@ struct VirtHost {
     Func0 onMouseLeave;
     // a timer started with SetTimer() fired; the argument is the timer's id
     Func1<int> onTimer;
+    Func1<Size> onSizeChanged;
     Func1<VirtHostNativeMsg*> onNativeMsg;
 
     VirtHost() = default;

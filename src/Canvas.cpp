@@ -92,7 +92,9 @@ constexpr int kRenderDelayShowNotif = 500;
 // A laser pointer is a session mode, not a setting: it's turned on to point
 // things out during a presentation and off again afterwards, and an app that
 // started up with the mouse cursor replaced by a red dot would look broken.
-static bool gLaserPointer = false;
+constexpr DWORD kLaserTrailLifetimeMs = 2000;
+constexpr int kLaserTrailMaxPoints = 256;
+constexpr UINT kLaserTrailRefreshMs = 30;
 
 // logical size of the cursor bitmap. The dot itself is a small part of it,
 // the rest is the glow fading out to fully transparent
@@ -100,11 +102,15 @@ constexpr int kLaserPointerCursorSize = 32;
 
 static HCURSOR gCursorLaserPointer = nullptr;
 static int gCursorLaserPointerSize = 0;
+static Color gCursorLaserPointerColor = 0;
+static LaserPointerMode gCursorLaserPointerMode = LaserPointerMode::Solid;
 
-// A laser dot: a white-hot center inside a saturated red core, surrounded by a
+// A laser dot: a white-hot center inside a colored core, surrounded by a
 // glow that fades to transparent so the dot is visible on light and dark pages
 // alike. The hotspot is the center of the dot, unlike an arrow's tip.
-static HCURSOR CreateLaserPointerCursor(int size) {
+static HCURSOR CreateLaserPointerCursor(int size, Color color, LaserPointerMode mode) {
+    u8 colorR, colorG, colorB;
+    UnpackColor(color, colorR, colorG, colorB);
     BITMAPINFO bmi{};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = size;
@@ -139,7 +145,13 @@ static HCURSOR CreateLaserPointerCursor(int size) {
             // the dot itself, white-hot in the middle, saturated red at the edge
             float coreA = limitValue(coreR + 0.5f - d, 0.f, 1.f);
             float hot = limitValue(d / hotR, 0.f, 1.f);
-            float coreG = 255.f - (200.f * hot);
+            if (mode == LaserPointerMode::Hollow) {
+                coreA *= limitValue(d - coreR * 0.55f, 0.f, 1.f);
+                glowA *= limitValue(d - coreR * 0.55f, 0.f, 1.f);
+            }
+            float coreRCol = 255.f + ((float)colorR - 255.f) * hot;
+            float coreG = 255.f + ((float)colorG - 255.f) * hot;
+            float coreB = 255.f + ((float)colorB - 255.f) * hot;
 
             // core over glow, written out premultiplied (as 32bpp cursors want)
             float glowW = glowA * (1.f - coreA);
@@ -149,9 +161,9 @@ static HCURSOR CreateLaserPointerCursor(int size) {
                 continue;
             }
             u8 a = (u8)(alpha * 255.f);
-            u8 r = (u8)((255.f * coreA) + (255.f * glowW));
-            u8 g = (u8)((coreG * coreA) + (16.f * glowW));
-            u8 b = g;
+            u8 r = (u8)((coreRCol * coreA) + ((float)colorR * glowW));
+            u8 g = (u8)((coreG * coreA) + ((float)colorG * glowW));
+            u8 b = (u8)((coreB * coreA) + ((float)colorB * glowW));
             pixels[(y * size) + x] = ((DWORD)a << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | b;
         }
     }
@@ -179,12 +191,13 @@ static HCURSOR CreateLaserPointerCursor(int size) {
 
 // the cursor is sized for the DPI of the window it's shown in, so it's
 // re-created when the canvas moves to a monitor with a different scaling
-static HCURSOR GetLaserPointerCursor() {
+static HCURSOR GetLaserPointerCursor(MainWindow* win) {
     int size = DpiScale(kLaserPointerCursorSize);
-    if (gCursorLaserPointer && (gCursorLaserPointerSize == size)) {
+    if (gCursorLaserPointer && gCursorLaserPointerSize == size && gCursorLaserPointerColor == win->laserPointerColor &&
+        gCursorLaserPointerMode == win->laserPointerMode) {
         return gCursorLaserPointer;
     }
-    HCURSOR cur = CreateLaserPointerCursor(size);
+    HCURSOR cur = CreateLaserPointerCursor(size, win->laserPointerColor, win->laserPointerMode);
     if (!cur) {
         // a cursor of the wrong size beats no cursor at all
         return gCursorLaserPointer;
@@ -194,6 +207,8 @@ static HCURSOR GetLaserPointerCursor() {
     }
     gCursorLaserPointer = cur;
     gCursorLaserPointerSize = size;
+    gCursorLaserPointerColor = win->laserPointerColor;
+    gCursorLaserPointerMode = win->laserPointerMode;
     return cur;
 }
 
@@ -205,21 +220,29 @@ void DeleteLaserPointerCursor() {
     }
 }
 
-bool IsLaserPointerActive() {
-    return gLaserPointer;
+bool IsLaserPointerActive(MainWindow* win) {
+    if (win) {
+        return win->laserPointerActive;
+    }
+    for (MainWindow* window : gWindows) {
+        if (window->laserPointerActive) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // while on, the canvas cursor is the laser dot no matter what is under it:
-// links, text and annotations still work, they just don't change the cursor
+// dragging points temporarily without activating links or selecting text
 static bool SetLaserPointerCursor(MainWindow* win) {
-    if (!gLaserPointer) {
+    if (!win->laserPointerActive) {
         return false;
     }
     if (PM_BLACK_SCREEN == win->presentation || PM_WHITE_SCREEN == win->presentation) {
         // the presenter blanked the screen on purpose, don't put a dot on it
         return false;
     }
-    HCURSOR cur = GetLaserPointerCursor();
+    HCURSOR cur = GetLaserPointerCursor(win);
     if (!cur) {
         return false;
     }
@@ -236,10 +259,173 @@ static void SetCanvasCursor(MainWindow* win, LPWSTR cursorId) {
     SetCursorCached(cursorId);
 }
 
-void ToggleLaserPointer(MainWindow* win) {
-    gLaserPointer = !gLaserPointer;
-    // change the cursor now rather than on the next mouse move
+static void ResetLaserTrail(MainWindow* win) {
+    KillTimer(win->hwndCanvas, kLaserTrailTimerID);
+    VecClear(win->laserTrail);
+    win->laserPointerRepaint = true;
+}
+
+static void ClearLaserTrail(MainWindow* win) {
+    ResetLaserTrail(win);
+    HwndInvalidate(win->hwndCanvas);
+}
+
+static bool LaserContextChanged(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    return !dm || win->laserTrailTab != win->CurrentTab() || win->laserTrailViewport != dm->GetViewPort() ||
+           win->laserTrailZoom != dm->GetZoomVirtual(true) || win->laserTrailRotation != dm->GetRotation() ||
+           win->laserTrailPage != dm->CurrentPageNo();
+}
+
+void StopLaserPointer(MainWindow* win) {
+    win->laserPointerActive = false;
+    if (win->laserPointerDown && GetCapture() == win->hwndCanvas) {
+        ReleaseCapture();
+    }
+    win->laserPointerDown = false;
+    ClearLaserTrail(win);
     SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+void ToggleLaserPointer(MainWindow* win) {
+    if (win->laserPointerActive) {
+        StopLaserPointer(win);
+        return;
+    }
+    FinishAnnotationPlacement(win);
+    CancelAnnotationPlacement(win);
+    win->laserPointerActive = true;
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+void SetLaserPointerColor(MainWindow* win, Color color) {
+    win->laserPointerColor = color;
+    ClearLaserTrail(win);
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+void SetLaserPointerMode(MainWindow* win, LaserPointerMode mode) {
+    win->laserPointerMode = mode;
+    ClearLaserTrail(win);
+    if (!win->laserPointerActive) {
+        ToggleLaserPointer(win);
+    }
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+enum class LaserSample {
+    Start,
+    Move
+};
+
+static void AddLaserPoint(MainWindow* win, Point point, LaserSample sample) {
+    Vec<LaserTrailPoint>& points = win->laserTrail;
+    if (win->laserPointerMode == LaserPointerMode::Dot) {
+        VecClear(points);
+    }
+    if (len(points) > 0 && LaserContextChanged(win)) {
+        ResetLaserTrail(win);
+    }
+    if (len(points) == 0) {
+        DisplayModel* dm = win->AsFixed();
+        if (!dm) {
+            return;
+        }
+        win->laserTrailTab = win->CurrentTab();
+        win->laserTrailViewport = dm->GetViewPort();
+        win->laserTrailZoom = dm->GetZoomVirtual(true);
+        win->laserTrailRotation = dm->GetRotation();
+        win->laserTrailPage = dm->CurrentPageNo();
+        sample = LaserSample::Start;
+    }
+    if (sample == LaserSample::Move && len(points) > 0 && VecLast(points).point == point) {
+        return;
+    }
+    if (len(points) >= kLaserTrailMaxPoints) {
+        VecRemoveAt(points, 0);
+        points[0].start = true;
+    }
+    VecAppend(points, {point, (DWORD)GetTickCount64(), sample == LaserSample::Start});
+    win->laserPointerRepaint = true;
+    SetTimer(win->hwndCanvas, kLaserTrailTimerID, kLaserTrailRefreshMs, nullptr);
+    HwndInvalidate(win->hwndCanvas);
+}
+
+static void FadeLaserTrail(MainWindow* win) {
+    if (len(win->laserTrail) > 0 && LaserContextChanged(win)) {
+        ClearLaserTrail(win);
+        return;
+    }
+    win->laserPointerRepaint = true;
+    DWORD now = (DWORD)GetTickCount64();
+    Vec<LaserTrailPoint>& points = win->laserTrail;
+    if (win->laserPointerMode == LaserPointerMode::Dot && win->laserPointerDown && len(points) > 0) {
+        VecLast(points).time = now;
+    }
+    while (len(points) > 0 && now - points[0].time >= kLaserTrailLifetimeMs) {
+        VecRemoveAt(points, 0);
+    }
+    if (len(points) == 0) {
+        KillTimer(win->hwndCanvas, kLaserTrailTimerID);
+    }
+    HwndInvalidate(win->hwndCanvas);
+}
+
+static void PaintLaserTrail(MainWindow* win, HDC hdc) {
+    if (len(win->laserTrail) > 0 && LaserContextChanged(win)) {
+        ResetLaserTrail(win);
+    }
+    if (!win->laserPointerActive || len(win->laserTrail) == 0 || win->presentation == PM_BLACK_SCREEN ||
+        win->presentation == PM_WHITE_SCREEN) {
+        return;
+    }
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    u8 r, g, b;
+    UnpackColor(win->laserPointerColor, r, g, b);
+    DWORD now = (DWORD)GetTickCount64();
+    float radius = (float)DpiScale(4);
+    for (int i = 0; i < len(win->laserTrail); i++) {
+        LaserTrailPoint& sample = win->laserTrail[i];
+        DWORD age = now - sample.time;
+        if (age >= kLaserTrailLifetimeMs) {
+            continue;
+        }
+        u8 alpha = (u8)(230.f * (1.f - (float)age / (float)kLaserTrailLifetimeMs));
+        Gdiplus::Color color(alpha, r, g, b);
+        Point point = sample.point;
+        if (win->laserPointerMode != LaserPointerMode::Hollow) {
+            Gdiplus::SolidBrush brush(color);
+            graphics.FillEllipse(&brush, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
+            if (win->laserPointerMode == LaserPointerMode::Solid && i > 0 && !sample.start) {
+                Point previous = win->laserTrail[i - 1].point;
+                Gdiplus::Pen pen(color, radius * 2);
+                pen.SetStartCap(Gdiplus::LineCapRound);
+                pen.SetEndCap(Gdiplus::LineCapRound);
+                graphics.DrawLine(&pen, previous.x, previous.y, point.x, point.y);
+            }
+        } else {
+            Gdiplus::Pen pen(color, (float)DpiScale(1));
+            if (i == 0 || sample.start) {
+                graphics.DrawEllipse(&pen, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
+                continue;
+            }
+            Point previous = win->laserTrail[i - 1].point;
+            float dx = (float)(point.x - previous.x), dy = (float)(point.y - previous.y);
+            float distance = sqrtf(dx * dx + dy * dy);
+            if (distance < 1.f) {
+                continue;
+            }
+            float ox = -dy * radius / distance, oy = dx * radius / distance;
+            graphics.DrawLine(&pen, (float)previous.x + ox, (float)previous.y + oy, (float)point.x + ox,
+                              (float)point.y + oy);
+            graphics.DrawLine(&pen, (float)previous.x - ox, (float)previous.y - oy, (float)point.x - ox,
+                              (float)point.y - oy);
+            if (i == len(win->laserTrail) - 1 || win->laserTrail[i + 1].start) {
+                graphics.DrawEllipse(&pen, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
+            }
+        }
+    }
 }
 
 // OLE drag-drop support for dragging selected text out of the window
@@ -1815,6 +2001,20 @@ static Annotation* AnnotationLockingMouse(MainWindow* win) {
 static bool gPressOnlyDeselected = false;
 
 static void OnMouseMove(MainWindow* win, int x, int y, WPARAM key) {
+    if (win->laserPointerActive) {
+        if (win->penOnly && IsMouseMessageFromTouch()) {
+            return;
+        }
+        SetLaserPointerCursor(win);
+        if (win->laserPointerDown && (key & MK_LBUTTON)) {
+            AddLaserPoint(win, Point{x, y}, LaserSample::Move);
+        }
+        return;
+    }
+
+    if (SuppressTouchForPen(win) && IsMouseMessageFromTouch()) {
+        return;
+    }
     if (ReadingBarOnMouseMove(win, x, y)) {
         return;
     }
@@ -2333,6 +2533,20 @@ static void OpenOrSelectEditAnnotation(WindowTab* tab, Annotation* annot, Point 
 }
 
 static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
+    if (win->laserPointerActive) {
+        if (win->penOnly && IsMouseMessageFromTouch()) {
+            return;
+        }
+        win->laserPointerDown = true;
+        HwndSetFocus(win->hwndFrame);
+        SetCapture(win->hwndCanvas);
+        AddLaserPoint(win, Point{x, y}, LaserSample::Start);
+        return;
+    }
+
+    if (SuppressTouchForPen(win) && IsMouseMessageFromTouch()) {
+        return;
+    }
     // lf("Left button clicked on %d %d", x, y);
     gPressOnlyDeselected = false;
     if (IsRightDragging(win)) {
@@ -2613,6 +2827,24 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
 }
 
 static void OnMouseLeftButtonUp(MainWindow* win, int x, int y, WPARAM key) {
+    if (win->laserPointerActive) {
+        if (win->penOnly && IsMouseMessageFromTouch()) {
+            return;
+        }
+        AddLaserPoint(win, Point{x, y}, LaserSample::Move);
+        win->laserPointerDown = false;
+        if (win->laserPointerMode == LaserPointerMode::Dot) {
+            ClearLaserTrail(win);
+        }
+        if (GetCapture() == win->hwndCanvas) {
+            ReleaseCapture();
+        }
+        return;
+    }
+
+    if (SuppressTouchForPen(win) && IsMouseMessageFromTouch()) {
+        return;
+    }
     if (ReadingBarOnLeftUp(win)) {
         return;
     }
@@ -4155,9 +4387,11 @@ static void OnPaintDocument(MainWindow* win) {
         // Flush when the focus ring is needed so DrawFocusRect is not XOR'd
         // on top of a stale frame that already had a ring.
         bool showFocus = CanvasShouldShowKeyboardFocus(win);
-        if (!gNoFlickerRender || shouldPaint || showFocus) {
+        if (!gNoFlickerRender || shouldPaint || showFocus || win->laserPointerActive || win->laserPointerRepaint) {
             win->buffer->Flush(hdc);
         }
+        PaintLaserTrail(win, hdc);
+        win->laserPointerRepaint = false;
     }
     DrawCanvasKeyboardFocusIfNeeded(win, hdc);
 
@@ -5204,6 +5438,9 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
         return false;
     }
     if (pointerType == kSumatraPtTouch) {
+        if (SuppressTouchForPen(win)) {
+            return true;
+        }
         // Watch the raw contact but don't consume it: gestures (panning,
         // zooming) still have to come out of DefWindowProc. This is the only
         // place a finger's true timing shows up -- the gesture engine reports a
@@ -5224,8 +5461,8 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
     int y = pt.y;
 
     SumatraPointerPenInfo penInfo{};
-    bool eraser = DynGetPointerPenInfo && DynGetPointerPenInfo(pointerId, &penInfo) &&
-                  (penInfo.penFlags & (kSumatraPenFlagInverted | kSumatraPenFlagEraser)) != 0;
+    bool hasPenInfo = DynGetPointerPenInfo && DynGetPointerPenInfo(pointerId, &penInfo);
+    bool eraser = hasPenInfo && (penInfo.penFlags & (kSumatraPenFlagInverted | kSumatraPenFlagEraser)) != 0;
     if (eraser && IsPlacingInkAnnotation(win)) {
         WORD flags = HIWORD(wp);
         bool inContact = (flags & kSumatraPointerMessageFlagInContact) != 0;
@@ -5242,6 +5479,9 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
     if (msg == WM_POINTERDOWN) {
         mouseWp = MK_LBUTTON;
         OnMouseLeftButtonDown(win, x, y, mouseWp);
+        if (hasPenInfo && (penInfo.penMask & 1) != 0) {
+            AddInkPressure(win, penInfo.pressure);
+        }
         return true;
     }
     if (msg == WM_POINTERUPDATE) {
@@ -5250,6 +5490,9 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
             mouseWp = MK_LBUTTON;
         }
         OnMouseMove(win, x, y, mouseWp);
+        if (hasPenInfo && inContact && (penInfo.penMask & 1) != 0) {
+            AddInkPressure(win, penInfo.pressure);
+        }
         return true;
     }
     if (msg == WM_POINTERUP) {
@@ -5304,10 +5547,18 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
             return 0;
 
         case WM_CAPTURECHANGED:
+            win->laserPointerDown = false;
+            if (win->laserPointerMode == LaserPointerMode::Dot) {
+                ClearLaserTrail(win);
+            }
             ReadingBarCancelDrag(win);
             return 0;
 
         case WM_LBUTTONDBLCLK:
+            if (win->laserPointerActive) {
+                OnMouseLeftButtonDown(win, x, y, wp);
+                return 0;
+            }
             OnMouseLeftButtonDblClk(win, x, y, wp);
             return 0;
 
@@ -5400,6 +5651,10 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
         }
 
         case WM_GESTURE:
+            if (SuppressTouchForPen(win)) {
+                CloseGestureInfoHandle((HGESTUREINFO)lp);
+                return 0;
+            }
             return OnGesture(win, msg, wp, lp);
 
         case WM_POINTERDOWN:
@@ -5633,6 +5888,9 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
     }
 
     switch (timerId) {
+        case kLaserTrailTimerID:
+            FadeLaserTrail(win);
+            break;
         case kRepaintTimerID:
             win->delayedRepaintTimer = 0;
             KillTimer(hwnd, kRepaintTimerID);
@@ -5717,7 +5975,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
             KillTimer(hwnd, kHideCursorTimerID);
             // a laser pointer that disappears when you stop moving it would be
             // useless, so it opts out of the presentation-mode cursor hiding
-            if (win->InPresentation() && !IsLaserPointerActive()) {
+            if (win->InPresentation() && !IsLaserPointerActive(win)) {
                 // logf("hiding cursor because win->presentations\n");
                 SetCursor((HCURSOR) nullptr);
             }
