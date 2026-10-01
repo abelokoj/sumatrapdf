@@ -31,13 +31,15 @@ jobs:
         run: bun cmd/premake.ts
       - name: Build native Windows release
         run: bun cmd/build.ts ${{ matrix.flags }}
-      - name: Package portable app
+      - name: Package installer and portable app
         shell: pwsh
         run: ./cmd/package-enhanced.ps1 -Architecture '${{ matrix.arch }}'
-      - name: Upload portable ZIP
+      - name: Upload installer and portable ZIP
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: enhanced-windows-${{ matrix.arch }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-install.exe
           if-no-files-found: error
           retention-days: 14

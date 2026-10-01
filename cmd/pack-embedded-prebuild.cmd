@@ -75,6 +75,21 @@ copy /y "%WORK%\translations.txt" "%STAGING%\translations.txt" >nul || exit /b 1
 copy /y "%ROOT%\ext\marked.min.js" "%STAGING%\marked.min.js" >nul || exit /b 1
 copy /y "%ROOT%\ext\mermaid.min.js" "%STAGING%\mermaid.min.js" >nul || exit /b 1
 
+REM Only runtime dictionary files and public license notices enter the installer.
+if not exist "%STAGING%\dictionaries\wordnet-en\" mkdir "%STAGING%\dictionaries\wordnet-en"
+for %%F in (adj.exc adv.exc data.adj data.adv data.noun data.verb LICENSE manifest.json noun.exc verb.exc) do (
+  copy /y "%ROOT%\src\dictionaries\wordnet-en\%%F" "%STAGING%\dictionaries\wordnet-en\%%F" >nul || exit /b 1
+)
+if not exist "%STAGING%\docs\licenses\" mkdir "%STAGING%\docs\licenses"
+for %%F in (Manrope-OFL.txt PretendardStd-OFL.txt PublicSans-OFL.txt lucide-LICENSE.txt vocabulary-wordlists-MIT.txt vocabulary-pack-attributions.json) do (
+  copy /y "%ROOT%\docs\licenses\%%F" "%STAGING%\docs\licenses\%%F" >nul || exit /b 1
+)
+for %%F in (font-attribution.md icon-attribution.md vocabulary-attribution.md) do (
+  copy /y "%ROOT%\docs\%%F" "%STAGING%\docs\%%F" >nul || exit /b 1
+)
+for %%F in (AUTHORS COPYING COPYING.BSD) do (
+  copy /y "%ROOT%\%%F" "%STAGING%\%%F" >nul || exit /b 1
+)
 REM base 14 (URW), CJK fallback (Droid), Charis SIL for EPUB, a few Noto for
 REM math / music / symbols / emoji. Not packed: NimbusBoxes, Source Han and the
 REM per-script Noto fonts (font-table.h entries without a file are skipped).

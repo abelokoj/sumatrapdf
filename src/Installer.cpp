@@ -937,10 +937,38 @@ static void RestoreInstallCopyFiles(Str installDir) {
     }
 }
 
-// IDR_EMBEDDED_PAK also holds translations and the manual; the installer only
-// writes the top-level binaries (libsumatrapdf.dll, PdfFilter.dll, PdfPreview.dll,
-// sumatrapdf-tool.exe) to the install dir.
+// Extract binaries and known public runtime assets, never arbitrary manual paths.
 static bool IsInstallerPayload(Str name) {
+    static const Str kRuntimeFiles[] = {
+        StrL("dictionaries/wordnet-en/adj.exc"),
+        StrL("dictionaries/wordnet-en/adv.exc"),
+        StrL("dictionaries/wordnet-en/data.adj"),
+        StrL("dictionaries/wordnet-en/data.adv"),
+        StrL("dictionaries/wordnet-en/data.noun"),
+        StrL("dictionaries/wordnet-en/data.verb"),
+        StrL("dictionaries/wordnet-en/LICENSE"),
+        StrL("dictionaries/wordnet-en/manifest.json"),
+        StrL("dictionaries/wordnet-en/noun.exc"),
+        StrL("dictionaries/wordnet-en/verb.exc"),
+        StrL("docs/licenses/Manrope-OFL.txt"),
+        StrL("docs/licenses/PretendardStd-OFL.txt"),
+        StrL("docs/licenses/PublicSans-OFL.txt"),
+        StrL("docs/licenses/lucide-LICENSE.txt"),
+        StrL("docs/licenses/vocabulary-wordlists-MIT.txt"),
+        StrL("docs/licenses/vocabulary-pack-attributions.json"),
+        StrL("docs/font-attribution.md"),
+        StrL("docs/icon-attribution.md"),
+        StrL("docs/vocabulary-attribution.md"),
+        StrL("AUTHORS"),
+        StrL("COPYING"),
+        StrL("COPYING.BSD"),
+    };
+    TempStr normalized = str::ReplaceTemp(name, StrL("\\"), StrL("/"));
+    for (Str file : kRuntimeFiles) {
+        if (str::EqI(normalized, file)) {
+            return true;
+        }
+    }
     if (str::ContainsCharAny(name, StrL("\\/"))) {
         return false;
     }
@@ -981,6 +1009,11 @@ static bool ExtractInstallerFiles(lzma::SimpleArchive* archive, Str destDir) {
             return false;
         }
         TempStr filePath = path::JoinTemp(destDir, fi->name);
+        if (!dir::CreateAll(path::GetDirTemp(filePath))) {
+            free(uncompressed);
+            NotifyFailed(WriteInstallerFileFailureMsgTemp(filePath));
+            return false;
+        }
 
         Str d = Str((char*)uncompressed, (int)fi->uncompressedSize);
         bool ok = WriteInstallerFileRobust(filePath, d);

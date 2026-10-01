@@ -42,3 +42,7 @@ tests/tmp/
 /mcps/tasks/tools
 /bin/resvg.exe
 /scratch.txt
+
+# Private local development records
+/PrettySumatraPDF_TODO.md
+/RELEASE_NOTES.md
