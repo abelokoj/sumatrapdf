@@ -1355,6 +1355,8 @@ static int PopupPickSeq(MainWindow* win, Point screen, SeqStrings names, int cur
 
 constexpr UINT kFontMenuCurrent = 100;
 constexpr UINT kFontMenuOther = 101;
+constexpr UINT kFontMenuBundled = 110;
+static SeqStrings gBundledAnnotFonts = "Manrope\0Pretendard Std\0Public Sans\0";
 
 // the Windows font dialog; false if canceled
 static bool ChooseSystemFont(HWND hwnd, Str& family, int& style) {
@@ -1406,7 +1408,13 @@ static void PickFreeTextFont(AnnotEditToolbar* tb, Annotation* annot, Point scre
         AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0), (UINT)(idx + 1), ToWStrTemp(name).s);
         idx++;
     }
-    if (!isBase14) {
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    for (int i = 0; i < 3; i++) {
+        Str name = SeqStrByIndex(gBundledAnnotFonts, i);
+        AppendMenuW(menu, MF_STRING | (str::EqI(name, family) ? MF_CHECKED : 0), kFontMenuBundled + i,
+                    ToWStrTemp(name).s);
+    }
+    if (!isBase14 && SeqStrIndexIS(gBundledAnnotFonts, family) < 0) {
         AppendMenuW(menu, MF_STRING | MF_CHECKED, kFontMenuCurrent, ToWStrTemp(family).s);
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1439,14 +1447,30 @@ static void PickFreeTextFont(AnnotEditToolbar* tb, Annotation* annot, Point scre
             break;
         }
         default:
-            family = SeqStrByIndex(gBase14FontFamilies, cmd - 1);
+            family = cmd >= kFontMenuBundled && cmd < kFontMenuBundled + 3
+                         ? SeqStrByIndex(gBundledAnnotFonts, cmd - kFontMenuBundled)
+                         : SeqStrByIndex(gBase14FontFamilies, cmd - 1);
             break;
     }
     // the dialogs ran a message loop, in which the annotation could have gone
     if (!AnnotationIsLive(annot) || tab->selectedAnnotation != annot) {
         return;
     }
+    FreeTextFontStatus status = CheckFreeTextFont(annot->engine, family, style);
+    if (status != FreeTextFontStatus::Available) {
+        Str message = status == FreeTextFontStatus::Restricted
+                          ? Tr("This font does not permit the outline embedding and subsetting used by PDF "
+                               "annotations. Choose another font. Your annotation has not changed.")
+                          : Tr("This font cannot be loaded for PDF text. Choose an available font. Your annotation has "
+                               "not changed.");
+        MessageBoxW(hwnd, ToWStrTemp(message).s, ToWStrTemp(Tr("Free Text font")).s, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     SetFreeTextFont(annot, family, style);
+    str::FreePtr(&gSettings->annotations.freeTextFontFamily);
+    gSettings->annotations.freeTextFontFamily = str::Dup(family);
+    gSettings->annotations.freeTextFontStyle = style;
+    ScheduleSaveSettings();
     AnnotChanged(tab);
 }
 
@@ -2211,11 +2235,26 @@ static void PostedDeleteSelectedAnnotation(MainWindow* win) {
     }
 }
 
+static bool CanEditFreeTextFont(HWND hwnd, Annotation* annot) {
+    if (Type(annot) != AnnotationType::FreeText) return true;
+    Str family = FreeTextFontFamily(annot);
+    if (CheckFreeTextFont(annot->engine, family, FreeTextFontStyle(annot)) == FreeTextFontStatus::Available)
+        return true;
+    Str message =
+        fmt(Tr("The saved font '%s' is unavailable or cannot be embedded on this device. Choose a replacement in the "
+               "annotation's font menu before editing its text. The saved appearance remains unchanged.")
+                .s,
+            family);
+    MessageBoxW(hwnd, ToWStrTemp(message).s, ToWStrTemp(Tr("Free Text font")).s, MB_OK | MB_ICONINFORMATION);
+    return false;
+}
+
 static void StartContentsEdit(AnnotEditToolbar* tb) {
     Annotation* annot = LiveToolbarAnnot(tb);
     if (!tb || !tb->host || !annot || tb->editingContents) {
         return;
     }
+    if (!CanEditFreeTextFont(tb->win->hwndFrame, annot)) return;
     Edit::CreateArgs args;
     args.parent = tb->host->native;
     args.isMultiLine = true;
@@ -2556,6 +2595,7 @@ bool StartFreeTextInPlaceEdit(MainWindow* win, Annotation* annot) {
         return true;
     }
     EndFreeTextInPlaceEdit(true);
+    if (!CanEditFreeTextFont(win->hwndFrame, annot)) return false;
     DisplayModel* dm = win->AsFixed();
     int pageNo = PageNo(annot);
     if (!dm || !dm->ValidPageNo(pageNo) || !dm->PageVisible(pageNo)) {

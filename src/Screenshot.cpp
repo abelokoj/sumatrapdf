@@ -57,6 +57,7 @@ static HWND GetScreenshotOwnerHwnd() {
 // into; TakeScreenshots() itself is declared there
 void InitScreenshotHost() {
     gScreenshotHost.IsAppFrame = IsAppFrame;
+    gScreenshotHost.GetFont = GetAppFont;
     gScreenshotHost.GetSaveDirTemp = GetScreenshotSaveDirTemp;
     gScreenshotHost.GetOwnerHwnd = GetScreenshotOwnerHwnd;
 }

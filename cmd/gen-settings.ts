@@ -827,7 +827,27 @@ const annotationToolPreset: Field[] = [
   field("Width", Float, 2, "pinned stroke width in PDF points"),
 ];
 
+function inkPenProfile(name: string, opacity: number): Field {
+  const profile = struct(
+    name,
+    [
+      field("Color", Color, "", "saved pen color; empty uses the profile default"),
+      field("Width", Float, 0, "saved pen width in points; 0 uses the profile default"),
+      field("Opacity", Int, opacity, "saved pen opacity, from 0 to 100 percent"),
+    ],
+    "saved settings for this pen type",
+  );
+  profile.StructName = "InkPenProfile";
+  profile.Type.ctype = "InkPenProfile";
+  return profile;
+}
+
 const annotations: Field[] = [
+  inkPenProfile("InkBallpoint", 100),
+  inkPenProfile("InkFountain", 100),
+  inkPenProfile("InkBrush", 100),
+  inkPenProfile("InkPencil", 65),
+  inkPenProfile("InkHighlighter", 40),
   field(
     "HighlightColor",
     Color,
@@ -864,6 +884,8 @@ const annotations: Field[] = [
   ).ver("3.6"),
   // sizes are in PDF user space units (points), not screen pixels: they're
   // part of the document, so they must not be DPI-scaled
+  field("FreeTextFontFamily", Str, "Helvetica", "default font family for new Free Text annotations"),
+  field("FreeTextFontStyle", Int, 0, "Free Text style bits: bold=1, italic=2, underline=4"),
   field("FreeTextSize", Int, 12, "font size of free text annotations, in points").ver("3.5"),
   field("FreeTextBorderWidth", Int, 1, "border width of free text annotations, in points").ver("3.5"),
   field(
@@ -1762,6 +1784,7 @@ const globalPrefs: Field[] = [
     "font size for bookmarks and favorites tree views, in pixels; 0 means the Windows default. " +
       "Not scaled by the display scaling",
   ).ver("3.3"),
+  field("InterfaceScale", Int, 100, "overall interface scale, from 50 to 250 percent; document zoom is independent"),
   field("UIFontFamily", Str, "system", "interface font: system, Manrope, Pretendard Std or Public Sans"),
   field(
     "UIFontSize",
@@ -1945,6 +1968,8 @@ const globalPrefs: Field[] = [
   field("PenMinWidth", Float, 0.1, "minimum pen width in PDF points"),
   field("PenMaxWidth", Float, 16, "maximum pen width in PDF points"),
   field("PenWidthStep", Float, 0.1, "pen width increment in PDF points"),
+  field("LaserLifetimeSeconds", Float, 2, "temporary laser stroke lifetime in seconds (0.1 to 120)"),
+  field("LaserWidth", Float, 8, "laser width in screen pixels at 100% DPI (0.1 to 32), independent of pen width"),
   array(
     "PinnedAnnotationTools",
     annotationToolPreset,
@@ -2103,12 +2128,15 @@ const globalPrefsLayout = [
   "PenMinWidth",
   "PenMaxWidth",
   "PenWidthStep",
+  "LaserLifetimeSeconds",
+  "LaserWidth",
   "PinnedAnnotationTools",
   "TocDy",
   "ToolbarSize",
   "TreeFontSize",
   "UIFontSize",
   "UIFontFamily",
+  "InterfaceScale",
   "ZoomIncrement",
   "AIChatSidebarDx",
   "CustomScreenDPI",
@@ -2482,7 +2510,9 @@ constexpr float kInvalidZoom = -99.0F;
 function genSettingsStruct(): string {
   const builtDef: Record<string, number> = {};
   const builtMeta: Record<string, number> = {};
-  let structDef = buildStruct(globalPrefsStruct, builtDef);
+  let structDef = buildStruct(inkPenProfile("InkPenProfile", 100), builtDef);
+  builtDef.InkPenProfile = 1;
+  structDef += buildStruct(globalPrefsStruct, builtDef);
   let structMetaData = buildMetaData(globalPrefsStruct, builtMeta);
 
   structDef += buildStruct(themesStruct, builtDef);

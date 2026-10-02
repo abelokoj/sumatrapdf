@@ -2,6 +2,9 @@
    License: GPLv3 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/WinDynCalls.h"
 #include "base/Win.h"
 #include "base/Pixmap.h"
@@ -12,7 +15,9 @@
 #include "gui/Layout.h"
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
+#include "gui/PlatformWindow.h"
 #include "gui/Gfx.h"
+#include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
 
 #include "Settings.h"
@@ -27,7 +32,9 @@
 #include "MainWindow.h"
 #include "Commands.h"
 #include "Accelerators.h"
+#include "Menu.h"
 #include "SvgIcons.h"
+#include "EnhancedIcons.h"
 #include "Toolbar.h"
 #include "SearchAndDDE.h"
 #include "FindWindow.h"
@@ -39,6 +46,32 @@
 // command ids for the bar's toolbar buttons; must not collide with real commands
 constexpr int kFindBarCloseCmdId = (int)CmdLast + 50;
 constexpr int kFindBarPinCmdId = (int)CmdLast + 52;
+constexpr int kFindBarOptionsCmdId = (int)CmdLast + 53;
+constexpr UINT_PTR kFindBarCollapseTimer = 0x201;
+
+struct FindFieldFit {
+    int editDx = 0;
+    bool compact = false;
+};
+
+static FindFieldFit FitFindField(int available, int fullFixed, int navigationFixed, int minEditDx) {
+    bool compact = available < fullFixed + minEditDx;
+    int editDx = std::max(1, available - (compact ? navigationFixed : fullFixed));
+    return {editDx, compact};
+}
+
+#if IS_DEBUG
+void FindBarLayout_UnitTests() {
+    auto wide = FitFindField(400, 160, 70, 80);
+    utassert(!wide.compact && wide.editDx == 240);
+    auto narrow = FitFindField(200, 160, 70, 80);
+    utassert(narrow.compact && narrow.editDx == 130);
+    auto tight = FitFindField(80, 160, 70, 80);
+    utassert(tight.compact && tight.editDx == 10);
+    auto scaled = FitFindField(500, 400, 175, 200);
+    utassert(scaled.compact && scaled.editDx == 325);
+}
+#endif
 
 namespace {
 
@@ -140,7 +173,7 @@ struct FindBarWnd : WindowBase {
     Padding* padLayout = nullptr;
     int layoutDpi = 96;
     // prev / next / match-case / match-whole-word / pop-out / close
-    VirtIconButton* btns[6]{};
+    VirtIconButton* btns[7]{};
 
     int barDx = 0;
     int barDy = 0;
@@ -150,6 +183,7 @@ struct FindBarWnd : WindowBase {
     // set while Layout() runs so the WM_SIZE its own SetWindowPos generates
     // doesn't re-enter Layout()
     bool inLayout = false;
+    bool inOptionsMenu = false;
     Func1List<MainWindow*> onWindowMoved;
 
     FindBarWnd() = default;
@@ -174,6 +208,9 @@ struct FindBarWnd : WindowBase {
     void OnDpiChanged(WindowBase::DpiChangedEvent* ev);
     void OnKeyDown(KeyEvent* ev);
     void OnCommand(WindowBase::CommandEvent* ev);
+    void OnActivate(WindowBase::ActivateEvent* ev);
+    void OnTimer(WindowBase::TimerEvent* ev);
+    void OnPaint(WindowBase::PaintEvent* ev);
 
     bool UpdateStatusWidth(int totalHits, bool capped);
 };
@@ -202,6 +239,8 @@ static TempStr FindBarButtonTooltip(int cmd) {
             return Tr("Open in a window");
         case kFindBarCloseCmdId:
             return Tr("Close");
+        case kFindBarOptionsCmdId:
+            return Tr("Search options");
     }
     return {};
 }
@@ -216,13 +255,13 @@ FindBarWnd::~FindBarWnd() {
 // the icons come from the shared cache, which renders them for the current
 // theme and size
 void FindBarWnd::UpdateButtonIcons(int dpi) {
-    static const char* icons[6] = {gIconChevronUp,      gIconChevronDown,    gIconMatchCase,
-                                   gIconMatchWholeWord, gIconArrowsDiagonal, gIconClose};
+    static const char* icons[7] = {gIconSearchPrev,     gIconSearchNext, gIconMatchCase,       gIconMatchWholeWord,
+                                   gIconArrowsDiagonal, gIconClose,      kEnhancedIconSettings};
     if (dpi <= 0) {
         dpi = GetDpi();
     }
-    int isz = RoundUp(DpiScaleByDpi(dpi, 16), 4);
-    for (int i = 0; i < 6; i++) {
+    int isz = RoundUp(UiScalePxForDpi(dpi, 16), 4);
+    for (int i = 0; i < dimof(btns); i++) {
         if (btns[i]) {
             btns[i]->pixmap = GetCachedPixmapForSvg(Str(icons[i]), isz, isz);
         }
@@ -238,16 +277,20 @@ static void FindBarButtonClicked(FindBarWnd* bar, VirtMouseEvent* ev) {
 }
 
 void FindBarWnd::CreateButtons() {
-    static const int cmds[6] = {
-        CmdFindPrev,      CmdFindNext,       CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
-        kFindBarPinCmdId, kFindBarCloseCmdId};
-    int pad = DpiScale(4);
-    for (int i = 0; i < 6; i++) {
+    static const int cmds[7] = {
+        CmdFindPrev,      CmdFindNext,        CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
+        kFindBarPinCmdId, kFindBarCloseCmdId, kFindBarOptionsCmdId};
+    int pad = UiScalePx(4);
+    for (int i = 0; i < dimof(btns); i++) {
         auto* b = new VirtIconButton();
         b->id = cmds[i];
         b->padding = Insets{pad, pad, pad, pad};
         b->SetTooltip(FindBarButtonTooltip(cmds[i]));
         b->onClick = MkFunc1(FindBarButtonClicked, this);
+        b->SetFlag(vwfFocusable, true);
+        b->cornerRadius = UiScalePx(6);
+        b->SetColor(kColIconBtnBgHover, ThemeHotBackgroundColor());
+        b->SetColor(kColIconBtnBgSelected, ThemeHotBackgroundColor());
         btns[i] = b;
     }
     UpdateButtonIcons();
@@ -264,7 +307,7 @@ bool FindBarWnd::Create(MainWindow* mainWin) {
     {
         CreateCustomArgs args;
         args.visible = false;
-        args.style = WS_POPUP | WS_BORDER;
+        args.style = WS_POPUP;
         // WS_EX_TOOLWINDOW keeps it off the taskbar. Not topmost: we make the
         // frame our owner instead (below) so the bar floats above the frame but
         // not above other apps.
@@ -329,11 +372,11 @@ constexpr int kFindBarMinEditDx = 80;
 constexpr int kFindBarResizeGripDx = 6;
 
 void FindBarWnd::BuildLayout() {
-    int p = DpiScale(kFindBarPadding);
-    int gap = DpiScale(kFindBarGap);
+    int p = UiScalePx(kFindBarPadding);
+    int gap = UiScalePx(kFindBarGap);
     // cap preferred width at the min so HBox flex, not the typed text, sets the
     // edit's size (a long query would otherwise blow out the bar)
-    int minEditDx = DpiScale(kFindBarMinEditDx);
+    int minEditDx = UiScalePx(kFindBarMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
 
@@ -349,6 +392,7 @@ void FindBarWnd::BuildLayout() {
     for (VirtIconButton* b : btns) {
         row->AddChild(b);
     }
+    for (int i : {2, 3, 4}) btns[i]->SetVisibility(Visibility::Collapse);
     padLayout = new Padding(row, Insets{p, p, p, p});
     layout = padLayout;
     layoutDpi = DpiGet();
@@ -358,7 +402,7 @@ int FindBarWnd::MinBarDx() const {
     if (!layout) {
         return 0;
     }
-    int client = layout->MinIntrinsicWidth(0);
+    int client = layout->MinIntrinsicWidth(0) - edit->MinIntrinsicWidth(0) + UiScalePx(kFindBarMinEditDx);
     Rect wr = HwndWindowRect(hwnd);
     Rect cr = HwndClientRect(hwnd);
     return client + (wr.dx - cr.dx);
@@ -369,17 +413,33 @@ void FindBarWnd::Layout(int forceBarDx) {
     if (!layout) {
         return;
     }
+    for (VirtIconButton* b : {btns[5], btns[6]}) b->SetVisibility(Visibility::Visible);
+    status->SetVisibility(Visibility::Visible);
+    statusBox->SetVisibility(Visibility::Visible);
+    gapAfterStatus->SetVisibility(Visibility::Visible);
+    edit->idealDx = edit->maxDx = UiScalePx(kFindBarMinEditDx);
     if (forceBarDx > 0) {
         Rect wr = HwndWindowRect(hwnd);
         Rect cr = HwndClientRect(hwnd);
         int nonClientDx = wr.dx - cr.dx;
-        int clientDx = std::max(forceBarDx - nonClientDx, layout->MinIntrinsicWidth(0));
+        int clientDx = std::max(1, forceBarDx - nonClientDx);
+        int fullFixed = layout->MinIntrinsicWidth(0) - edit->idealDx;
+        int navigationFixed = fullFixed - statusBox->dx - gapAfterStatus->dx - btns[5]->MinIntrinsicWidth(0) -
+                              btns[6]->MinIntrinsicWidth(0);
+        FindFieldFit fit = FitFindField(clientDx, fullFixed, navigationFixed, edit->idealDx);
+        if (fit.compact) {
+            for (VirtIconButton* b : {btns[5], btns[6]}) b->SetVisibility(Visibility::Collapse);
+            status->SetVisibility(Visibility::Collapse);
+            statusBox->SetVisibility(Visibility::Collapse);
+            gapAfterStatus->SetVisibility(Visibility::Collapse);
+        }
+        edit->idealDx = edit->maxDx = fit.editDx;
         inLayout = true;
         LayoutAndSizeToContent(layout, clientDx, 0, hwnd);
         DoLayout(HwndClientRect(hwnd).Size());
         inLayout = false;
     } else {
-        int extra = DpiScale(kFindBarDefaultEditDx - kFindBarMinEditDx);
+        int extra = UiScalePx(kFindBarDefaultEditDx - kFindBarMinEditDx);
         int minDx = layout->MinIntrinsicWidth(0) + extra;
         inLayout = true;
         LayoutAndSizeToContent(layout, minDx, 0, hwnd);
@@ -478,8 +538,9 @@ void FindBarWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
 // can be dragged; report that edge as a sizing border and the default
 // handling turns a drag there into a resize.
 void FindBarWnd::OnNcHitTest(WindowBase::NcHitTestEvent* ev) {
+    if (!ToolbarFindScreenRect(win).IsEmpty()) return;
     Rect wr = HwndWindowRect(hwnd);
-    if (ev->screenPos.x < wr.x + DpiScale(kFindBarResizeGripDx)) {
+    if (ev->screenPos.x < wr.x + UiScalePx(kFindBarResizeGripDx)) {
         ev->result = HTLEFT;
         ev->didHandle = true;
     }
@@ -501,9 +562,9 @@ void FindBarWnd::UpdateDpi(int dpi) {
     if (status) {
         status->font = appFont;
     }
-    int p = DpiScaleByDpi(dpi, kFindBarPadding);
-    int gap = DpiScaleByDpi(dpi, kFindBarGap);
-    int minEditDx = DpiScaleByDpi(dpi, kFindBarMinEditDx);
+    int p = UiScalePxForDpi(dpi, kFindBarPadding);
+    int gap = UiScalePxForDpi(dpi, kFindBarGap);
+    int minEditDx = UiScalePxForDpi(dpi, kFindBarMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
     if (gapAfterEdit) {
@@ -518,7 +579,7 @@ void FindBarWnd::UpdateDpi(int dpi) {
     if (statusBox && status) {
         statusBox->dx = FindStatusDx(status->font, statusTotalHits, statusCapped);
     }
-    int buttonPad = DpiScaleByDpi(dpi, 4);
+    int buttonPad = UiScalePxForDpi(dpi, 4);
     for (VirtIconButton* b : btns) {
         if (b) {
             b->padding = Insets{buttonPad, buttonPad, buttonPad, buttonPad};
@@ -549,6 +610,13 @@ void FindBarWnd::OnDpiChanged(WindowBase::DpiChangedEvent* ev) {
 }
 
 void FindBarWnd::OnKeyDown(KeyEvent* ev) {
+    if ((ev->vkey == VK_RETURN || ev->vkey == VK_SPACE) && vroot && vroot->focused && GetFocus() == hwnd) {
+        WindowBase::CommandEvent command;
+        command.wparam = vroot->focused->id;
+        OnCommand(&command);
+        ev->didHandle = true;
+        return;
+    }
     // the find edit lives in this owned popup, not as a child of the frame, so
     // the frame's edit accelerator table doesn't reach it; handle the find keys
     // here (Esc, Enter/Shift+Enter, F3/Shift+F3)
@@ -560,7 +628,10 @@ void FindBarWnd::OnKeyDown(KeyEvent* ev) {
             }
             break;
         case VK_ESCAPE:
-            HideFindBar(win);
+            if (CbIsDropped(edit))
+                SendMessageW(edit->hwnd, CB_SHOWDROPDOWN, FALSE, 0);
+            else
+                CollapseFindBar(win);
             ev->didHandle = true;
             break;
         case VK_RETURN:
@@ -600,12 +671,55 @@ void FindBarWnd::OnCommand(WindowBase::CommandEvent* ev) {
             ToggleFloatingFindUI(win); // pop out into the floating window
             break;
         case kFindBarCloseCmdId:
-            HideFindBar(win);
+            CollapseFindBar(win);
             break;
+        case kFindBarOptionsCmdId: {
+            HMENU menu = CreatePopupMenu();
+            AppendMenuW(menu, MF_STRING | (win->findMatchCase ? MF_CHECKED : 0), CmdFindToggleMatchCase,
+                        CWStrTemp(ToWStrTemp(Tr("Match Case"))));
+            AppendMenuW(menu, MF_STRING | (win->findMatchWholeWord ? MF_CHECKED : 0), CmdFindToggleMatchWholeWord,
+                        CWStrTemp(ToWStrTemp(Tr("Match Whole Word"))));
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(menu, MF_STRING, kFindBarPinCmdId, CWStrTemp(ToWStrTemp(Tr("Open in a window"))));
+            Rect anchor = HwndMapLtrClientRectToScreen(hwnd, btns[6]->BoundsInWindow());
+            inOptionsMenu = true;
+            MarkMenuOwnerDraw(menu);
+            int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0,
+                                        win->hwndFrame, nullptr);
+            FreeMenuOwnerDrawInfoData(menu);
+            DestroyMenu(menu);
+            inOptionsMenu = false;
+            if (picked) {
+                WindowBase::CommandEvent command;
+                command.wparam = picked;
+                OnCommand(&command);
+            }
+            break;
+        }
         default:
             return;
     }
     ev->didHandle = true;
+}
+
+void FindBarWnd::OnActivate(WindowBase::ActivateEvent* ev) {
+    if (ev->state == WA_INACTIVE && !inOptionsMenu) SetTimer(hwnd, kFindBarCollapseTimer, 40, nullptr);
+}
+
+void FindBarWnd::OnTimer(WindowBase::TimerEvent* ev) {
+    if (ev->timerId != kFindBarCollapseTimer) return;
+    KillTimer(hwnd, kFindBarCollapseTimer);
+    HWND focus = GetFocus();
+    if (!inOptionsMenu && !CbIsDropped(edit) && focus != hwnd && !IsChild(hwnd, focus)) CollapseFindBar(win);
+}
+
+void FindBarWnd::OnPaint(WindowBase::PaintEvent* ev) {
+    Rect rect = HwndClientRect(hwnd);
+    Gfx* gfx = GfxCreateWithDoubleBuffer(this, ev->hdc);
+    gfx->FillRect(rect, ThemeControlBackgroundColor());
+    gfx->FillRoundedRect(rect, rect.dy / 2, ThemeWindowControlBackgroundColor(), ThemeEdgeColor());
+    if (vroot) vroot->Paint(gfx, rect);
+    delete gfx;
 }
 
 //--- public API
@@ -620,6 +734,9 @@ FindBarWnd* CreateFindBar(MainWindow* win) {
     bar->onNcHitTest = MkMethod1<FindBarWnd, WindowBase::NcHitTestEvent*, &FindBarWnd::OnNcHitTest>(bar);
     bar->onDpiChanged = MkMethod1<FindBarWnd, WindowBase::DpiChangedEvent*, &FindBarWnd::OnDpiChanged>(bar);
     bar->onKeyDown = MkMethod1<FindBarWnd, KeyEvent*, &FindBarWnd::OnKeyDown>(bar);
+    bar->onActivate = MkMethod1<FindBarWnd, WindowBase::ActivateEvent*, &FindBarWnd::OnActivate>(bar);
+    bar->onTimer = MkMethod1<FindBarWnd, WindowBase::TimerEvent*, &FindBarWnd::OnTimer>(bar);
+    bar->onPaint = MkMethod1<FindBarWnd, WindowBase::PaintEvent*, &FindBarWnd::OnPaint>(bar);
     if (!bar->Create(win)) {
         delete bar;
         return nullptr;
@@ -704,12 +821,22 @@ void RecreateFindBar(MainWindow* win) {
 // is shown, else just below the frame top.
 static void PositionFindBar(FindBarWnd* bar) {
     MainWindow* win = bar->win;
+    Rect slot = ToolbarFindScreenRect(win);
+    if (!slot.IsEmpty()) {
+        if (bar->barDx != slot.dx) bar->Layout(slot.dx);
+        int y = slot.y + (slot.dy - bar->barDy) / 2;
+        SetWindowPos(bar->hwnd, HWND_TOP, slot.x, y, slot.dx, bar->barDy, SWP_NOACTIVATE);
+        return;
+    }
     Rect btn = GetToolbarButtonScreenRect(win, CmdFindFirst);
     Rect fr = HwndWindowRect(win->hwndFrame);
     // Align to the right edge of the client area, not the outer window rect:
     // HwndWindowRect includes the resize border (and sits off-screen when maximized),
     // which pushed the bar a few pixels too far right (#5762).
     Rect frClient = HwndMapLtrClientRectToScreen(win->hwndFrame, HwndClientRect(win->hwndFrame));
+    Rect work = PlatformWindowWorkArea(win->hwndFrame);
+    int available = std::max(1, std::min(frClient.dx, work.dx) - UiScalePx(12));
+    if (bar->barDx > available) bar->Layout(available);
     int cx = frClient.x + frClient.dx - bar->barDx;
     int cy;
     if (btn.IsEmpty()) {
@@ -741,6 +868,7 @@ static void ShowCompactBar(MainWindow* win) {
     // reflect the current match-case / whole-word state on the toggle buttons
     FindBarSetMatchCaseChecked(win, win->findMatchCase);
     FindBarSetMatchWholeWordChecked(win, win->findMatchWholeWord);
+    ToolbarSetFindExpanded(win, true, bar->MinBarDx(), UiScalePx(360));
     PositionFindBar(bar);
     ShowWindow(bar->hwnd, SW_SHOW);
     win->findEdit->SetFocus();
@@ -786,8 +914,19 @@ void HideFindBar(MainWindow* win) {
     }
     AbortFinding(win, true);
     ShowWindow(win->findBar->hwnd, SW_HIDE);
+    ToolbarSetFindExpanded(win, false);
     HwndSetFocus(win->hwndFrame);
     ScheduleRepaint(win, 0);
+}
+
+void CollapseFindBar(MainWindow* win) {
+    if (!win || !win->findBar) return;
+    auto* bar = win->findBar;
+    bool hadFocus = GetFocus() == bar->hwnd || IsChild(bar->hwnd, GetFocus());
+    KillTimer(bar->hwnd, kFindBarCollapseTimer);
+    ShowWindow(bar->hwnd, SW_HIDE);
+    ToolbarSetFindExpanded(win, false);
+    if (hadFocus) HwndSetFocus(win->hwndFrame);
 }
 
 // note: the floating window is not anchored to the search icon, so "visible"
@@ -944,6 +1083,7 @@ void FindBarReposition(MainWindow* win) {
         HideFindBar(win);
         return;
     }
+    ToolbarSetFindExpanded(win, true, win->findBar->MinBarDx(), UiScalePx(360));
     PositionFindBar(win->findBar);
 }
 
@@ -987,6 +1127,7 @@ void FindBarSetStatus(MainWindow* win, Str s, int totalHits) {
     } else {
         bar->Layout();
     }
+    FindBarReposition(win);
 }
 
 // idx into FindBarWnd::btns

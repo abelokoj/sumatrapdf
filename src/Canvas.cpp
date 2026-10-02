@@ -92,23 +92,53 @@ constexpr int kRenderDelayShowNotif = 500;
 // A laser pointer is a session mode, not a setting: it's turned on to point
 // things out during a presentation and off again afterwards, and an app that
 // started up with the mouse cursor replaced by a red dot would look broken.
-constexpr DWORD kLaserTrailLifetimeMs = 2000;
-constexpr int kLaserTrailMaxPoints = 256;
+float NormalizeLaserWidth(float width) {
+    return isfinite(width) ? limitValue(width, 0.1f, 32.f) : 8.f;
+}
+
+#if IS_DEBUG
+bool Canvas_UnitTestLaserWidth() {
+    return NormalizeLaserWidth(-1.f) == 0.1f && NormalizeLaserWidth(0.1f) == 0.1f && NormalizeLaserWidth(8.f) == 8.f &&
+           NormalizeLaserWidth(32.f) == 32.f && NormalizeLaserWidth(100.f) == 32.f && NormalizeLaserWidth(NAN) == 8.f &&
+           NormalizeLaserWidth(INFINITY) == 8.f;
+}
+#endif
+
+static DWORD LaserLifetimeMs() {
+    float seconds = gSettings ? gSettings->laserLifetimeSeconds : 2.f;
+    return (DWORD)(limitValue(seconds, 0.1f, 120.f) * 1000.f);
+}
+
+static bool LaserStrokeExpired(DWORD now, DWORD finished, DWORD lifetime, bool active) {
+    return !active && now - finished >= lifetime;
+}
+
+#if IS_DEBUG
+bool Canvas_UnitTestLaserExpiry() {
+    return !LaserStrokeExpired(1999, 0, 2000, false) && LaserStrokeExpired(2000, 0, 2000, false) &&
+           !LaserStrokeExpired(120000, 0, 100, true) && !LaserStrokeExpired(99, 0, 100, false) &&
+           LaserStrokeExpired(100, 0, 100, false) && !LaserStrokeExpired(119999, 0, 120000, false) &&
+           LaserStrokeExpired(120000, 0, 120000, false) && !LaserStrokeExpired(49, MAXDWORD - 50, 101, false) &&
+           LaserStrokeExpired(50, MAXDWORD - 50, 101, false);
+}
+#endif
+constexpr int kLaserTrailMaxPoints = 65536;
 constexpr UINT kLaserTrailRefreshMs = 30;
 
 // logical size of the cursor bitmap. The dot itself is a small part of it,
 // the rest is the glow fading out to fully transparent
-constexpr int kLaserPointerCursorSize = 32;
+constexpr int kLaserCursorMinSize = 16;
 
 static HCURSOR gCursorLaserPointer = nullptr;
 static int gCursorLaserPointerSize = 0;
+static float gCursorLaserPointerWidth = 0;
 static Color gCursorLaserPointerColor = 0;
 static LaserPointerMode gCursorLaserPointerMode = LaserPointerMode::Solid;
 
 // A laser dot: a white-hot center inside a colored core, surrounded by a
 // glow that fades to transparent so the dot is visible on light and dark pages
 // alike. The hotspot is the center of the dot, unlike an arrow's tip.
-static HCURSOR CreateLaserPointerCursor(int size, Color color, LaserPointerMode mode) {
+static HCURSOR CreateLaserPointerCursor(int size, Color color, LaserPointerMode mode, float diameter) {
     u8 colorR, colorG, colorB;
     UnpackColor(color, colorR, colorG, colorB);
     BITMAPINFO bmi{};
@@ -128,8 +158,8 @@ static HCURSOR CreateLaserPointerCursor(int size, Color color, LaserPointerMode 
 
     float center = (float)size / 2.f;
     float glowR = center;
-    float coreR = (float)size * 0.16f;
-    float hotR = (float)size * 0.07f;
+    float coreR = diameter / 2.f;
+    float hotR = std::max(coreR * 0.4f, 0.1f);
     DWORD* pixels = (DWORD*)bits;
     for (int y = 0; y < size; y++) {
         for (int x = 0; x < size; x++) {
@@ -192,12 +222,14 @@ static HCURSOR CreateLaserPointerCursor(int size, Color color, LaserPointerMode 
 // the cursor is sized for the DPI of the window it's shown in, so it's
 // re-created when the canvas moves to a monitor with a different scaling
 static HCURSOR GetLaserPointerCursor(MainWindow* win) {
-    int size = DpiScale(kLaserPointerCursorSize);
+    float width = NormalizeLaserWidth(gSettings->laserWidth);
+    float diameter = width * (float)DpiScale(100) / 100.f;
+    int size = std::max(DpiScale(kLaserCursorMinSize), (int)ceilf(diameter * 3.f));
     if (gCursorLaserPointer && gCursorLaserPointerSize == size && gCursorLaserPointerColor == win->laserPointerColor &&
-        gCursorLaserPointerMode == win->laserPointerMode) {
+        gCursorLaserPointerMode == win->laserPointerMode && gCursorLaserPointerWidth == width) {
         return gCursorLaserPointer;
     }
-    HCURSOR cur = CreateLaserPointerCursor(size, win->laserPointerColor, win->laserPointerMode);
+    HCURSOR cur = CreateLaserPointerCursor(size, win->laserPointerColor, win->laserPointerMode, diameter);
     if (!cur) {
         // a cursor of the wrong size beats no cursor at all
         return gCursorLaserPointer;
@@ -207,6 +239,7 @@ static HCURSOR GetLaserPointerCursor(MainWindow* win) {
     }
     gCursorLaserPointer = cur;
     gCursorLaserPointerSize = size;
+    gCursorLaserPointerWidth = width;
     gCursorLaserPointerColor = win->laserPointerColor;
     gCursorLaserPointerMode = win->laserPointerMode;
     return cur;
@@ -347,8 +380,25 @@ static void AddLaserPoint(MainWindow* win, Point point, LaserSample sample) {
     }
     VecAppend(points, {point, (DWORD)GetTickCount64(), sample == LaserSample::Start});
     win->laserPointerRepaint = true;
-    SetTimer(win->hwndCanvas, kLaserTrailTimerID, kLaserTrailRefreshMs, nullptr);
+    if (sample == LaserSample::Start) {
+        SetTimer(win->hwndCanvas, kLaserTrailTimerID, kLaserTrailRefreshMs, nullptr);
+    }
     HwndInvalidate(win->hwndCanvas);
+}
+
+static void FinishLaserStroke(MainWindow* win) {
+    if (!win->laserPointerDown) {
+        return;
+    }
+    DWORD now = (DWORD)GetTickCount64();
+    // A held stroke stays intact; its lifetime starts when the pen lifts.
+    for (int i = len(win->laserTrail) - 1; i >= 0; i--) {
+        win->laserTrail[i].time = now;
+        if (win->laserTrail[i].start) {
+            break;
+        }
+    }
+    win->laserPointerDown = false;
 }
 
 static void FadeLaserTrail(MainWindow* win) {
@@ -356,22 +406,33 @@ static void FadeLaserTrail(MainWindow* win) {
         ClearLaserTrail(win);
         return;
     }
-    win->laserPointerRepaint = true;
     DWORD now = (DWORD)GetTickCount64();
+    DWORD lifetime = LaserLifetimeMs();
     Vec<LaserTrailPoint>& points = win->laserTrail;
-    if (win->laserPointerMode == LaserPointerMode::Dot && win->laserPointerDown && len(points) > 0) {
-        VecLast(points).time = now;
-    }
-    while (len(points) > 0 && now - points[0].time >= kLaserTrailLifetimeMs) {
-        VecRemoveAt(points, 0);
+    bool changed = false;
+    while (len(points) > 0) {
+        int end = 1;
+        while (end < len(points) && !points[end].start) {
+            end++;
+        }
+        bool active = win->laserPointerDown && end == len(points);
+        if (!LaserStrokeExpired(now, points[0].time, lifetime, active)) {
+            break;
+        }
+        VecRemoveAtN(points, 0, end);
+        changed = true;
     }
     if (len(points) == 0) {
         KillTimer(win->hwndCanvas, kLaserTrailTimerID);
     }
-    HwndInvalidate(win->hwndCanvas);
+    // No fading or repaint loop while idle: remove each stroke once.
+    if (changed) {
+        win->laserPointerRepaint = true;
+        HwndInvalidate(win->hwndCanvas);
+    }
 }
 
-static void PaintLaserTrail(MainWindow* win, HDC hdc) {
+static void PaintLaserTrail(MainWindow* win, HDC hdc, Rect repaint) {
     if (len(win->laserTrail) > 0 && LaserContextChanged(win)) {
         ResetLaserTrail(win);
     }
@@ -380,51 +441,64 @@ static void PaintLaserTrail(MainWindow* win, HDC hdc) {
         return;
     }
     Gdiplus::Graphics graphics(hdc);
+    graphics.SetClip(Gdiplus::Rect(repaint.x, repaint.y, repaint.dx, repaint.dy));
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     u8 r, g, b;
     UnpackColor(win->laserPointerColor, r, g, b);
+    Gdiplus::Color color(230, r, g, b);
+    Gdiplus::SolidBrush brush(color);
     DWORD now = (DWORD)GetTickCount64();
-    float radius = (float)DpiScale(4);
-    for (int i = 0; i < len(win->laserTrail); i++) {
-        LaserTrailPoint& sample = win->laserTrail[i];
-        DWORD age = now - sample.time;
-        if (age >= kLaserTrailLifetimeMs) {
+    DWORD lifetime = LaserLifetimeMs();
+    float diameter = NormalizeLaserWidth(gSettings->laserWidth) * (float)DpiScale(100) / 100.f;
+    float radius = diameter / 2.f;
+    float rim = std::min(diameter / 3.f, (float)DpiScale(2));
+    auto& points = win->laserTrail;
+    for (int start = 0; start < len(points);) {
+        int end = start + 1;
+        while (end < len(points) && !points[end].start) {
+            end++;
+        }
+        bool active = win->laserPointerDown && end == len(points);
+        if (LaserStrokeExpired(now, points[start].time, lifetime, active)) {
+            start = end;
             continue;
         }
-        u8 alpha = (u8)(230.f * (1.f - (float)age / (float)kLaserTrailLifetimeMs));
-        Gdiplus::Color color(alpha, r, g, b);
-        Point point = sample.point;
-        if (win->laserPointerMode != LaserPointerMode::Hollow) {
-            Gdiplus::SolidBrush brush(color);
-            graphics.FillEllipse(&brush, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
-            if (win->laserPointerMode == LaserPointerMode::Solid && i > 0 && !sample.start) {
-                Point previous = win->laserTrail[i - 1].point;
-                Gdiplus::Pen pen(color, radius * 2);
-                pen.SetStartCap(Gdiplus::LineCapRound);
-                pen.SetEndCap(Gdiplus::LineCapRound);
-                graphics.DrawLine(&pen, previous.x, previous.y, point.x, point.y);
+        Point first = points[start].point;
+        if (end - start == 1) {
+            if (win->laserPointerMode == LaserPointerMode::Hollow) {
+                Gdiplus::Pen outline(color, rim);
+                graphics.DrawEllipse(&outline, (float)first.x - radius, (float)first.y - radius, radius * 2,
+                                     radius * 2);
+            } else {
+                graphics.FillEllipse(&brush, (float)first.x - radius, (float)first.y - radius, radius * 2, radius * 2);
             }
-        } else {
-            Gdiplus::Pen pen(color, (float)DpiScale(1));
-            if (i == 0 || sample.start) {
-                graphics.DrawEllipse(&pen, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
-                continue;
-            }
-            Point previous = win->laserTrail[i - 1].point;
-            float dx = (float)(point.x - previous.x), dy = (float)(point.y - previous.y);
-            float distance = sqrtf(dx * dx + dy * dy);
-            if (distance < 1.f) {
-                continue;
-            }
-            float ox = -dy * radius / distance, oy = dx * radius / distance;
-            graphics.DrawLine(&pen, (float)previous.x + ox, (float)previous.y + oy, (float)point.x + ox,
-                              (float)point.y + oy);
-            graphics.DrawLine(&pen, (float)previous.x - ox, (float)previous.y - oy, (float)point.x - ox,
-                              (float)point.y - oy);
-            if (i == len(win->laserTrail) - 1 || win->laserTrail[i + 1].start) {
-                graphics.DrawEllipse(&pen, (float)point.x - radius, (float)point.y - radius, radius * 2, radius * 2);
-            }
+            start = end;
+            continue;
         }
+        Gdiplus::GraphicsPath path;
+        Vec<Gdiplus::PointF> pathPoints;
+        for (int i = start; i < end; i++) {
+            VecAppend(pathPoints, Gdiplus::PointF((float)points[i].point.x, (float)points[i].point.y));
+        }
+        path.AddLines(pathPoints.els, len(pathPoints));
+        Gdiplus::Pen pen(color, radius * 2);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        if (win->laserPointerMode == LaserPointerMode::Hollow) {
+            // Subtract the inner path so the PDF remains visible inside the line.
+            Gdiplus::GraphicsPath outer;
+            outer.AddPath(&path, FALSE);
+            outer.Widen(&pen);
+            pen.SetWidth(diameter - rim * 2);
+            path.Widen(&pen);
+            Gdiplus::Region outline(&outer);
+            outline.Exclude(&path);
+            graphics.FillRegion(&brush, &outline);
+        } else {
+            graphics.DrawPath(&pen, &path);
+        }
+        start = end;
     }
 }
 
@@ -2832,10 +2906,7 @@ static void OnMouseLeftButtonUp(MainWindow* win, int x, int y, WPARAM key) {
             return;
         }
         AddLaserPoint(win, Point{x, y}, LaserSample::Move);
-        win->laserPointerDown = false;
-        if (win->laserPointerMode == LaserPointerMode::Dot) {
-            ClearLaserTrail(win);
-        }
+        FinishLaserStroke(win);
         if (GetCapture() == win->hwndCanvas) {
             ReleaseCapture();
         }
@@ -3779,7 +3850,7 @@ static void PaintPdfPageBoxes(DisplayModel* dm, HDC hdc) {
         return;
     }
     Rect viewPortRect(Point(), dm->GetViewPort().Size());
-    PlatformFont* font = GetDefaultGuiFont(true, false);
+    PlatformFont* font = GetBoldPlatformFont(GetAppFont());
     HFONT hfont = font ? font->GetHFont() : nullptr;
 
     Vec<PdfPageBox> boxes;
@@ -4196,7 +4267,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
         // check if this page is known to have failed rendering
         if (pi->failedToRender) {
             shouldPaint = true;
-            PlatformFont* fontRightTxt = HdcCreateSimpleFont(hdc, StrL("MS Shell Dlg"), 14);
+            PlatformFont* fontRightTxt = GetAppFont();
             HGDIOBJ hPrevFont = SelectObject(hdc, fontRightTxt->GetHFont());
             auto prevCol = SetTextColor(hdc, colDocTxt);
             TempStr msg = fmt(Tr("Couldn't render page %d").s, pageNo);
@@ -4215,7 +4286,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
             }
         }
         if (renderDelay != 0) {
-            PlatformFont* fontRightTxt = HdcCreateSimpleFont(hdc, StrL("MS Shell Dlg"), 14);
+            PlatformFont* fontRightTxt = GetAppFont();
             HGDIOBJ hPrevFont = SelectObject(hdc, fontRightTxt->GetHFont());
             if (renderDelay != kRenderDelayFailed) {
                 if (renderDelay < kRenderDelayShowNotif) {
@@ -4387,10 +4458,11 @@ static void OnPaintDocument(MainWindow* win) {
         // Flush when the focus ring is needed so DrawFocusRect is not XOR'd
         // on top of a stale frame that already had a ring.
         bool showFocus = CanvasShouldShowKeyboardFocus(win);
+        // Compose temporary ink off screen, then present the complete frame once.
+        PaintLaserTrail(win, win->buffer->GetDC(), ToRect(ps.rcPaint));
         if (!gNoFlickerRender || shouldPaint || showFocus || win->laserPointerActive || win->laserPointerRepaint) {
             win->buffer->Flush(hdc);
         }
-        PaintLaserTrail(win, hdc);
         win->laserPointerRepaint = false;
     }
     DrawCanvasKeyboardFocusIfNeeded(win, hdc);
@@ -5496,8 +5568,9 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
             mouseWp = MK_LBUTTON;
         }
         bool ink = IsPlacingInkAnnotation(win) && win->inkEraseMode == 0;
+        bool laser = win->laserPointerActive && win->laserPointerDown;
         bool usedHistory = false;
-        if (ink && inContact && DynGetPointerPenInfoHistory) {
+        if ((ink || laser) && inContact && DynGetPointerPenInfoHistory) {
             constexpr UINT32 kPenHistoryCapacity = 128;
             SumatraPointerPenInfo history[kPenHistoryCapacity]{};
             UINT32 count = kPenHistoryCapacity;
@@ -5524,7 +5597,7 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
                 AddInkPressure(win, penInfo.pressure);
             }
         }
-        if (ink && inContact) {
+        if ((ink || laser) && inContact) {
             UpdateWindow(hwnd);
         }
         return true;
@@ -5581,10 +5654,7 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
             return 0;
 
         case WM_CAPTURECHANGED:
-            win->laserPointerDown = false;
-            if (win->laserPointerMode == LaserPointerMode::Dot) {
-                ClearLaserTrail(win);
-            }
+            FinishLaserStroke(win);
             ReadingBarCancelDrag(win);
             return 0;
 
@@ -5793,7 +5863,7 @@ static void OnPaintDocumentStatus(MainWindow* win) {
     SetLayout(hdc, 0);
 
     Gfx* gfx = GfxCreate(hdc);
-    PlatformFont* fontRightTxt = GetUserGuiFont(StrL("MS Shell Dlg"), DpiScale(14));
+    PlatformFont* fontRightTxt = GetAppFont();
     auto bgCol = ThemeMainWindowBackgroundColor();
     gfx->FillRect(ToRect(ps.rcPaint), bgCol);
     auto* tab = win->CurrentTab();

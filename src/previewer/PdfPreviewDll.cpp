@@ -161,7 +161,7 @@ STDAPI DllRegisterServer() {
 STDAPI DllUnregisterServer() {
     log(StrL("DllUnregisterServer\n"));
 
-    bool ok = UninstallPreviewDll();
+    bool ok = UninstallPreviewDll(GetSelfExePathTemp());
     if (!ok) {
         log(StrL("DllUnregisterServer failed!\n"));
         return E_FAIL;

@@ -19,6 +19,8 @@ struct VirtHost;
 struct VirtIconButton;
 struct Edit;
 struct ILayout;
+struct ToolbarLine;
+struct Spacer;
 
 void CreateToolbar(MainWindow*);
 void ReCreateToolbar(MainWindow* win);
@@ -43,6 +45,9 @@ void UpdateToolbarState(MainWindow*);
 void UpdateToolbarAfterThemeChange(MainWindow*);
 Rect GetToolbarButtonScreenRect(MainWindow*, int cmdId);
 void ToolbarNoteDropdownClosed();
+void ToolbarSetFindExpanded(MainWindow*, bool expanded, int minWidth = 0, int preferredWidth = 0);
+Rect ToolbarFindScreenRect(MainWindow*);
+bool FocusToolbar(MainWindow*, bool backwards = false);
 void TogglePdfAnnotationsToolbar(MainWindow*);
 void EnablePdfAnnotationsToolbar(MainWindow*);
 int ToolbarIconSize();
@@ -57,7 +62,7 @@ TempStr ToolbarButtonsResultTemp(int* exitCodeOut);
 // there; NewToolbarHoverMenu() builds the menu-like rows most of them want.
 
 // one item: an icon, a label and the command a click runs. NewToolbarHoverMenu()
-// makes each a menu-like row, NewToolbarHoverStrip() a cell in a pyramid.
+// makes each a menu-like row, NewToolbarHoverStrip() a cell in a compact grid.
 struct ToolbarHoverMenuItem {
     Str svgIcon;
     Str text;
@@ -84,9 +89,6 @@ struct ToolbarHoverBuildEvent {
 // closing it and opening it again under the other button
 void SetToolbarHoverDropdown(MainWindow*, int cmdId, const Func1<ToolbarHoverBuildEvent*>&, int groupId = 0);
 ILayout* NewToolbarHoverMenu(MainWindow*, const Vec<ToolbarHoverMenuItem>&);
-// the items as a compact pyramid of labels rather than a column of menu rows:
-// the widest row on top holds the middle of the list, each row below it what
-// surrounds the middle, the last one the two ends
 ILayout* NewToolbarHoverStrip(MainWindow*, const Vec<ToolbarHoverMenuItem>&);
 void HideToolbarHoverDropdown(MainWindow*);
 bool ToolbarHoverDropdownContainsScreenPoint(MainWindow*, Point);
@@ -112,6 +114,8 @@ TempStr AnnotColorPopupStateTemp();
 // covered by other HWNDs. They need the right size
 constexpr int PageInfoId = (int)CmdLast + 16;
 constexpr int WarningMsgId = (int)CmdLast + 17;
+constexpr int ToolbarOverflowId = (int)CmdLast + 18;
+constexpr int ToolbarAnnotOverflowId = (int)CmdLast + 19;
 
 // the overlay toolbar's delayed-hide timer, on the toolbar's own host
 constexpr int kHideOverlayToolbarTimerId = 0x101;
@@ -146,6 +150,17 @@ struct ToolbarVirt {
     Vec<VirtCtrl*> pinnedItems;
     Edit* zoomEdit = nullptr;
     ILayout* annotationRow = nullptr;
+    ToolbarLine* mainRow = nullptr;
+    ToolbarLine* annotationLine = nullptr;
+    Spacer* findSlot = nullptr;
+    VirtCtrl* findButton = nullptr;
+    VirtIconButton* overflowButton = nullptr;
+    VirtIconButton* annotationOverflowButton = nullptr;
+    Vec<VirtCtrl*> overflowItems;
+    Vec<VirtCtrl*> annotationOverflowItems;
+    bool findExpanded = false;
+    int findMinWidth = 0;
+    int findPreferredWidth = 0;
     VirtText* pageLabel = nullptr;
     VirtText* pageLabel2 = nullptr; // "Page:" before pageEdit, only for HasChapters() docs
     VirtText* pageTotal = nullptr;
@@ -181,3 +196,7 @@ void ToolbarFocusFrame(MainWindow*);
 bool ToolbarFrameIsVisible(MainWindow*);
 void ToolbarPostCommand(MainWindow*, int cmdId);
 void ToolbarSetHeight(MainWindow*, int dy);
+
+#if IS_DEBUG
+void ToolbarLayout_UnitTests();
+#endif

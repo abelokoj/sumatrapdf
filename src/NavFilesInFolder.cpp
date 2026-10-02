@@ -119,6 +119,7 @@ struct NavFilesInFolderWnd : WindowBase {
     StrVec filterWords;
     Vec<u8> highlighted; // scratch for DrawMaybeHighlightedText
     VirtListBox* listBox = nullptr;
+    VirtRichText* hints = nullptr;
     Str currDir; // owned; empty in the home view
     int scanGen = 0;
     bool scanInFlight = false;
@@ -1414,8 +1415,9 @@ bool NavFilesInFolderWnd::Create(MainWindow* mainWin, Str filePath) {
         TempStr hints = fmt("(Kbd/%s) %s (Kbd/%s) %s (Kbd/%s) %s", Tr("Enter"), Tr("open in current tab"),
                             Tr("Ctrl + Enter"), Tr("open in new tab"), Tr("Del"), Tr("delete file"));
         // the hints are secondary information, so they get a smaller font
-        PlatformFont* helpFont = GetDefaultGuiFontOfSize(std::max(GetAppFontSize() - 2, 8));
+        PlatformFont* helpFont = GetUserGuiFont(GetAppFontFamily(), std::max(GetAppFontSize() - 2, 8));
         auto* k = new VirtRichText();
+        this->hints = k;
         ParseTipInto(k, hints);
         k->font = helpFont;
         k->SetColor(kColRichText, colTxt);
@@ -1461,6 +1463,28 @@ bool NavFilesInFolderWnd::Create(MainWindow* mainWin, Str filePath) {
     SetIsVisible(true);
     SetFocusTo(listBox);
     return true;
+}
+
+void RefreshNavFilesFont() {
+    NavFilesInFolderWnd* w = gNavFilesWnd;
+    if (!w || !w->hwnd) return;
+    DpiScope dpiScope(w->hwnd);
+    PlatformFont* font = GetAppFont();
+    w->SetFont(font);
+    if (w->dirLabel) w->dirLabel->font = font;
+    if (w->dirEdit) w->dirEdit->SetFont(font);
+    if (w->filterEdit) w->filterEdit->SetFont(font);
+    if (w->hints) {
+        w->hints->font = GetUserGuiFont(GetAppFontFamily(), std::max(GetAppFontSize() - 2, 8));
+    }
+    if (w->listBox) w->listBox->font = font;
+    w->DoLayout();
+    if (w->editingPath && w->dirEdit) {
+        Rect editRc = w->PathEditRect();
+        w->dirEdit->SetPos(&editRc);
+    }
+    if (w->listBox) w->listBox->EnsureVisible(w->listBox->GetCurrentSelection());
+    HwndInvalidate(w->hwnd, true);
 }
 
 void ShowNavFilesInFolder(MainWindow* win, Str selectPath, bool skipHistory) {

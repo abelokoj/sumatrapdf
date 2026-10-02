@@ -176,6 +176,7 @@ static Rect PositionHelpWindow(NativeWnd parent, bool fullscreen, Size size) {
 // containers (VBox / HBox / Table) place everything
 struct KeyboardHelpWnd : WindowBase {
     HWND parentFrame = nullptr;
+    KeyboardHelpDataSource* dataSource = nullptr;
     ScrollBox* scroll = nullptr;
     VirtCloseButton* closeBtn = nullptr;
 
@@ -307,7 +308,7 @@ static void ApplyKeyboardHelpCloseDpi(VirtCloseButton* closeBtn, int dpi) {
 
 static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, Str title, ScrollBox** scrollOut,
                                         VirtCloseButton** closeOut) {
-    PlatformFont* fontRow = GetDefaultGuiFont();
+    PlatformFont* fontRow = GetAppFont();
     PlatformFont* fontHeader = GetBoldPlatformFont(fontRow);
     PlatformFont* fontTitle = GetScaledPlatformFont(fontHeader, 125);
     if (!fontRow || !fontHeader || !fontTitle) {
@@ -461,6 +462,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, Str title, S
 bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
     parentFrame = (HWND)helpArgs.parent;
     KeyboardHelpDataSource* ds = helpArgs.dataSource ? helpArgs.dataSource : GetDefaultKeyboardHelpDataSource();
+    dataSource = ds;
     // scale to the monitor the parent (and so the help) is on
     DpiScope dpiScope(parentFrame);
     Str title = ds->Translate(StrL("Keyboard Shortcuts"));
@@ -513,6 +515,36 @@ void KeyboardHelpWnd::OnDpiChanged(WindowBase::DpiChangedEvent* ev) {
     ApplyKeyboardHelpCloseDpi(closeBtn, dpi);
     DoLayout();
     ev->didHandle = true;
+}
+
+void RefreshKeyboardHelpFont() {
+    KeyboardHelpWnd* w = gKeyboardHelpWnd;
+    if (!w || !w->hwnd || !w->dataSource) return;
+    DpiScope dpiScope(w->hwnd);
+    int scrollY = w->scroll ? w->scroll->scrollY : 0;
+    bool closeFocused = w->vroot && w->vroot->focused == w->closeBtn;
+    ScrollBox* scroll = nullptr;
+    VirtCloseButton* closeBtn = nullptr;
+    ILayout* layout = BuildKeyboardHelpLayout(w->dataSource, w->dataSource->Translate(StrL("Keyboard Shortcuts")),
+                                              &scroll, &closeBtn);
+    if (!layout) return;
+    delete w->vroot;
+    w->vroot = nullptr;
+    delete w->layout;
+    w->layout = layout;
+    w->scroll = scroll;
+    w->closeBtn = closeBtn;
+    Rect rect = HwndWindowRect(w->hwnd);
+    Rect work = PlatformWindowWorkArea(w->hwnd);
+    Size ideal = layout->Layout(ExpandInf());
+    int chromeDx = rect.dx - HwndClientRect(w->hwnd).dx;
+    int wantDx = std::max(rect.dx, ideal.dx + chromeDx);
+    if (!work.IsEmpty()) wantDx = std::min(wantDx, work.dx);
+    SetWindowPos(w->hwnd, nullptr, rect.x, rect.y, wantDx, rect.dy, SWP_NOZORDER | SWP_NOACTIVATE);
+    w->DoLayout();
+    scroll->ScrollTo(scrollY);
+    if (closeFocused && w->vroot) w->vroot->SetFocus(closeBtn);
+    HwndInvalidate(w->hwnd, true);
 }
 
 void ToggleKeyboardHelp(const KeyboardHelpArgs& args) {

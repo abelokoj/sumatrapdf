@@ -3,6 +3,14 @@
 
 struct VirtRoot;
 
+#define kEnhancedAppName "SumatraPDF Enhanced"
+constexpr const char* kEnhancedDataDirName = "SumatraPDF Enhanced-data";
+constexpr const char* kEnhancedExeName = "SumatraPDFEnhanced.exe";
+constexpr Color kEnhancedInstallerBg = MkRgb(0xf2, 0xf8, 0xf4);
+
+bool IsSafeEnhancedInstallDir(Str dir);
+TempStr EnhancedInstallDirTemp(Str parent);
+
 constexpr int kInstallerWinDy = 340;
 
 // DWORD 0|1 in the uninstall key: whether the install created a desktop shortcut

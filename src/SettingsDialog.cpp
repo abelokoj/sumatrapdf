@@ -50,6 +50,7 @@ struct SettingsWnd : WindowBase {
     DropDown* dropZoom = nullptr;
     DropDown* dropInverse = nullptr;
     DropDown* dropUiFamily = nullptr;
+    DropDown* dropInterfaceScale = nullptr;
     DropDown* dropUiSize = nullptr;
     DropDown* dropTreeSize = nullptr;
     DropDown* dropThumbnailSize = nullptr;
@@ -70,6 +71,12 @@ struct SettingsWnd : WindowBase {
     Checkbox* chkUseTabs = nullptr;
     Checkbox* chkCheckUpdates = nullptr;
     Checkbox* chkRememberOpened = nullptr;
+
+    VirtRichText* dataLocation = nullptr;
+    void UpdateDataLocation();
+    void ChooseDataFolder(VirtMouseEvent*);
+    void RestoreDataFolder(VirtMouseEvent*);
+    void ApplyDataFolder(Str folder);
 
     VirtButton* btnCancel = nullptr;
     VirtButton* btnOk = nullptr;
@@ -132,6 +139,59 @@ static double SelectedNumber(DropDown* drop, double fallback, double minimum, do
     return limitValue(value, minimum, maximum);
 }
 
+void SettingsWnd::UpdateDataLocation() {
+    dataLocation->Reset();
+    dataLocation->AddPlainText(fmt("%s %s", Tr("Current folder:"), GetAppDataDirTemp()));
+    if (GetPendingDataDirTemp()) {
+        dataLocation->AddPlainText(fmt("%s %s", Tr("After restart:"), GetPendingDataDirTemp()));
+    }
+    DoLayout();
+    HwndInvalidate(hwnd);
+}
+
+void SettingsWnd::ApplyDataFolder(Str folder) {
+    Str message =
+        Tr("Copy current settings, dictionaries, vocabulary and reading data to this folder on the next "
+           "restart?\n\nYes: copy into an empty folder and keep the originals.\nNo: use data already in the selected "
+           "folder; your current data stays where it is.\nCancel: keep the current location.\n\nPDF files and "
+           "annotations saved inside PDFs are not moved.");
+    int choice =
+        MessageBoxW(hwnd, CWStrTemp(message), CWStrTemp(Tr("Change data folder")), MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (choice == IDCANCEL) return;
+    ScheduleSaveSettings();
+    FlushScheduledSaveSettings();
+    Str error;
+    bool ok =
+        RequestDataFolder(folder, choice == IDYES ? DataFolderMode::CopyCurrent : DataFolderMode::UseExisting, error);
+    if (!ok) {
+        MessageBoxW(hwnd, CWStrTemp(error), CWStrTemp(Tr("Data folder unchanged")), MB_OK | MB_ICONWARNING);
+        str::Free(error);
+        return;
+    }
+    UpdateDataLocation();
+    MessageBoxW(hwnd,
+                CWStrTemp(Tr("The folder choice is saved. Close all SumatraPDF Enhanced windows and restart to apply "
+                             "it. The app continues using its current data until then.")),
+                CWStrTemp(Tr("Restart required")), MB_OK | MB_ICONINFORMATION);
+}
+
+void SettingsWnd::ChooseDataFolder(VirtMouseEvent*) {
+    BROWSEINFOW args{};
+    args.hwndOwner = hwnd;
+    args.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    args.lpszTitle = CWStrTemp(Tr("Choose the folder for SumatraPDF Enhanced data"));
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&args);
+    if (!item) return;
+    WCHAR folder[MAX_PATH];
+    bool ok = SHGetPathFromIDListW(item, folder) != FALSE;
+    CoTaskMemFree(item);
+    if (ok) ApplyDataFolder(ToUtf8Temp(folder));
+}
+
+void SettingsWnd::RestoreDataFolder(VirtMouseEvent*) {
+    ApplyDataFolder(GetDefaultDataDirTemp());
+}
+
 static SettingsWnd* gSettingsWnd = nullptr;
 
 static void ClearSettingsWnd() {
@@ -169,7 +229,7 @@ void SettingsWnd::FillZoom() {
         return;
     }
     startZoom = gSettings ? gSettings->defaultZoomFloat : 0;
-    CollectZoomLevels(zoomLevels, false);
+    CollectZoomPickerLevels(zoomLevels);
     StrVec items;
     for (float z : zoomLevels) {
         items.Append(ZoomLevelStrExact(z));
@@ -185,7 +245,7 @@ void SettingsWnd::FillZoom() {
     if (sel >= 0) {
         CbSetCurrentSelection(dropZoom, sel);
     } else {
-        dropZoom->SetText(fmt("%.0f%%", startZoom));
+        dropZoom->SetText(ZoomLevelStrExact(startZoom));
     }
 }
 
@@ -267,10 +327,12 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     static const Str families[] = {StrL("system"), StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")};
     int familyIndex = CbGetCurrentSelection(dropUiFamily);
     Str family = familyIndex >= 0 && familyIndex < dimofi(families) ? families[familyIndex] : gSettings->uIFontFamily;
-    bool fontsChanged = uiSize != gSettings->uIFontSize || treeSize != gSettings->treeFontSize ||
-                        !str::EqI(family, gSettings->uIFontFamily);
+    int interfaceScale = (int)SelectedNumber(dropInterfaceScale, gSettings->interfaceScale, 50, 250);
+    bool fontsChanged = interfaceScale != gSettings->interfaceScale || uiSize != gSettings->uIFontSize ||
+                        treeSize != gSettings->treeFontSize || !str::EqI(family, gSettings->uIFontFamily);
     str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
     gSettings->uIFontSize = uiSize;
+    gSettings->interfaceScale = interfaceScale;
     gSettings->treeFontSize = treeSize;
     gSettings->homePageThumbnailSize =
         SelectedSize(dropThumbnailSize, thumbnailSizes, gSettings->homePageThumbnailSize);
@@ -348,10 +410,11 @@ static DropDown* MakeDropDown(HWND parent, PlatformFont* font, bool isRtl, bool 
     return c;
 }
 
-static Checkbox* MakeCheckbox(HWND parent, Str text, bool isRtl, bool checked, int topPt) {
+static Checkbox* MakeCheckbox(HWND parent, PlatformFont* font, Str text, bool isRtl, bool checked, int topPt) {
     Checkbox::CreateArgs args;
     args.parent = parent;
     args.text = text;
+    args.font = font;
     args.isRtl = isRtl;
     if (checked) {
         args.initialState = Checkbox::State::Checked;
@@ -390,7 +453,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
             .s = Tr("View"),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(0, 0, 4, 0),
+            .padding = Insets{UiScalePx(0), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
         labelView = c;
         vbox->AddChild(c);
@@ -419,8 +482,8 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
 
         auto* table = new Table();
         table->SetSize(2, 2);
-        table->colGap = DpiScale(8);
-        table->rowGap = DpiScale(4);
+        table->colGap = UiScalePx(8);
+        table->rowGap = UiScalePx(4);
         auto& lc = table->SetCell(0, 0, labLayout);
         lc.alignV = CrossAxisAlign::CrossCenter;
         auto& ld = table->SetCell(0, 1, dropLayout);
@@ -441,27 +504,29 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
             .s = Tr("Appearance"),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(12, 0, 4, 0),
+            .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         }));
         auto* table = new Table();
-        table->SetSize(8, 2);
-        table->colGap = DpiScale(8);
-        table->rowGap = DpiScale(4);
-        const Str names[] = {Tr("Interface font:"),         Tr("&Interface text size:"),
-                             Tr("&Sidebar text size:"),     Tr("Home &thumbnail size:"),
-                             Tr("UI icon size (px):"),      Tr("Recent documents shown:"),
-                             Tr("Minimum tab width (px):"), Tr("Reference preview delay (ms):")};
-        DropDown** controls[] = {&dropUiFamily,    &dropUiSize,      &dropTreeSize,    &dropThumbnailSize,
-                                 &dropToolbarSize, &dropRecentCount, &dropMinTabWidth, &dropHoverDelay};
+        table->SetSize(9, 2);
+        table->colGap = UiScalePx(8);
+        table->rowGap = UiScalePx(4);
+        const Str names[] = {
+            Tr("Overall interface scale (%):"), Tr("Interface font:"),         Tr("&Interface text size:"),
+            Tr("&Sidebar text size:"),          Tr("Home &thumbnail size:"),   Tr("UI icon size (px):"),
+            Tr("Recent documents shown:"),      Tr("Minimum tab width (px):"), Tr("Reference preview delay (ms):")};
+        DropDown** controls[] = {&dropInterfaceScale, &dropUiFamily,      &dropUiSize,
+                                 &dropTreeSize,       &dropThumbnailSize, &dropToolbarSize,
+                                 &dropRecentCount,    &dropMinTabWidth,   &dropHoverDelay};
         for (int row = 0; row < dimofi(names); row++) {
             auto* label = NewVirtText({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
-            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, row >= 4);
+            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, row == 0 || row >= 5);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
             cell.alignH = CrossAxisAlign::Stretch;
             cell.alignV = CrossAxisAlign::CrossCenter;
         }
+        FillNumberChoices(dropInterfaceScale, StrL("50|75|100|125|150|175|200|225|250"), gSettings->interfaceScale);
         StrVec families;
         families.Append(Tr("System (Windows)"));
         families.Append(StrL("Manrope"));
@@ -485,20 +550,59 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
         vbox->AddChild(table);
         vbox->AddChild(NewVirtText({
-            .s = Tr("Interface: menus, toolbar and dialogs. Sidebar: bookmarks."),
+            .s = Tr("Overall scale changes the interface, not document zoom. Individual font and icon sizes remain "
+                    "available."),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(4, 0, 0, 0),
+            .padding = Insets{UiScalePx(4), UiScalePx(0), UiScalePx(0), UiScalePx(0)},
         }));
     }
 
     {
-        vbox->AddChild(
-            NewVirtText({.s = Tr("Pen"), .font = font, .isRtl = isRtl, .padding = DpiScaledInsets(12, 0, 4, 0)}));
+        vbox->AddChild(NewVirtText({.s = Tr("Data storage"),
+                                    .font = font,
+                                    .isRtl = isRtl,
+                                    .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
+        dataLocation = new VirtRichText();
+        dataLocation->font = font;
+        dataLocation->AddPlainText(fmt("%s %s", Tr("Current folder:"), GetAppDataDirTemp()));
+        if (GetPendingDataDirTemp()) {
+            dataLocation->AddPlainText(fmt("%s %s", Tr("After restart:"), GetPendingDataDirTemp()));
+        }
+        vbox->AddChild(dataLocation);
+        auto* details = new VirtRichText();
+        details->font = font;
+        details->AddPlainText(
+            Tr("Settings, dictionaries, saved vocabulary, practice progress and reading history use this folder. PDF "
+               "annotations remain in their PDF files. Folder changes apply after restart; originals are kept."));
+        vbox->AddChild(details);
+        auto* choose = NewThemedButton(hwnd, Tr("Choose data folder..."), font, false);
+        choose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ChooseDataFolder>(this);
+        auto* reset = NewThemedButton(hwnd, Tr("Restore default data folder"), font, false);
+        reset->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::RestoreDataFolder>(this);
+        choose->SetIsEnabled(!IsDataFolderOverridden() && !gForTesting);
+        reset->SetIsEnabled(!IsDataFolderOverridden() && !gForTesting);
+        vbox->AddChild(choose);
+        vbox->AddChild(reset);
+        if (IsDataFolderOverridden() || gForTesting) {
+            auto* explanation = new VirtRichText();
+            explanation->font = font;
+            explanation->AddPlainText(
+                Tr("This session uses a command-line or testing data folder. Restart normally to change the persistent "
+                   "location."));
+            vbox->AddChild(explanation);
+        }
+    }
+
+    {
+        vbox->AddChild(NewVirtText({.s = Tr("Pen"),
+                                    .font = font,
+                                    .isRtl = isRtl,
+                                    .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
         auto* table = new Table();
         table->SetSize(3, 2);
-        table->colGap = DpiScale(8);
-        table->rowGap = DpiScale(4);
+        table->colGap = UiScalePx(8);
+        table->rowGap = UiScalePx(4);
         const Str names[] = {Tr("Minimum width (pt):"), Tr("Maximum width (pt):"), Tr("Width adjustment step (pt):")};
         DropDown** controls[] = {&dropPenMin, &dropPenMax, &dropPenStep};
         for (int row = 0; row < 3; row++) {
@@ -516,17 +620,17 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(table);
     }
 
-    chkReferenceHover = MakeCheckbox(hwnd, Tr("Show reference previews on hover"), isRtl,
+    chkReferenceHover = MakeCheckbox(hwnd, GetFont(), Tr("Show reference previews on hover"), isRtl,
                                      gSettings && gSettings->citationHoverDelay >= 0, 8);
     chkReferenceHover->onStateChanged = MkMethod0<SettingsWnd, &SettingsWnd::OnReferenceHoverChanged>(this);
     OnReferenceHoverChanged();
     vbox->AddChild(chkReferenceHover);
 
-    chkShowToc =
-        MakeCheckbox(hwnd, Tr("Show the &bookmarks sidebar when available"), isRtl, gSettings && gSettings->showToc, 8);
+    chkShowToc = MakeCheckbox(hwnd, GetFont(), Tr("Show the &bookmarks sidebar when available"), isRtl,
+                              gSettings && gSettings->showToc, 8);
     vbox->AddChild(chkShowToc);
 
-    chkRememberState = MakeCheckbox(hwnd, Tr("&Remember these settings for each document"), isRtl,
+    chkRememberState = MakeCheckbox(hwnd, GetFont(), Tr("&Remember these settings for each document"), isRtl,
                                     gSettings && gSettings->rememberStatePerDocument, 4);
     if (gSettings && !gSettings->rememberOpenedFiles) {
         chkRememberState->SetIsEnabled(false);
@@ -538,24 +642,27 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
             .s = Tr("Advanced"),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(12, 0, 4, 0),
+            .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
         labelAdvanced = c;
         vbox->AddChild(c);
     }
 
-    chkUseTabs = MakeCheckbox(hwnd, Tr("Use &tabs"), isRtl, gSettings && gSettings->useTabs, 0);
+    chkUseTabs = MakeCheckbox(hwnd, GetFont(), Tr("Use &tabs"), isRtl, gSettings && gSettings->useTabs, 0);
     vbox->AddChild(chkUseTabs);
 
-    chkCheckUpdates =
-        MakeCheckbox(hwnd, Tr("Automatically check for &updates"), isRtl, gSettings && gSettings->checkForUpdates, 4);
-    if (!HasPermission(Perm::InternetAccess)) {
-        chkCheckUpdates->SetIsEnabled(false);
-    }
+    chkCheckUpdates = MakeCheckbox(hwnd, GetFont(), Tr("Check for Enhanced releases automatically"), isRtl,
+                                   gSettings && gSettings->checkForUpdates, 0);
     vbox->AddChild(chkCheckUpdates);
+    auto* updateHelp = new VirtRichText();
+    updateHelp->font = font;
+    updateHelp->AddPlainText(
+        Tr("Checks GitHub at most once a day. Downloads start only when you choose them. Use Help > Check for updates "
+           "at any time."));
+    vbox->AddChild(updateHelp);
 
-    chkRememberOpened =
-        MakeCheckbox(hwnd, Tr("Remember &opened files"), isRtl, gSettings && gSettings->rememberOpenedFiles, 4);
+    chkRememberOpened = MakeCheckbox(hwnd, GetFont(), Tr("Remember &opened files"), isRtl,
+                                     gSettings && gSettings->rememberOpenedFiles, 4);
     chkRememberOpened->onStateChanged = MkMethod0<SettingsWnd, &SettingsWnd::OnRememberOpenedChanged>(this);
     vbox->AddChild(chkRememberOpened);
 
@@ -564,7 +671,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
             .s = Tr("Set inverse search command line"),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(12, 0, 4, 0),
+            .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
         labelInverse = hdr;
         vbox->AddChild(hdr);
@@ -573,7 +680,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
             .s = Tr("Enter the command line to invoke when you double-click on the PDF document:"),
             .font = font,
             .isRtl = isRtl,
-            .padding = DpiScaledInsets(0, 0, 4, 0),
+            .padding = Insets{UiScalePx(0), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
         labelCmdLine = lab;
         vbox->AddChild(lab);
@@ -601,16 +708,17 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     }
 
     scroll = new ScrollBox(vbox);
-    scroll->lineDy = PlatformFontLineHeight(font) + DpiScale(8);
+    scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
     auto* padding = new Padding(scroll, DpiScaledInsets(4, 8));
     layout = padding;
 
-    int dx = DpiScale(480);
+    int dx = UiScalePx(480);
     LayoutAndSizeToContent(layout, dx, 0, hwnd);
     Rect workArea = PlatformWindowWorkArea(win ? win->hwndFrame : hwnd);
     Size client = HwndClientRect(hwnd).Size();
     if (!workArea.IsEmpty()) {
-        client.dy = std::min(client.dy, std::max(DpiScale(240), workArea.dy - DpiScale(100)));
+        client.dx = std::min(client.dx, std::max(1, workArea.dx - UiScalePx(32)));
+        client.dy = std::min(client.dy, std::max(1, workArea.dy - UiScalePx(32)));
         ResizeHwndToClientArea(hwnd, client.dx, client.dy, false);
     }
     DoLayout(HwndClientRect(hwnd).Size());

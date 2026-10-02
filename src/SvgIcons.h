@@ -59,6 +59,15 @@ extern const char* gIconTrash;
 extern const char* gIconArrowUp;
 extern const char* gIconHome;
 
+extern const char* gIconDictionary;
+extern const char* gIconLearning;
+extern const char* gIconStudyExport;
+extern const char* gIconPresentation;
+extern const char* gIconLaserPointer;
+extern const char* gIconLaserSolid;
+extern const char* gIconLaserHollow;
+extern const char* gIconLaserDot;
+
 struct Pixmap;
 
 Pixmap* GetCachedPixmapForSvg(Str svg, int dx, int dy, Color fg = kColorUnset, Color bg = kColorUnset);

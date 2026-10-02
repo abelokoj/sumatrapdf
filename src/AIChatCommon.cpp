@@ -365,8 +365,9 @@ static const char* kAIChatHtmlFmt = R"(<!DOCTYPE html><html><head><meta charset=
 <script src='%smarked.min.js'></script>
 <style>
 :root { %s }
+%s
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Segoe UI', sans-serif; font-size: 13px; margin: 0; padding: 6px;
+body { font-family: var(--enhanced-ui-font-family); font-size: var(--enhanced-ui-font-size); margin: 0; padding: 6px;
   background: var(--bg); color: var(--fg); line-height: 1.4; }
 p { margin: 2px 0; }
 h1,h2,h3,h4 { margin: 6px 0 2px 0; }
@@ -374,13 +375,13 @@ ul,ol { margin: 2px 0 2px 18px; }
 li { margin: 1px 0; }
 .user { color: var(--user); font-weight: bold; margin: 8px 0 2px 0; padding: 4px 0;
   border-top: 1px solid var(--border); }
-.tool { color: var(--muted); font-size: 11px; font-style: italic;
+.tool { color: var(--muted); font-size: .85em; font-style: italic;
   border-left: 3px solid var(--muted); padding-left: 6px; margin: 2px 0; }
 .assistant { margin: 2px 0; }
 .assistant pre { background: var(--code-bg); padding: 6px; border-radius: 4px;
-  overflow-x: auto; margin: 3px 0; font-size: 12px; }
-.assistant code { background: var(--code-bg); padding: 1px 3px; border-radius: 2px; font-size: 12px; }
-.assistant pre code { background: none; padding: 0; }
+  overflow-x: auto; margin: 3px 0; font-size: .9em; }
+.assistant code { background: var(--code-bg); padding: 1px 3px; border-radius: 2px; font-size: .9em; }
+.assistant pre code { background: none; padding: 0; font-size: inherit; }
 .error { color: var(--error); font-weight: bold; margin: 4px 0; }
 </style></head><body><div id='chat'></div>
 <script>
@@ -487,7 +488,7 @@ TempStr AIChatFormatChatHtmlTemp(Str virtualHost, Str bgColor) {
     Str error = dark ? StrL("#e74c3c") : StrL("#c0392b");
     TempStr cssVars = fmt("--bg:%s; --fg:%s; --muted:%s; --user:%s; --border:%s; --code-bg:%s; --error:%s;", bg, fg,
                           muted, user, border, codeBg, error);
-    return fmt(kAIChatHtmlFmt, host, cssVars);
+    return fmt(kAIChatHtmlFmt, host, cssVars, GetUiFontCssTemp());
 }
 
 void AIChatCloseProcess(HANDLE* processHandle, bool terminateIfRunning) {

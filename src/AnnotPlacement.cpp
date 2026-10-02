@@ -57,9 +57,102 @@ constexpr float kFileAttachmentAnnotDefaultDy = 16.f;
 
 constexpr int kInkEraserRadiusPx = 10;
 
-// 40% yellow, when Annotations.InkColor is not a color. How translucent a
-// stroke is comes from its color's alpha.
-constexpr Color kInkDefaultColor = 0x6600ffff;
+constexpr float kInkMinWidth = 0.1f;
+constexpr float kInkDefaultWidths[] = {2.f, 3.f, 5.f, 1.f, 12.f};
+
+static InkPenStyle NormalizeInkPenStyle(InkPenStyle style) {
+    return (int)style >= 0 && (int)style < dimofi(kInkDefaultWidths) ? style : InkPenStyle::Ballpoint;
+}
+
+static float NormalizeInkWidth(float width, InkPenStyle style) {
+    float minWidth = isfinite(gSettings->penMinWidth) ? std::max(kInkMinWidth, gSettings->penMinWidth) : kInkMinWidth;
+    float maxWidth = isfinite(gSettings->penMaxWidth) ? std::max(minWidth, gSettings->penMaxWidth) : 16.f;
+    maxWidth = std::max(minWidth, maxWidth);
+    if (!isfinite(width) || width <= 0) {
+        width = kInkDefaultWidths[(int)NormalizeInkPenStyle(style)];
+    }
+    return limitValue(width, minWidth, maxWidth);
+}
+
+InkPenProfile& GetInkPenProfile(InkPenStyle style) {
+    auto& a = gSettings->annotations;
+    InkPenProfile* profiles[] = {&a.inkBallpoint, &a.inkFountain, &a.inkBrush, &a.inkPencil, &a.inkHighlighter};
+    style = NormalizeInkPenStyle(style);
+    InkPenProfile& profile = *profiles[(int)style];
+    if (GetParsedColor(profile.color, kColorUnset) == kColorUnset) {
+        Color col = style == InkPenStyle::Highlighter ? kColYellow : GetParsedColor(a.inkColor, kColBlack);
+        SetColorText(profile.color, SerializeColorTemp(col & 0xffffff));
+    }
+    if (!isfinite(profile.width) || profile.width <= 0) {
+        float width = style == InkPenStyle::Ballpoint ? a.inkBorderWidth : kInkDefaultWidths[(int)style];
+        profile.width = NormalizeInkWidth(width, style);
+    }
+    profile.opacity = limitValue(profile.opacity, 0, 100);
+    return profile;
+}
+
+InkPenProfile& GetInkPenProfile(MainWindow* win) {
+    return GetInkPenProfile(win ? win->inkPenStyle : InkPenStyle::Ballpoint);
+}
+
+Color InkPenColor(InkPenStyle style) {
+    InkPenProfile& profile = GetInkPenProfile(style);
+    Color fallback = style == InkPenStyle::Highlighter ? kColYellow : kColBlack;
+    Color col = GetParsedColor(profile.color, fallback) & 0xffffff;
+    return col | ((Color)((profile.opacity * 255 + 50) / 100) << 24);
+}
+
+Color InkPenColor(MainWindow* win) {
+    return InkPenColor(win ? win->inkPenStyle : InkPenStyle::Ballpoint);
+}
+
+float InkPenWidth(InkPenStyle style) {
+    return NormalizeInkWidth(GetInkPenProfile(style).width, style);
+}
+
+float InkPenWidth(MainWindow* win) {
+    return InkPenWidth(win ? win->inkPenStyle : InkPenStyle::Ballpoint);
+}
+
+int InkPenOpacity(InkPenStyle style) {
+    return GetInkPenProfile(style).opacity;
+}
+
+int InkPenOpacity(MainWindow* win) {
+    return InkPenOpacity(win ? win->inkPenStyle : InkPenStyle::Ballpoint);
+}
+
+void SetInkPenColor(InkPenStyle style, Color color) {
+    InkPenProfile& profile = GetInkPenProfile(style);
+    SetColorText(profile.color, SerializeColorTemp(color & 0xffffff));
+    u8 alpha = GetAlpha(color);
+    if (alpha != 0) {
+        profile.opacity = ((int)alpha * 100 + 127) / 255;
+    }
+    ScheduleSaveSettings();
+}
+
+void SetInkPenColor(MainWindow* win, Color color) {
+    SetInkPenColor(win ? win->inkPenStyle : InkPenStyle::Ballpoint, color);
+}
+
+void SetInkPenWidth(InkPenStyle style, float width) {
+    GetInkPenProfile(style).width = NormalizeInkWidth(width, style);
+    ScheduleSaveSettings();
+}
+
+void SetInkPenWidth(MainWindow* win, float width) {
+    SetInkPenWidth(win ? win->inkPenStyle : InkPenStyle::Ballpoint, width);
+}
+
+void SetInkPenOpacity(InkPenStyle style, int opacity) {
+    GetInkPenProfile(style).opacity = limitValue(opacity, 0, 100);
+    ScheduleSaveSettings();
+}
+
+void SetInkPenOpacity(MainWindow* win, int opacity) {
+    SetInkPenOpacity(win ? win->inkPenStyle : InkPenStyle::Ballpoint, opacity);
+}
 
 // Free text is placed like a stamp: a preview box the size of the annotation
 // follows the cursor and a click creates it there. MuPDF lays free text out
@@ -840,7 +933,7 @@ static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt, InkSampl
     VecAppend(p.points, point);
     VecLast(p.strokeCounts)++;
     Point screen = dm->CvtToScreen(pageNo, point);
-    float maxWidth = std::max(gSettings->penMaxWidth, std::max(gSettings->annotations.inkBorderWidth, 0.1f));
+    float maxWidth = std::max(gSettings->penMaxWidth, InkPenWidth(win));
     int pad = std::max(3, (int)ceilf(maxWidth * dm->GetZoomReal(pageNo)) + 2);
     Rect dirty(screen.x - pad, screen.y - pad, pad * 2 + 1, pad * 2 + 1);
     p.inkScreenBounds = p.inkScreenBounds.IsEmpty() ? dirty : p.inkScreenBounds.Union(dirty);
@@ -1385,7 +1478,7 @@ static void PaintShapePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
 static float InkStrokeWidth(MainWindow* win) {
     float minWidth = std::max(0.1f, gSettings->penMinWidth);
     float maxWidth = std::max(minWidth, gSettings->penMaxWidth);
-    float width = limitValue(gSettings->annotations.inkBorderWidth, minWidth, maxWidth);
+    float width = InkPenWidth(win);
     AnnotPlacement& p = win->annotPlacement;
     bool fountain = win->inkPenStyle == InkPenStyle::Fountain;
     bool brush = win->inkPenStyle == InkPenStyle::Brush;
@@ -1399,10 +1492,7 @@ static float InkStrokeWidth(MainWindow* win) {
 }
 
 static int InkStrokeOpacity(MainWindow* win) {
-    if (win->inkPenStyle == InkPenStyle::Highlighter) {
-        return 40;
-    }
-    return win->inkPenStyle == InkPenStyle::Pencil ? 65 : 100;
+    return InkPenOpacity(win);
 }
 
 static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
@@ -1416,7 +1506,7 @@ static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     gs.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     // the stroke the ink button's drop-down is set to make: its color at its
     // opacity, as wide as the saved stroke will be at this zoom
-    Color col = GetParsedColor(gSettings->annotations.inkColor, kInkDefaultColor);
+    Color col = InkPenColor(win);
     u8 r, g, b;
     UnpackColor(col, r, g, b);
     u8 a = (u8)(InkStrokeOpacity(win) * 255 / 100);
@@ -1488,8 +1578,19 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             }
             ptOnPage = p.points[0];
             pt = dm->CvtToScreen(pageNo, VecLast(p.points));
-            args.borderWidth = InkStrokeWidth(win);
-            args.opacity = InkStrokeOpacity(win);
+            {
+                CustomCommand* cmd = FindCustomCommand(p.cmdId);
+                auto* colorArg = GetCommandArg(cmd, kCmdArgColor);
+                if (!colorArg || !colorArg->colorVal.parsedOk) {
+                    args.col = *GetParsedColor(GetInkPenProfile(win).color);
+                }
+                if (!GetCommandArg(cmd, kCmdArgBorderWidth)) {
+                    args.borderWidth = InkStrokeWidth(win);
+                }
+                if (!GetCommandArg(cmd, kCmdArgOpacity)) {
+                    args.opacity = InkStrokeOpacity(win);
+                }
+            }
             if (args.col.parsedOk) {
                 u8 r, g, b, a;
                 UnpackPdfColor(args.col.pdfCol, r, g, b, a);
@@ -1732,6 +1833,106 @@ void AddInkPressure(MainWindow* win, UINT32 pressure) {
     p.pressureSamples++;
 }
 
+static void ApplyInkPenCommand(InkPenStyle& style, int cmdId) {
+    switch (cmdId) {
+        case CmdInkPen:
+            style = InkPenStyle::Ballpoint;
+            break;
+        case CmdInkFountain:
+            style = InkPenStyle::Fountain;
+            break;
+        case CmdInkBrush:
+            style = InkPenStyle::Brush;
+            break;
+        case CmdInkPencil:
+            style = InkPenStyle::Pencil;
+            break;
+        case CmdInkHighlighter:
+            style = InkPenStyle::Highlighter;
+            break;
+        case CmdInkBlack:
+            SetInkPenColor(style, kColBlack);
+            break;
+        case CmdInkBlue:
+            SetInkPenColor(style, MkRgb(0x25, 0x63, 0xeb));
+            break;
+        case CmdInkRed:
+            SetInkPenColor(style, MkRgb(0xdc, 0x26, 0x26));
+            break;
+        case CmdInkThin:
+            SetInkPenWidth(style, 1.f);
+            break;
+        case CmdInkMedium:
+            SetInkPenWidth(style, 3.f);
+            break;
+        case CmdInkThick:
+            SetInkPenWidth(style, 6.f);
+            break;
+        default:
+            break;
+    }
+    GetInkPenProfile(style);
+}
+
+#if IS_DEBUG
+bool AnnotPlacement_UnitTestInkProfiles() {
+    Settings* savedSettings = gSettings;
+    bool savedDontSave = gDontSaveSettings;
+    gSettings = NewSettings(StrL("Annotations [\nInkColor = #112233\nInkBorderWidth = 2.7\n]\n"));
+    gDontSaveSettings = true;
+
+    InkPenStyle styles[] = {InkPenStyle::Ballpoint, InkPenStyle::Fountain, InkPenStyle::Brush, InkPenStyle::Pencil,
+                            InkPenStyle::Highlighter};
+    int tools[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
+    int colors[] = {CmdInkBlue, CmdInkRed, CmdInkBlack, CmdInkRed, CmdInkBlue};
+    int widths[] = {CmdInkThin, CmdInkMedium, CmdInkThick, CmdInkThin, CmdInkMedium};
+    Color expectedColors[] = {MkRgb(0x25, 0x63, 0xeb), MkRgb(0xdc, 0x26, 0x26), kColBlack, MkRgb(0xdc, 0x26, 0x26),
+                              MkRgb(0x25, 0x63, 0xeb)};
+    float defaultWidths[] = {2.7f, 3.f, 5.f, 1.f, 12.f};
+    float commandWidths[] = {1.f, 3.f, 6.f, 1.f, 3.f};
+    float expectedWidths[] = {1.3f, 3.4f, 6.5f, 1.6f, 3.7f};
+    int defaultOpacities[] = {100, 100, 100, 65, 40};
+    int expectedOpacities[] = {85, 75, 95, 55, 35};
+    InkPenStyle active = InkPenStyle::Ballpoint;
+    bool ok = true;
+    for (int i = 0; i < dimofi(styles); i++) {
+        ApplyInkPenCommand(active, tools[i]);
+        Color defaultColor = i == 4 ? kColYellow : MkRgb(0x11, 0x22, 0x33);
+        ok = ok && active == styles[i] && (InkPenColor(active) & 0xffffff) == defaultColor &&
+             fabsf(InkPenWidth(active) - defaultWidths[i]) < 0.001f && InkPenOpacity(active) == defaultOpacities[i];
+        ApplyInkPenCommand(active, colors[i]);
+        ApplyInkPenCommand(active, widths[i]);
+        ok = ok && fabsf(InkPenWidth(active) - commandWidths[i]) < 0.001f;
+        SetInkPenWidth(active, expectedWidths[i]);
+        SetInkPenOpacity(active, expectedOpacities[i]);
+    }
+
+    // The old command path reset widths and shared every pen's color.
+    for (int i = 0; i < dimofi(styles); i++) {
+        ApplyInkPenCommand(active, tools[i]);
+        ok = ok && active == styles[i] && (InkPenColor(active) & 0xffffff) == expectedColors[i] &&
+             fabsf(InkPenWidth(active) - expectedWidths[i]) < 0.001f && InkPenOpacity(active) == expectedOpacities[i];
+    }
+
+    Str serialized = SerializeSettings(gSettings, {});
+    DeleteSettings(gSettings);
+    gSettings = NewSettings(serialized);
+    str::Free(serialized);
+    for (int i = 0; i < dimofi(styles); i++) {
+        ApplyInkPenCommand(active, tools[i]);
+        ok = ok && (InkPenColor(active) & 0xffffff) == expectedColors[i] &&
+             fabsf(InkPenWidth(active) - expectedWidths[i]) < 0.001f && InkPenOpacity(active) == expectedOpacities[i];
+    }
+    ok = ok && GetParsedColor(gSettings->annotations.inkColor, kColorUnset) == MkRgb(0x11, 0x22, 0x33) &&
+         fabsf(gSettings->annotations.inkBorderWidth - 2.7f) < 0.001f;
+
+    DeleteSettings(gSettings);
+    gSettings = savedSettings;
+    gDontSaveSettings = savedDontSave;
+    return ok;
+}
+#endif
+
 bool HandlePenToolCommand(MainWindow* win, int cmdId) {
     bool profile = cmdId == CmdInkFountain || cmdId == CmdInkBrush || cmdId == CmdInkPencil;
     if (!profile && (cmdId < CmdInkPen || cmdId > CmdTogglePenOnly)) {
@@ -1751,50 +1952,7 @@ bool HandlePenToolCommand(MainWindow* win, int cmdId) {
     if (restart) {
         FinishInkAnnotationPlacement(win);
     }
-    auto& a = gSettings->annotations;
-    switch (cmdId) {
-        case CmdInkPen:
-            win->inkPenStyle = InkPenStyle::Ballpoint;
-            a.inkBorderWidth = 2;
-            break;
-        case CmdInkFountain:
-            win->inkPenStyle = InkPenStyle::Fountain;
-            a.inkBorderWidth = 3;
-            break;
-        case CmdInkBrush:
-            win->inkPenStyle = InkPenStyle::Brush;
-            a.inkBorderWidth = 5;
-            break;
-        case CmdInkPencil:
-            win->inkPenStyle = InkPenStyle::Pencil;
-            a.inkBorderWidth = 1;
-            break;
-        case CmdInkHighlighter:
-            win->inkPenStyle = InkPenStyle::Highlighter;
-            SetColorText(a.inkColor, StrL("#ffff00"));
-            a.inkBorderWidth = 12;
-            break;
-        case CmdInkBlack:
-            SetColorText(a.inkColor, StrL("#000000"));
-            break;
-        case CmdInkBlue:
-            SetColorText(a.inkColor, StrL("#2563eb"));
-            break;
-        case CmdInkRed:
-            SetColorText(a.inkColor, StrL("#dc2626"));
-            break;
-        case CmdInkThin:
-            a.inkBorderWidth = 1;
-            break;
-        case CmdInkMedium:
-            a.inkBorderWidth = 3;
-            break;
-        case CmdInkThick:
-            a.inkBorderWidth = 6;
-            break;
-        default:
-            break;
-    }
+    ApplyInkPenCommand(win->inkPenStyle, cmdId);
     StartAnnotationPlacement(win, CmdCreateAnnotInk);
     if (IsPlacingInkAnnotation(win)) {
         win->inkEraseMode = cmdId == CmdInkEraser ? 1 : cmdId == CmdHighlightEraser ? 2 : 0;

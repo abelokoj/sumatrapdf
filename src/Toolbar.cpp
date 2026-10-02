@@ -2,6 +2,9 @@
    License: GPLv3 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "gui/Dpi.h"
 #include "base/File.h"
 #include "base/Pixmap.h"
@@ -42,6 +45,7 @@
 #include "gui/Layout.h"
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
+#include "gui/PlatformWindow.h"
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
@@ -71,6 +75,153 @@ struct ToolbarButtonInfo {
     bool isText = false;
 };
 
+static bool FitToolbarGroups(const Vec<int>& widths, int available, int gap, int overflowDx, int brandIdx,
+                             Vec<bool>& visible) {
+    VecReset(visible);
+    int total = 0;
+    int count = 0;
+    for (int width : widths) {
+        bool show = width > 0;
+        VecAppend(visible, show);
+        if (show) total += width + (count++ > 0 ? gap : 0);
+    }
+    if (total <= available) return false;
+
+    auto remove = [&](int idx) {
+        if (idx < 0 || !visible[idx]) return;
+        visible[idx] = false;
+        total -= widths[idx] + (count-- > 1 ? gap : 0);
+    };
+    remove(brandIdx);
+    if (total <= available) return false;
+    for (int i = len(widths) - 1; i >= 0 && total + overflowDx + (count > 0 ? gap : 0) > available; i--) remove(i);
+    return true;
+}
+
+#if IS_DEBUG
+void ToolbarLayout_UnitTests() {
+    Vec<int> widths;
+    for (int width : {180, 120, 170, 100}) VecAppend(widths, width);
+    Vec<bool> visible;
+    utassert(!FitToolbarGroups(widths, 588, 6, 36, 0, visible));
+    utassert(visible[0] && visible[1] && visible[2] && visible[3]);
+    utassert(!FitToolbarGroups(widths, 402, 6, 36, 0, visible));
+    utassert(!visible[0] && visible[1] && visible[2] && visible[3]);
+    utassert(FitToolbarGroups(widths, 360, 6, 36, 0, visible));
+    utassert(!visible[0] && visible[1] && visible[2] && !visible[3]);
+    utassert(FitToolbarGroups(widths, 40, 6, 36, 0, visible));
+    utassert(!visible[0] && !visible[1] && !visible[2] && !visible[3]);
+    VecReset(widths);
+    VecAppend(widths, 0);
+    VecAppend(widths, 100);
+    utassert(!FitToolbarGroups(widths, 100, 6, 36, -1, visible));
+    utassert(!visible[0] && visible[1]);
+}
+#endif
+
+struct ToolbarHiddenLayout {
+    ILayout* layout = nullptr;
+    Visibility visibility = Visibility::Visible;
+};
+
+enum class ToolbarLineKind {
+    Main,
+    Annotations
+};
+
+// Hide complete groups, including native fields, while retaining document availability.
+struct ToolbarLine : HBox {
+    ToolbarVirt* tb = nullptr;
+    Vec<ToolbarHiddenLayout> hidden;
+    int brandIdx = -1;
+    int findGroupIdx = -1;
+    ToolbarLineKind lineKind;
+
+    explicit ToolbarLine(ToolbarVirt* toolbar, ToolbarLineKind kind = ToolbarLineKind::Main)
+        : tb(toolbar), lineKind(kind) {
+        alignCross = CrossAxisAlign::CrossCenter;
+    }
+
+    VirtIconButton* OverflowButton() const {
+        return lineKind == ToolbarLineKind::Main ? tb->overflowButton : tb->annotationOverflowButton;
+    }
+
+    Vec<VirtCtrl*>& OverflowItems() const {
+        return lineKind == ToolbarLineKind::Main ? tb->overflowItems : tb->annotationOverflowItems;
+    }
+
+    void Restore() {
+        for (int i = len(hidden) - 1; i >= 0; i--) hidden[i].layout->SetVisibility(hidden[i].visibility);
+        VecReset(hidden);
+        VecReset(OverflowItems());
+    }
+
+    void HideLayout(ILayout* item) {
+        VecAppend(hidden, ToolbarHiddenLayout{item, item->GetVisibility()});
+        if (VirtCtrl* ctrl = item->AsVirtCtrl()) {
+            if (ctrl->id && ctrl->GetVisibility() == Visibility::Visible) VecAppend(OverflowItems(), ctrl);
+        }
+        for (int i = 0; i < item->LayoutChildCount(); i++) HideLayout(item->LayoutChildAt(i));
+        item->SetVisibility(Visibility::Collapse);
+    }
+
+    int MinIntrinsicWidth(int) override { return OverflowButton() ? OverflowButton()->MinIntrinsicWidth(0) : 0; }
+
+    int MinIntrinsicHeight(int) override {
+        int height = tb->rowDy - UiScalePx(12);
+        for (auto& child : children) height = std::max(height, child.layout->MinIntrinsicHeight(Inf));
+        return height;
+    }
+
+    Size Layout(Constraints bc) override {
+        Restore();
+        if (lineKind == ToolbarLineKind::Main && tb->findSlot) {
+            tb->findSlot->SetVisibility(tb->findExpanded ? Visibility::Visible : Visibility::Collapse);
+            tb->findSlot->dx = tb->findExpanded ? tb->findPreferredWidth : 0;
+        }
+        if (lineKind == ToolbarLineKind::Main && tb->findButton && tb->findExpanded &&
+            tb->findButton->GetVisibility() == Visibility::Visible) {
+            VecAppend(hidden, ToolbarHiddenLayout{tb->findButton, Visibility::Visible});
+            tb->findButton->SetVisibility(Visibility::Collapse);
+        }
+        auto* overflowButton = OverflowButton();
+        overflowButton->SetVisibility(Visibility::Collapse);
+        Vec<int> widths;
+        for (int i = 0; i < len(children) - 1; i++) {
+            auto* child = children[i].layout;
+            VecAppend(widths, IsCollapsed(child) ? 0 : child->MinIntrinsicWidth(0));
+        }
+        int available = bc.HasBoundedWidth() ? bc.max.dx : Inf;
+        int overflowDx = overflowButton->MinIntrinsicWidth(0);
+        if (lineKind == ToolbarLineKind::Main && tb->findExpanded && findGroupIdx >= 0 && findGroupIdx < len(widths)) {
+            int withoutFind = widths[findGroupIdx] - tb->findSlot->dx;
+            int searchDx = std::min(tb->findPreferredWidth,
+                                    std::max(tb->findMinWidth, available - withoutFind - overflowDx - gap));
+            tb->findSlot->dx = searchDx;
+            widths[findGroupIdx] = withoutFind + searchDx;
+        }
+        Vec<bool> visible;
+        bool overflow = FitToolbarGroups(widths, available, gap, overflowDx, brandIdx, visible);
+        for (int i = 0; i < len(widths); i++) {
+            if (widths[i] > 0 && !visible[i]) HideLayout(children[i].layout);
+        }
+        overflowButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
+        Size size = HBox::Layout(bc);
+        size.dy = bc.ConstrainHeight(MinIntrinsicHeight(available));
+        return size;
+    }
+
+    void SetBounds(Rect r) override {
+        HBox::SetBounds(r);
+        auto* overflowButton = OverflowButton();
+        if (overflowButton->GetVisibility() == Visibility::Visible) {
+            Rect button = overflowButton->lastBounds;
+            button.x = rtl ? r.x : r.Right() - button.dx;
+            overflowButton->SetBounds(button);
+        }
+    }
+};
+
 static ToolbarButtonInfo gToolbarButtons[] = {
     {kEnhancedIconOpen, CmdOpenFile, TrN("Open")},
     {kEnhancedIconSearch, CmdFindFirst, TrN("Find")},
@@ -93,7 +244,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {kEnhancedIconUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
     {kEnhancedIconStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
     {kEnhancedIconEraser, CmdInkEraser, TrN("Stroke eraser")},
-    {kEnhancedIconLaser, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
+    {gIconLaserPointer, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
     {nullptr, 0, {}},
     {kEnhancedIconBookmark, CmdToggleBookmarks, TrN("Bookmarks")},
     {kEnhancedIconStar, CmdCommandPaletteFavorites, TrN("Favorites")},
@@ -106,6 +257,10 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {kEnhancedIconGrid, CmdChangeTheme, TrN("Theme presets")},
     {kEnhancedIconInvert, CmdInvertColors, TrN("Invert document colors")},
     // Available to custom layouts without widening the default toolbar.
+    {gIconDictionary, CmdDictionaryLookup, TrN("Dictionary")},
+    {gIconLearning, CmdVocabularyHome, TrN("Vocabulary practice")},
+    {gIconStudyExport, CmdExportStudyNotes, TrN("Export highlights and notes")},
+    {gIconPresentation, CmdTogglePresentationMode, TrN("Presentation")},
     {gIconHome, CmdGoToHomePage, TrN("Home")},
     {gIconNavigateBack, CmdNavigateBack, TrN("Back")},
     {gIconNavigateForward, CmdNavigateForward, TrN("Forward")},
@@ -183,6 +338,7 @@ Color TbTextColor() {
 }
 
 static Color TbDisabledColor() {
+    if (ThemeUsesHighContrastColors()) return ThemeWindowTextDisabledColor();
     if (IsCurrentThemeDefault() && !ThemeColorizeControls()) {
         return SysDisabledTextColor();
     }
@@ -210,14 +366,15 @@ static Color TbEdgeColor() {
     return ThemeEdgeColor();
 }
 
-// Old Win32 toolbar: TBMETRICS.cyPad defaults to 6, then we added DpiScale(2).
+// Old Win32 toolbar: TBMETRICS.cyPad defaults to 6, then we added UiScalePx(2).
 // TB_SETBUTTONSIZE cannot go below image + 2*cyPad, so that was the bar height.
 static int ToolbarCyPad() {
-    return DpiScale(4);
+    return UiScalePx(4);
 }
 
 static int ToolbarRowDy(int iconSize) {
-    return iconSize + (2 * ToolbarCyPad()) + DpiScale(12);
+    return std::max(iconSize + (2 * ToolbarCyPad()), PlatformFontLineHeight(GetAppFont()) * 2 + UiScalePx(4)) +
+           UiScalePx(12);
 }
 
 static bool HasToolbarButtonContent(const ToolbarButtonInfo& tbi) {
@@ -251,6 +408,9 @@ VirtCtrl* ToolbarItemFromPoint(MainWindow* win, Point pt) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     if (!tb) {
         return nullptr;
+    }
+    for (VirtCtrl* button : {tb->overflowButton, tb->annotationOverflowButton}) {
+        if (button && button->IsVisible() && button->BoundsInWindow().Contains(pt)) return button;
     }
     for (VirtCtrl* w : tb->items) {
         if (!w || w->GetVisibility() != Visibility::Visible) {
@@ -634,7 +794,7 @@ static void SetToolbarButtonImageByIdx(MainWindow* win, int idx, const char* ico
         return;
     }
     ToolbarVirt* tb = win->toolbarVirt;
-    int sz = tb ? tb->iconSize : DpiScale(gSettings->toolbarSize);
+    int sz = tb ? tb->iconSize : UiScalePx(gSettings->toolbarSize);
     Pixmap* px = GetCachedPixmapForSvg(Str(icon), sz, sz, TbTextColor());
     Pixmap* pxOff = GetCachedPixmapForSvg(Str(icon), sz, sz, TbDisabledColor());
     if (ib->pixmap == px && ib->pixmapDisabled == pxOff) {
@@ -677,6 +837,8 @@ static void SetPdfAnnotationsToolbarVisible(MainWindow* win, bool visible) {
 // TODO: this is called too often
 // TODO: also set checked state instead of calling SetToolbarButtonCheckedState() all over
 void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
+    if (win->toolbarVirt && win->toolbarVirt->mainRow) win->toolbarVirt->mainRow->Restore();
+    if (win->toolbarVirt && win->toolbarVirt->annotationLine) win->toolbarVirt->annotationLine->Restore();
     int n = TotalButtonsCount();
     bool visibilityChanged = false;
     // One command ctx for the whole pass. Building it per button used to call
@@ -784,7 +946,7 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
         }
     }
 
-    if (visibilityChanged || annotVisibilityChanged) {
+    if (visibilityChanged || annotVisibilityChanged || (win->toolbarVirt && win->toolbarVirt->mainRow)) {
         VirtHost* host = ToolbarHost(win);
         if (host) {
             if (host->vroot) {
@@ -923,11 +1085,13 @@ static int ToolbarNaturalWidth(MainWindow* win) {
     if (!host || !host->layout) {
         return 0;
     }
-    int dx = host->layout->MinIntrinsicWidth(tb->rowDy);
+    tb->mainRow->Restore();
+    int dx = tb->mainRow->HBox::MinIntrinsicWidth(tb->rowDy);
+    host->Relayout();
     if (dx <= 0) {
         dx = tb->rowDy * 8;
     }
-    return dx + DpiScale(12);
+    return dx + UiScalePx(12);
 }
 
 // when the overlay toolbar sits at the bottom, lift it above the horizontal
@@ -939,7 +1103,7 @@ static int OverlayToolbarBottomScrollbarOffset() {
     }
     if (ScrollbarsUseOverlay()) {
         // smart/overlay: the thick overlay scrollbar height (see OverlayScrollbarCreate)
-        return DpiScale(16);
+        return UiScalePx(16);
     }
     return UiHScrollbarDy();
 }
@@ -983,7 +1147,7 @@ static bool OverlayToolbarShouldShowForCursor(MainWindow* win) {
     // the mouse is to the left or right of it, and extends a bit past the
     // toolbar (toward the page) so it shows before the cursor reaches it
     Rect canvas = ToolbarCanvasRectInFrame(win);
-    int my = DpiScale(16);
+    int my = UiScalePx(16);
     int bandY = ToolbarAtBottom() ? (tb.y - my) : tb.y;
     Rect band(canvas.x, bandY, canvas.dx, tb.dy + my);
     bool inBand = band.Contains(Point(ptFrame.x, ptFrame.y));
@@ -1156,13 +1320,18 @@ void UpdateToolbarPageText(MainWindow* win, int pageCount, bool updateOnly) {
         return;
     }
     ToolbarVirt* tb = win->toolbarVirt;
+    bool hadOverflow = len(tb->overflowItems) > 0;
+    if (tb->mainRow) tb->mainRow->Restore();
     if (!tb->pageTotal) {
         return;
     }
 
     bool hasChapters = ShowChapterUi(win->ctrl);
     if (tb->pageLabel) {
-        tb->pageLabel->SetText(hasChapters ? Tr("Chapter:") : Tr("Page:"));
+        bool compact = !hasChapters && str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout);
+        tb->pageLabel->SetText(compact ? Str{} : hasChapters ? Tr("Chapter:") : Tr("Page:"));
+        tb->pageLabel->padding =
+            compact ? Insets{} : Insets{0, UiScalePx(kTextPaddingRight + kButtonSpacingX), 0, UiScalePx(4)};
     }
     Visibility chapterVis = hasChapters ? Visibility::Visible : Visibility::Collapse;
     bool chapterVisChanged = false;
@@ -1205,7 +1374,7 @@ void UpdateToolbarPageText(MainWindow* win, int pageCount, bool updateOnly) {
             txt = fmt("%d / %d", win->ctrl->CurrentPageNo(), pageCount);
         }
     }
-    if (updateOnly && tb->pageTotal->s && txt && str::Eq(tb->pageTotal->s, txt)) {
+    if (!hadOverflow && updateOnly && tb->pageTotal->s && txt && str::Eq(tb->pageTotal->s, txt)) {
         return;
     }
     tb->pageTotal->SetText(txt);
@@ -1299,7 +1468,7 @@ static void PopulateCustomToolbarButtons() {
 }
 
 int ToolbarIconSize() {
-    return RoundUp(DpiScale(gSettings->toolbarSize), 4);
+    return RoundUp(UiScalePx(gSettings->toolbarSize), 4);
 }
 
 static void ApplyToolbarItemColors(VirtCtrl* w) {
@@ -1309,7 +1478,7 @@ static void ApplyToolbarItemColors(VirtCtrl* w) {
         if (w->id == CmdThemeLight) ib->isSelected = IsLightColor(ThemeWindowBackgroundColor());
         if (w->id == CmdThemeDark) ib->isSelected = !IsLightColor(ThemeWindowBackgroundColor());
         if (w->id == CmdInvertColors) ib->isSelected = GetInvertPageColors();
-        ib->cornerRadius = DpiScale(8);
+        ib->cornerRadius = UiScalePx(8);
         ib->backgroundColor = w->id == CmdOpenFile ? ThemeBrandColor() : kColorTransparent;
         if (w->id == CmdOpenFile) {
             hover = AccentColor(ThemeBrandColor(), 12);
@@ -1321,7 +1490,7 @@ static void ApplyToolbarItemColors(VirtCtrl* w) {
         return;
     }
     if (auto* b = AsVirtButton(w)) {
-        b->cornerRadius = DpiScale(8);
+        b->cornerRadius = UiScalePx(8);
         // a toolbar button is a label that highlights on hover, not a box
         b->SetColor(kColBtnBg, kColorTransparent);
         b->SetColor(kColBtnBorder, kColorTransparent);
@@ -1417,6 +1586,8 @@ static VirtCtrl* ToolbarItemForCmd(MainWindow* win, int cmdId) {
     if (!tb) {
         return nullptr;
     }
+    if (cmdId == ToolbarOverflowId) return tb->overflowButton;
+    if (cmdId == ToolbarAnnotOverflowId) return tb->annotationOverflowButton;
     for (VirtCtrl* w : tb->items) {
         if (w && w->id == cmdId && w->GetVisibility() == Visibility::Visible) {
             return w;
@@ -1435,6 +1606,12 @@ static Rect ToolbarButtonRect(MainWindow* win, int cmdId) {
     if (!tb) {
         return {};
     }
+    if (cmdId == ToolbarOverflowId && tb->overflowButton && tb->overflowButton->IsVisible()) {
+        return tb->overflowButton->BoundsInWindow();
+    }
+    if (cmdId == ToolbarAnnotOverflowId && tb->annotationOverflowButton && tb->annotationOverflowButton->IsVisible()) {
+        return tb->annotationOverflowButton->BoundsInWindow();
+    }
     for (VirtCtrl* w : tb->items) {
         if (w && w->id == cmdId && w->GetVisibility() == Visibility::Visible) {
             return w->BoundsInWindow();
@@ -1445,7 +1622,29 @@ static Rect ToolbarButtonRect(MainWindow* win, int cmdId) {
             return w->BoundsInWindow();
         }
     }
+    for (VirtCtrl* w : tb->overflowItems) {
+        if (w->id == cmdId && tb->overflowButton) return tb->overflowButton->BoundsInWindow();
+    }
+    for (VirtCtrl* w : tb->annotationOverflowItems) {
+        if (w->id == cmdId && tb->annotationOverflowButton) return tb->annotationOverflowButton->BoundsInWindow();
+    }
     return {};
+}
+
+void ToolbarSetFindExpanded(MainWindow* win, bool expanded, int minWidth, int preferredWidth) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    if (!tb) return;
+    tb->findExpanded = expanded;
+    if (minWidth > 0) tb->findMinWidth = minWidth;
+    if (preferredWidth > 0) tb->findPreferredWidth = preferredWidth;
+    tb->host->Relayout();
+    tb->host->Invalidate(true);
+}
+
+Rect ToolbarFindScreenRect(MainWindow* win) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    if (!tb || !tb->findExpanded || !tb->findSlot || !tb->host->IsVisible() || IsCollapsed(tb->findSlot)) return {};
+    return tb->host->ToScreen(tb->findSlot->lastBounds);
 }
 
 // screen-coordinates rect of a toolbar button, used to position the FindBar.
@@ -1555,6 +1754,7 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
     if (cmdId == PageInfoId || cmdId == 0) {
         return;
     }
+    if (cmdId != CmdFindFirst && IsFindBarVisible(win)) CollapseFindBar(win);
     if (ToolbarDropdownJustClosed() && (cmdId == CmdToggleReadAloud || cmdId == CmdPauseReadAloud)) {
         ev->didHandle = true;
         return;
@@ -1661,29 +1861,29 @@ struct ToolbarHoverRow : VirtCtrl {
         if (len(shortcut) == 0) {
             return 0;
         }
-        return PlatformFontMeasureText(font, shortcut).dx + DpiScale(kHoverRowShortcutGapX);
+        return PlatformFontMeasureText(font, shortcut).dx + UiScalePx(kHoverRowShortcutGapX);
     }
 
     Size GetIdealSize() override {
         Size ts = PlatformFontMeasureText(font, text);
-        int dx = (2 * DpiScale(kHoverRowPadX)) + iconSize + DpiScale(kHoverRowIconGapX) + ts.dx + ShortcutDx();
-        int dy = std::max(ts.dy, iconSize) + (2 * DpiScale(kHoverRowPadY));
+        int dx = (2 * UiScalePx(kHoverRowPadX)) + iconSize + UiScalePx(kHoverRowIconGapX) + ts.dx + ShortcutDx();
+        int dy = std::max(ts.dy, iconSize) + (2 * UiScalePx(kHoverRowPadY));
         return {dx, dy};
     }
 
     void Paint(VirtPaintCtx& ctx) override {
         bool enabled = IsEnabled();
         Rect r = ctx.bounds;
-        if (isCurrent || (enabled && HasFlag(vwfHovered))) {
-            ctx.gfx->FillRoundedRect(r, DpiScale(6), TbHoverColor(), isCurrent ? ThemeBrandColor() : TbHoverColor());
+        if (isCurrent || (enabled && (HasFlag(vwfHovered) || HasFlag(vwfFocused)))) {
+            ctx.gfx->FillRoundedRect(r, UiScalePx(6), TbHoverColor(), isCurrent ? ThemeBrandColor() : TbHoverColor());
         }
-        int x = r.x + DpiScale(kHoverRowPadX);
+        int x = r.x + UiScalePx(kHoverRowPadX);
         if (pixmap) {
             int y = r.y + ((r.dy - pixmap->height) / 2);
             ctx.gfx->DrawPixmap(pixmap, {x, y, pixmap->width, pixmap->height});
         }
-        x += iconSize + DpiScale(kHoverRowIconGapX);
-        int right = r.Right() - DpiScale(kHoverRowPadX);
+        x += iconSize + UiScalePx(kHoverRowIconGapX);
+        int right = r.Right() - UiScalePx(kHoverRowPadX);
         Color col = enabled ? TbTextColor() : TbDisabledColor();
         if (shortcut) {
             // right-aligned and dimmer, the way a menu shows its accelerator
@@ -1712,17 +1912,17 @@ struct ToolbarHoverCell : VirtCtrl {
 
     Size GetIdealSize() override {
         Size ts = PlatformFontMeasureText(font, text);
-        return {ts.dx + (2 * DpiScale(kHoverCellPadX)), ts.dy + (2 * DpiScale(kHoverRowPadY))};
+        return {ts.dx + (2 * UiScalePx(kHoverCellPadX)), ts.dy + (2 * UiScalePx(kHoverRowPadY))};
     }
 
     void Paint(VirtPaintCtx& ctx) override {
         bool enabled = IsEnabled();
         Rect r = ctx.bounds;
-        if (enabled && HasFlag(vwfHovered)) {
+        if (enabled && (HasFlag(vwfHovered) || HasFlag(vwfFocused))) {
             ctx.gfx->FillRect(r, TbHoverColor());
         }
         if (isCurrent) {
-            ctx.gfx->DrawRect(r, TbTextColor(), DpiScale(1));
+            ctx.gfx->DrawRect(r, TbTextColor(), UiScalePx(1));
         }
         Color col = enabled ? TbTextColor() : TbDisabledColor();
         ctx.gfx->DrawText(text, r, gfxTextCenter | gfxTextVCenter, font, col);
@@ -1748,6 +1948,38 @@ static void OnHoverRowClicked(MainWindow* win, VirtMouseEvent* ev) {
     // be torn down once that returns
     uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "HideToolbarHoverDropdown");
     ToolbarPostCommand(win, cmdId);
+}
+
+static void OnPaletteKey(MainWindow* win, VirtKeyEvent* ev) {
+    if (ev->vkey == VK_ESCAPE) {
+        uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide toolbar settings");
+        FocusToolbar(win);
+        ev->didHandle = true;
+        return;
+    }
+    if (auto* slider = AsVirtSlider(ev->target)) {
+        int value = slider->value;
+        if (ev->vkey == VK_LEFT || ev->vkey == VK_DOWN)
+            value--;
+        else if (ev->vkey == VK_RIGHT || ev->vkey == VK_UP)
+            value++;
+        else if (ev->vkey == VK_HOME)
+            value = slider->minVal;
+        else if (ev->vkey == VK_END)
+            value = slider->maxVal;
+        else
+            return;
+        slider->SetValue(value, true);
+        if (slider->onValueCommitted.IsValid()) slider->onValueCommitted.Call();
+        ev->didHandle = true;
+        return;
+    }
+    if (ev->vkey != VK_SPACE && ev->vkey != VK_RETURN) return;
+    VirtMouseEvent click;
+    click.target = ev->target;
+    click.hit = ev->target;
+    if (ev->target->onClick.IsValid()) ev->target->onClick.Call(&click);
+    ev->didHandle = true;
 }
 
 // Remember a row/cell for HoverDropdownStateTemp(). `text` has to be the ctrl's
@@ -1789,34 +2021,21 @@ ILayout* NewToolbarHoverMenu(MainWindow* win, const Vec<ToolbarHoverMenuItem>& i
         vbox->AddChild(row);
         RecordHoverItem(tb, row, row->text, it);
     }
-    int b = DpiScale(kHoverMenuBorder);
+    int b = UiScalePx(kHoverMenuBorder);
     return new Padding(vbox, Insets{b, b, b, b});
 }
 
-// The widest row of the pyramid: the smallest w with 1+2+...+w >= n, so the
-// rows w, w-1, ... w-k hold every item with only the last one part-full. 26
-// items give 7, 6, 5, 4, 3 and a last row of 1.
-static int HoverPyramidTopRow(int n) {
-    int w = 1;
-    while (((w * (w + 1)) / 2) < n) {
-        w++;
-    }
-    return w;
-}
+struct ZoomPickerScroll : ScrollBox {
+    Size maximum;
 
-// one row of the pyramid: items [a0, a1) from below the middle and [b0, b1)
-// from above it, so the row still runs smallest to largest
-static void AddHoverPyramidRow(VBox* vbox, const Vec<VirtCtrl*>& cells, int a0, int a1, int b0, int b1) {
-    auto* hbox = new HBox();
-    hbox->alignCross = CrossAxisAlign::Stretch;
-    for (int i = a0; i < a1; i++) {
-        hbox->AddChild(cells[i]);
+    ZoomPickerScroll(ILayout* child, Size maximum) : ScrollBox(child), maximum(maximum) {}
+
+    Size Layout(Constraints bc) override {
+        bc.max.dx = std::min(bc.max.dx, maximum.dx);
+        bc.max.dy = std::min(bc.max.dy, maximum.dy);
+        return ScrollBox::Layout(bc);
     }
-    for (int i = b0; i < b1; i++) {
-        hbox->AddChild(cells[i]);
-    }
-    vbox->AddChild(hbox);
-}
+};
 
 ILayout* NewToolbarHoverStrip(MainWindow* win, const Vec<ToolbarHoverMenuItem>& items) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
@@ -1840,42 +2059,28 @@ ILayout* NewToolbarHoverStrip(MainWindow* win, const Vec<ToolbarHoverMenuItem>& 
         tb->hoverItems[len(tb->hoverItems) - 1].isStripCell = true;
     }
 
-    // A pyramid rather than one long row: the middle of the list goes in the
-    // top row, next to the button, and each row below it holds what surrounds
-    // the middle, down to the two extremes. Every value is then a short move
-    // down and across instead of a run along a row as wide as the screen.
-    int base = len(tb->hoverItems) - len(cells);
-    auto* vbox = new VBox();
-    vbox->alignCross = CrossAxisAlign::CrossCenter;
-    int b = DpiScale(kHoverMenuBorder);
-    int n = len(cells);
-    if (n == 0) {
-        return new Padding(vbox, Insets{b, b, b, b});
+    int b = UiScalePx(kHoverMenuBorder);
+    Rect frame = HwndClientRect(win->hwndFrame);
+    Rect work = PlatformWindowWorkArea(win->hwndFrame);
+    constexpr int kPickerMaxColumns = 6;
+    int availableWidth = std::max(1, std::min(frame.dx, work.dx) - 2 * UiScalePx(16));
+    int availableHeight = std::max(1, std::min(frame.dy, work.dy) - UiScalePx(120));
+    int cellWidth = 1;
+    for (VirtCtrl* cell : cells) {
+        cellWidth = std::max(cellWidth, cell->GetIdealSize().dx);
     }
-    int top = HoverPyramidTopRow(n);
-    // items [lo, hi) are the ones already placed
-    int lo = (n - top) / 2;
-    int hi = lo + top;
-    // the top row splits at its own middle, and everything past that point is
-    // on the larger side in every row: the rows below it take from the two
-    // sides of the middle in order
-    for (int i = lo + (top / 2); i < n; i++) {
-        tb->hoverItems[base + i].isRightHalf = true;
+    int columns = limitValue((availableWidth - 2 * b) / cellWidth, 1, kPickerMaxColumns);
+    auto* table = new Table();
+    table->SetSize((len(cells) + columns - 1) / columns, columns);
+    for (int i = 0; i < len(cells); i++) {
+        auto& slot = table->SetCell(i / columns, i % columns, cells[i]);
+        slot.alignH = CrossAxisAlign::Stretch;
+        slot.alignV = CrossAxisAlign::Stretch;
     }
-    AddHoverPyramidRow(vbox, cells, lo, hi, 0, 0);
-    int rowLen = top - 1;
-    while (lo > 0 || hi < n) {
-        // as evenly as the two sides allow: the shorter side runs out first
-        // and the other takes what is left of the row
-        int nLeft = std::min(lo, (rowLen + 1) / 2);
-        int nRight = std::min(n - hi, rowLen - nLeft);
-        nLeft = std::min(lo, rowLen - nRight);
-        AddHoverPyramidRow(vbox, cells, lo - nLeft, lo, hi, hi + nRight);
-        lo -= nLeft;
-        hi += nRight;
-        rowLen = std::max(rowLen - 1, 1);
-    }
-    return new Padding(vbox, Insets{b, b, b, b});
+    auto* scroll = new ZoomPickerScroll(table, Size{availableWidth - 2 * b, availableHeight - 2 * b});
+    scroll->syncScrollbar = false;
+    scroll->lineDy = PlatformFontLineHeight(tb->platformFont) + UiScalePx(8);
+    return new Padding(scroll, Insets{b, b, b, b});
 }
 
 // The rows/cells of the drop-down that is up, in screen coordinates, for
@@ -1991,7 +2196,13 @@ static void PaintHoverDropdownRightHalf(MainWindow* win, VirtHostPaintEvent* ev)
 static void PaintHoverDropdownBg(MainWindow* win, VirtHostPaintEvent* ev) {
     ev->gfx->FillRect(ev->clientRect, TbBgColor());
     PaintHoverDropdownRightHalf(win, ev);
-    ev->gfx->DrawRect(ev->clientRect, ThemeEdgeColor(), DpiScale(kHoverMenuBorder));
+    ev->gfx->DrawRect(ev->clientRect, ThemeEdgeColor(), UiScalePx(kHoverMenuBorder));
+}
+
+static void PaintHoverFocus(MainWindow*, VirtHostPaintEvent* ev) {
+    VirtCtrl* focused = ev->host->vroot ? ev->host->vroot->focused : nullptr;
+    if (!focused || !focused->IsVisible() || !ev->host->HasFocus()) return;
+    ev->gfx->DrawFocusRect(focused->BoundsInWindow());
 }
 
 // The button a drop-down is up for goes without its tooltip: the bubble would
@@ -2112,9 +2323,17 @@ static void OpenHoverDropdown(MainWindow* win, int cmdId) {
         return;
     }
     host->onPaintBackground = MkFunc1(PaintHoverDropdownBg, win);
+    host->onPaint = MkFunc1(PaintHoverFocus, win);
     host->onMouseMove = MkFunc0(OnHoverDropdownMouseMove, win);
     host->onMouseLeave = MkFunc0(OnHoverDropdownMouseLeave, win);
     Size sz = host->SetLayoutSizedToContent(ev.layout);
+    Vec<VirtCtrl*> controls;
+    CollectVirtCtrls(ev.layout, controls);
+    for (VirtCtrl* control : controls) {
+        if (!control->onClick.IsValid() && !AsVirtSlider(control)) continue;
+        control->SetFlag(vwfFocusable, true);
+        control->onKeyDown = MkFunc1(OnPaletteKey, win);
+    }
 
     // under the button, left edges aligned, kept on the monitor. A build that
     // asked for it instead hangs off the middle of the button, so it opens
@@ -2124,6 +2343,12 @@ static void OpenHoverDropdown(MainWindow* win, int cmdId) {
         x = anchor.x + ((anchor.dx - sz.dx) / 2);
     }
     Rect r{x, anchor.Bottom(), sz.dx, sz.dy};
+    if (cmdId == CmdZoomIn || cmdId == CmdZoomOut) {
+        Rect frame = HwndMapLtrClientRectToScreen(win->hwndFrame, HwndClientRect(win->hwndFrame));
+        Rect bounds = frame.Intersect(PlatformWindowWorkArea(win->hwndFrame));
+        r.x = limitValue(r.x, bounds.x, std::max(bounds.x, bounds.Right() - r.dx));
+        r.y = limitValue(r.y, bounds.y, std::max(bounds.y, bounds.Bottom() - r.dy));
+    }
     r = ShiftRectToWorkArea(r, win->hwndFrame, true);
     host->SetPos(r, true);
 
@@ -2283,32 +2508,27 @@ struct ZoomHoverLevel {
     int cmdId;
 };
 
-// What the zoom strip lists: the levels the zoom buttons step through, so a
-// click on one of them is the same jump the buttons make in one go, plus the
-// two fit modes where 100% is. GetDefaultZoomLevels() is ZoomLevels from the
-// settings when it is set, otherwise the built-in list, and GetZoomStepCmdIds()
-// has a command for each of them, in the same order.
 static void ZoomHoverLevels(Vec<ZoomHoverLevel>& out) {
-    int n = 0;
-    float* levels = GetDefaultZoomLevels(&n);
-    Vec<int>* cmdIds = GetZoomStepCmdIds();
-    if (!levels || !cmdIds || len(*cmdIds) != n) {
+    static Vec<ZoomHoverLevel> cached;
+    if (len(cached) > 0) {
+        for (const auto& level : cached) {
+            VecAppend(out, level);
+        }
         return;
     }
-    bool addedFits = false;
-    for (int i = 0; i < n; i++) {
-        if (!addedFits && levels[i] > 100) {
-            // the fit modes go where their size puts them, i.e. right after
-            // 100% in every list that has it
-            VecAppend(out, ZoomHoverLevel{kZoomFitPage, CmdZoomFitPage});
-            VecAppend(out, ZoomHoverLevel{kZoomFitWidth, CmdZoomFitWidth});
-            addedFits = true;
+    Vec<float> levels;
+    CollectZoomPickerLevels(levels);
+    for (float zoom : levels) {
+        int cmdId = CmdIdFromVirtualZoom(zoom);
+        if (cmdId == CmdZoomCustom) {
+            auto* cmd = CreateCommandFromDefinition(fmt("CmdZoomCustom %.2f", zoom));
+            if (!cmd) {
+                continue;
+            }
+            cmdId = cmd->id;
         }
-        VecAppend(out, ZoomHoverLevel{levels[i], (*cmdIds)[i]});
-    }
-    if (!addedFits) {
-        VecAppend(out, ZoomHoverLevel{kZoomFitPage, CmdZoomFitPage});
-        VecAppend(out, ZoomHoverLevel{kZoomFitWidth, CmdZoomFitWidth});
+        VecAppend(cached, ZoomHoverLevel{zoom, cmdId});
+        VecAppend(out, ZoomHoverLevel{zoom, cmdId});
     }
 }
 
@@ -2331,9 +2551,7 @@ static int ZoomHoverCurrentIdx(MainWindow* win, const Vec<ZoomHoverLevel>& level
     return -1;
 }
 
-// The zoom buttons' drop-down: the zoom levels as a compact pyramid centred on
-// the button, the one in use boxed, so it is a short trip from the button to
-// any of the levels.
+// Compact presets; custom entry and document zoom retain the full supported range.
 static void BuildZoomHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     DocController* ctrl = win ? win->ctrl : nullptr;
     if (!ctrl) {
@@ -2482,7 +2700,7 @@ static ParsedColor* AnnotPresetColorSetting(int cmdId) {
         case CmdCreateAnnotPolygon:
             return &a.polygonColor;
         case CmdCreateAnnotInk:
-            return &a.inkColor;
+            return nullptr;
         case CmdCreateAnnotStamp:
             return &a.stampColor;
         case CmdCreateAnnotCaret:
@@ -2519,7 +2737,8 @@ static Color AnnotDefaultColor(int cmdId) {
 }
 
 // the color the button's next annotation is made in
-static Color AnnotCurrentColor(int cmdId) {
+static Color AnnotCurrentColor(MainWindow* win, int cmdId) {
+    if (cmdId == CmdCreateAnnotInk) return InkPenColor(win);
     ParsedColor* setting = AnnotPresetColorSetting(cmdId);
     Color col = setting ? GetParsedColor(*setting, kColorUnset) : kColorUnset;
     return col != kColorUnset ? col : AnnotDefaultColor(cmdId);
@@ -2541,7 +2760,11 @@ static void AnnotPresetColors(int cmdId, Vec<Color>& out) {
     }
 }
 
-static void SetAnnotPresetColor(int cmdId, Color col) {
+static void SetAnnotPresetColor(MainWindow* win, int cmdId, Color col) {
+    if (cmdId == CmdCreateAnnotInk) {
+        SetInkPenColor(win, col);
+        return;
+    }
     ParsedColor* setting = AnnotPresetColorSetting(cmdId);
     if (!setting) {
         return;
@@ -2562,7 +2785,7 @@ struct ToolbarColorSwatch : VirtCtrl {
     ~ToolbarColorSwatch() override { str::Free(text); }
 
     Size GetIdealSize() override {
-        int dx = DpiScale(kAnnotSwatchDx) + (2 * DpiScale(kAnnotSwatchPad));
+        int dx = UiScalePx(kAnnotSwatchDx) + (2 * UiScalePx(kAnnotSwatchPad));
         return {dx, dx};
     }
 
@@ -2570,8 +2793,8 @@ struct ToolbarColorSwatch : VirtCtrl {
         Rect r = ctx.bounds;
         int d = std::min(r.dx, r.dy);
         Rect ring{r.x + ((r.dx - d) / 2), r.y + ((r.dy - d) / 2), d, d};
-        int t = DpiScale(1);
-        if (isCurrent || HasFlag(vwfHovered)) {
+        int t = UiScalePx(1);
+        if (isCurrent || HasFlag(vwfHovered) || HasFlag(vwfFocused)) {
             // a filled disc with a smaller one of the background punched out of
             // it: Gfx fills ellipses but doesn't outline them
             ctx.gfx->FillEllipse(ring, TbTextColor());
@@ -2580,7 +2803,7 @@ struct ToolbarColorSwatch : VirtCtrl {
             ctx.gfx->FillEllipse(hole, TbBgColor());
         }
         Rect circle = ring;
-        int p = DpiScale(kAnnotSwatchPad);
+        int p = UiScalePx(kAnnotSwatchPad);
         circle.Inflate(-p, -p);
         ctx.gfx->FillEllipse(circle, TbEdgeColor());
         circle.Inflate(-t, -t);
@@ -2623,7 +2846,7 @@ static void OnAnnotColorClicked(MainWindow* win, VirtMouseEvent* ev) {
     if (!sw) {
         return;
     }
-    SetAnnotPresetColor(sw->id, sw->col);
+    SetAnnotPresetColor(win, sw->id, sw->col);
     if (CanCreateAnnotFromSelection(win, sw->id)) {
         // with text selected, picking a color is also a request to mark it up
         ToolbarPostCommand(win, sw->id);
@@ -2634,6 +2857,8 @@ static void OnAnnotColorClicked(MainWindow* win, VirtMouseEvent* ev) {
 // which button's color the generic color dialog is editing; a valid onPick
 // instead means it was opened for something that is not a toolbar button
 struct AnnotColorsTarget {
+    MainWindow* win = nullptr;
+    InkPenStyle style = InkPenStyle::Ballpoint;
     int cmdId = 0;
     Func1<Color> onPick;
 };
@@ -2648,7 +2873,10 @@ static void AnnotColorsPicked(AnnotColorsTarget* target, ChangeColorsArgs* args)
         if (target->onPick.IsValid()) {
             target->onPick.Call(args->color);
         } else {
-            SetAnnotPresetColor(target->cmdId, args->color);
+            if (target->cmdId == CmdCreateAnnotInk)
+                SetInkPenColor(target->style, args->color);
+            else
+                SetAnnotPresetColor(target->win, target->cmdId, args->color);
         }
     }
     delete target;
@@ -2663,12 +2891,14 @@ static void OnAnnotColorsEditClicked(MainWindow* win, VirtMouseEvent* ev) {
     uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "HideToolbarHoverDropdown");
 
     auto* target = new AnnotColorsTarget();
+    target->win = win;
+    target->style = win->inkPenStyle;
     target->cmdId = cmdId;
 
     auto* args = new ChangeColorsArgs();
     args->win = win;
     args->title = Tr("Annotation Colors");
-    args->color = AnnotCurrentColor(cmdId);
+    args->color = AnnotCurrentColor(win, cmdId);
     args->withOpacity = true;
     AnnotPresetColors(cmdId, args->colors);
     args->onClose = MkFunc1(AnnotColorsPicked, target);
@@ -2756,7 +2986,7 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
 
     auto* edit = new VirtIconButton();
     int iconSize = tb->iconSize;
-    int pad = DpiScale(kAnnotSwatchPad);
+    int pad = UiScalePx(kAnnotSwatchPad);
     edit->id = cmdId;
     edit->padding = {pad, pad, pad, pad};
     edit->pixmap = GetCachedPixmapForSvg(Str(kEnhancedIconEdit), iconSize, iconSize, TbTextColor(), TbBgColor());
@@ -2772,7 +3002,7 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     });
     // indented by the swatch's padding so the text lines up with the first
     // color, and 0.25rem above the swatches
-    Insets labelInsets{.bottom = DpiScale(4)};
+    Insets labelInsets{.bottom = UiScalePx(4)};
     if (IsUIRtl()) {
         labelInsets.right = pad;
     } else {
@@ -2789,9 +3019,9 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
         hbox->AddChild(labelText);
         Insets gap{};
         if (IsUIRtl()) {
-            gap.right = DpiScale(16);
+            gap.right = UiScalePx(16);
         } else {
-            gap.left = DpiScale(16);
+            gap.left = UiScalePx(16);
         }
         hbox->AddChild(new Padding(NewVirtText({
                                        .s = title,
@@ -2810,8 +3040,8 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     if (extra) {
         vbox->AddChild(extra);
     }
-    int b = DpiScale(kHoverMenuBorder);
-    int p = DpiScale(kAnnotColorsPad);
+    int b = UiScalePx(kHoverMenuBorder);
+    int p = UiScalePx(kAnnotColorsPad);
     return new Padding(vbox, Insets{b + p, b + p, b + p, b + p});
 }
 
@@ -2825,8 +3055,8 @@ constexpr int kInkSliderDx = 190;
 // how far the preview's wave swings, as a part of the room left by the stroke
 constexpr float kInkPreviewWave = 0.42f;
 
-static float InkThickness() {
-    float v = gSettings ? gSettings->annotations.inkBorderWidth : kInkThicknessMin;
+static float InkThickness(MainWindow* win) {
+    float v = InkPenWidth(win);
     return limitValue(v, gSettings->penMinWidth, gSettings->penMaxWidth);
 }
 
@@ -2836,15 +3066,15 @@ struct InkStrokePreview : VirtCtrl {
     Color col = kColRed;
     float thickness = kInkThicknessMin;
 
-    Size GetIdealSize() override { return {DpiScale(kInkSliderDx), DpiScale(kInkPreviewDy)}; }
+    Size GetIdealSize() override { return {UiScalePx(kInkSliderDx), UiScalePx(kInkPreviewDy)}; }
 
     void Paint(VirtPaintCtx& ctx) override {
         Rect r = ctx.bounds;
-        float w = thickness * (float)DpiScale(100) / 100.f;
+        float w = thickness * (float)UiScalePx(100) / 100.f;
         // the stroke has to fit the preview whatever the thickness
         w = std::min(w, (float)r.dy / 2.f);
         w = std::max(w, 1.f);
-        int inset = (int)(w / 2.f) + DpiScale(2);
+        int inset = (int)(w / 2.f) + UiScalePx(2);
         int x0 = r.x + inset;
         int x1 = r.Right() - inset;
         if (x1 <= x0) {
@@ -2881,6 +3111,7 @@ struct InkStrokePreview : VirtCtrl {
 // preview shows. The preview is a sibling in the same drop-down, so it lives
 // exactly as long as the slider does.
 struct InkThicknessSlider : VirtSlider {
+    MainWindow* win = nullptr;
     InkStrokePreview* preview = nullptr;
     // the width as a number, under the slider; a sibling like the preview
     VirtText* valueText = nullptr;
@@ -2908,8 +3139,8 @@ struct InkThicknessSlider : VirtSlider {
             valueText->SetText(fractional ? fmt("%.2f", Width()) : fmt("%d", value));
             valueText->Invalidate();
         }
-        if (!onThickness.IsValid() && !onInteger.IsValid() && gSettings) {
-            gSettings->annotations.inkBorderWidth = Width();
+        if (!onThickness.IsValid() && !onInteger.IsValid() && win) {
+            SetInkPenWidth(win, Width());
         }
     }
     // rewriting an annotation is too slow to do on every step of a drag, so
@@ -2935,7 +3166,7 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
                                       Str label, float minThickness, InkThicknessSlider** sliderOut) {
     ToolbarVirt* tb = win->toolbarVirt;
     if (thickness < 0) {
-        thickness = InkThickness();
+        thickness = InkThickness(win);
     }
     float minWidth = minThickness > 0 ? std::max(gSettings->penMinWidth, minThickness) : 0.f;
     float maxWidth = std::max(minWidth, gSettings->penMaxWidth);
@@ -2947,13 +3178,14 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
     preview->thickness = thickness;
 
     auto* slider = new InkThicknessSlider();
+    slider->win = win;
     slider->fractional = true;
     slider->minimum = minWidth;
     slider->step = step;
     slider->minVal = 0;
     slider->maxVal = std::max(0, (int)floorf((maxWidth - minWidth) / step + 0.001f));
     slider->value = limitValue((int)roundf((thickness - minWidth) / step), 0, slider->maxVal);
-    slider->idealDx = DpiScale(kInkSliderDx);
+    slider->idealDx = UiScalePx(kInkSliderDx);
     slider->preview = preview;
     slider->onThickness = onThickness;
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
@@ -2992,7 +3224,7 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
 
     auto* vbox = new VBox();
     vbox->alignCross = CrossAxisAlign::Stretch;
-    int gap = DpiScale(6);
+    int gap = UiScalePx(6);
     vbox->AddChild(new Padding(preview, Insets{gap, 0, gap, 0}));
     vbox->AddChild(NewVirtText({
         .s = label,
@@ -3006,30 +3238,30 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
     return vbox;
 }
 
-struct InkPenTile : VirtCtrl {
-    Str text;                 // owned
-    Pixmap* pixmap = nullptr; // cached
-    PlatformFont* font = nullptr;
+struct InkPenTile : VirtButton {
+    Pixmap* pixmap = nullptr;
     bool isCurrent = false;
-    ~InkPenTile() override { str::Free(text); }
+    InkPenTile() : VirtButton({}) {}
     Size GetIdealSize() override {
-        return {std::max(DpiScale(70), PlatformFontMeasureText(font, text).dx + DpiScale(16)), DpiScale(76)};
+        int imageDx = pixmap ? pixmap->width : UiScalePx(40);
+        int imageDy = pixmap ? pixmap->height : UiScalePx(64);
+        Size label = PlatformFontMeasureText(font, s);
+        return {std::max(imageDx + UiScalePx(24), label.dx + UiScalePx(16)), imageDy + label.dy + UiScalePx(24)};
     }
     void Paint(VirtPaintCtx& ctx) override {
         Rect r = ctx.bounds;
-        if (isCurrent || HasFlag(vwfHovered)) {
-            ctx.gfx->FillRoundedRect(r, DpiScale(10), TbHoverColor(), isCurrent ? ThemeBrandColor() : TbHoverColor());
+        if (isCurrent || HasFlag(vwfHovered) || HasFlag(vwfFocused)) {
+            ctx.gfx->FillRoundedRect(r, UiScalePx(10), TbHoverColor(),
+                                     isCurrent || HasFlag(vwfFocused) ? ThemeBrandColor() : TbHoverColor());
         }
         if (pixmap) {
             ctx.gfx->DrawPixmap(pixmap,
-                                {r.x + (r.dx - pixmap->width) / 2, r.y + DpiScale(8), pixmap->width, pixmap->height});
+                                {r.x + (r.dx - pixmap->width) / 2, r.y + UiScalePx(8), pixmap->width, pixmap->height});
         }
-        Rect label{r.x, r.Bottom() - DpiScale(28), r.dx, DpiScale(24)};
-        ctx.gfx->DrawText(text, label, gfxTextCenter | gfxTextVCenter, font,
-                          isCurrent ? ThemeBrandColor() : TbTextColor());
+        int labelDy = PlatformFontLineHeight(font);
+        Rect label{r.x, r.Bottom() - labelDy - UiScalePx(8), r.dx, labelDy};
+        ctx.gfx->DrawText(s, label, gfxTextCenter | gfxTextVCenter, font, TbTextColor());
     }
-    void OnMouseEnter() { Invalidate(); }
-    void OnMouseLeave() { Invalidate(); }
 };
 
 static void OnHidePenSettings(MainWindow* win, VirtMouseEvent* ev) {
@@ -3037,14 +3269,15 @@ static void OnHidePenSettings(MainWindow* win, VirtMouseEvent* ev) {
     ev->didHandle = true;
 }
 
+// Original upright instruments: color barrels, metal nibs and distinct tips.
 static ILayout* BuildInkPenTypes(MainWindow* win) {
     ToolbarVirt* tb = win->toolbarVirt;
-    const char* icons[] = {
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M13 25l-6 1 1-6L23 5l4 4zM10 18l4 4M7 26l-2 2" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M16 3l9 16-9 10-9-10zM16 3v13" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="18" r="2" fill="currentColor"/></svg>)",
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M12 18L25 4l3 3-13 14M12 18c-8 0-2 8-8 10 10 1 14-5 11-7z" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M5 27l2-8L23 3l6 6-16 16zM7 19l6 6M10 22L26 6M5 27l4-1" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M11 21l-3-3L21 5l7 7-13 13-3-3-6 5H3zM17 9l7 7M4 29h22" fill="none" stroke="currentColor" stroke-width="2"/></svg>)",
+    const char* shapes[] = {
+        R"(<path d="M23 89V42l4-18 5-10 5 10 4 18v47Z" fill="#bac4cf"/><path d="M23 89V55h18v34Z" fill="%s"/><path d="M29 25l3-11 3 11v8h-6Z" fill="%s"/><path d="M25 44h14M27 60v21" fill="none"/><path d="M37 43v12" fill="none" stroke-width="3"/>)",
+        R"(<path d="M22 89V57l-2-16L32 8l12 33-2 16v32Z" fill="#bac4cf"/><path d="M22 89V57h20v32Z" fill="%s"/><path d="M32 8v31" fill="none"/><circle cx="32" cy="42" r="3" fill="%s"/><path d="M23 52h18M26 65v17" fill="none"/>)",
+        R"(<path d="M23 89V53h18v36Z" fill="%s"/><path d="M24 52C17 36 24 18 32 8c-2 14 14 17 8 44Z" fill="%s"/><path d="M24 48h16v9H24Z" fill="#bac4cf"/><path d="M29 24c-4 9-4 14-1 19M27 63v19" fill="none"/>)",
+        R"(<path d="M22 89V37l10-27 10 27v52Z" fill="%s"/><path d="m22 37 10-27 10 27-7-4-3 5-3-5Z" fill="#e9caa1"/><path d="m29 18 3-8 3 8Z" fill="%s"/><path d="M29 42v47M35 42v47" fill="none"/>)",
+        R"(<path d="M19 89V47l4-11V20l18-7v23l4 11v42Z" fill="#bac4cf"/><path d="M23 20l18-7v16l-18 7Z" fill="%s"/><path d="M19 89V54h26v35Z" fill="%s"/><path d="M23 46h18M24 63v18" fill="none"/>)",
     };
     Str labels[] = {Tr("Ballpoint"), Tr("Fountain"), Tr("Brush"), Tr("Pencil"), Tr("Highlighter")};
     int cmds[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
@@ -3057,15 +3290,20 @@ static ILayout* BuildInkPenTypes(MainWindow* win) {
         tile->id = cmds[i];
         tile->font = tb->platformFont;
         tile->isCurrent = win->inkEraseMode == 0 && win->inkPenStyle == styles[i];
-        str::ReplaceWithCopy(&tile->text, labels[i]);
+        tile->SetText(labels[i]);
         tile->SetTooltip(labels[i]);
-        tile->pixmap = GetCachedPixmapForSvg(Str(icons[i]), DpiScale(32), DpiScale(32),
-                                             tile->isCurrent ? ThemeBrandColor() : TbTextColor(), TbBgColor());
+        TempStr barrel = SerializeColorTemp(InkPenColor(styles[i]) & 0xffffff);
+        TempStr shape = fmt(shapes[i], barrel, barrel);
+        TempStr svg = fmt(
+            R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="96" viewBox="0 0 64 96"><g stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">%s</g></svg>)",
+            shape);
+        int dx = std::max(UiScalePx(40), tb->iconSize * 3 / 2);
+        tile->pixmap = GetCachedPixmapForSvg(svg, dx, dx * 3 / 2, TbTextColor(), TbBgColor());
         tile->onClick = MkFunc1(OnHoverRowClicked, win);
         row->AddChild(tile);
-        RecordHoverItem(tb, tile, tile->text, {{}, labels[i], cmds[i], true, tile->isCurrent});
+        RecordHoverItem(tb, tile, tile->s, {{}, labels[i], cmds[i], true, tile->isCurrent});
     }
-    return new Padding(row, Insets{DpiScale(8), DpiScale(8), DpiScale(8), DpiScale(8)});
+    return new Padding(row, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
 }
 
 static void OnLaserColorClicked(MainWindow* win, VirtMouseEvent* ev) {
@@ -3094,6 +3332,33 @@ static void OnLaserCustomColor(MainWindow* win, VirtMouseEvent* ev) {
     ev->didHandle = true;
 }
 
+static void OnLaserLifetime(float seconds) {
+    gSettings->laserLifetimeSeconds = limitValue(seconds, 0.1f, 120.f);
+    ScheduleSaveSettings();
+}
+
+static void OnLaserWidth(float width) {
+    gSettings->laserWidth = NormalizeLaserWidth(width);
+    ScheduleSaveSettings();
+    for (MainWindow* win : gWindows) {
+        if (win->laserPointerActive) InvalidateRect(win->hwndCanvas, nullptr, FALSE);
+    }
+}
+
+static void StepLaserWidth(InkThicknessSlider* slider, int direction, VirtMouseEvent* ev) {
+    slider->SetValue(slider->value + direction, false);
+    slider->OnCommitted();
+    slider->Invalidate();
+    ev->didHandle = true;
+}
+
+static void LaserWidthThinner(InkThicknessSlider* slider, VirtMouseEvent* ev) {
+    StepLaserWidth(slider, -1, ev);
+}
+static void LaserWidthThicker(InkThicknessSlider* slider, VirtMouseEvent* ev) {
+    StepLaserWidth(slider, 1, ev);
+}
+
 static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win->toolbarVirt;
     auto* panel = new VBox();
@@ -3103,19 +3368,67 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     header->alignCross = CrossAxisAlign::CrossCenter;
     header->AddChild(NewVirtText({.s = Tr("Laser pointer"), .font = tb->platformFont, .textColor = TbTextColor()}));
     auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
-    close->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
-    close->cornerRadius = DpiScale(6);
+    close->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
+    close->cornerRadius = UiScalePx(6);
     close->onClick = MkFunc1(OnHidePenSettings, win);
     header->AddChild(close);
     panel->AddChild(header);
     Vec<ToolbarHoverMenuItem> modes;
-    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Solid line"), CmdLaserSolid, true,
+    VecAppend(modes, {Str(gIconLaserSolid), Tr("Solid line"), CmdLaserSolid, true,
                       win->laserPointerMode == LaserPointerMode::Solid});
-    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Hollow line"), CmdLaserHollow, true,
+    VecAppend(modes, {Str(gIconLaserHollow), Tr("Hollow line"), CmdLaserHollow, true,
                       win->laserPointerMode == LaserPointerMode::Hollow});
-    VecAppend(modes, {Str(kEnhancedIconLaser), Tr("Single dot"), CmdLaserDot, true,
+    VecAppend(modes, {Str(gIconLaserDot), Tr("Single dot"), CmdLaserDot, true,
                       win->laserPointerMode == LaserPointerMode::Dot});
     panel->AddChild(NewToolbarHoverMenu(win, modes));
+    panel->AddChild(NewVirtText({.s = Tr("Laser width (px)"), .font = tb->platformFont, .textColor = TbTextColor()}));
+    auto* width = new InkThicknessSlider();
+    width->fractional = true;
+    width->minimum = 0.1f;
+    width->step = 0.1f;
+    width->minVal = 0;
+    width->maxVal = 319;
+    width->value = limitValue((int)roundf((NormalizeLaserWidth(gSettings->laserWidth) - 0.1f) / 0.1f), 0, 319);
+    width->idealDx = UiScalePx(kInkSliderDx);
+    width->onThickness = MkFunc1Void(OnLaserWidth);
+    width->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(width);
+    width->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(width);
+    str::ReplaceWithCopy(&width->text, StrL("laser-width-px"));
+    width->valueText =
+        NewVirtText({.s = fmt("%.2f", width->Width()), .font = tb->platformFont, .textColor = TbTextColor()});
+    width->SetTooltip(Tr("Laser width: 0.1 to 32 pixels. Independent of pen thickness."));
+    panel->AddChild(width);
+    auto* widthRow = new HBox();
+    widthRow->alignMain = MainAxisAlign::SpaceBetween;
+    widthRow->alignCross = CrossAxisAlign::CrossCenter;
+    auto* thinner = new VirtButton(StrL("-"), tb->platformFont);
+    thinner->SetTooltip(Tr("Decrease laser width by 0.1 px"));
+    thinner->onClick = MkFunc1(LaserWidthThinner, width);
+    auto* thicker = new VirtButton(StrL("+"), tb->platformFont);
+    thicker->SetTooltip(Tr("Increase laser width by 0.1 px"));
+    thicker->onClick = MkFunc1(LaserWidthThicker, width);
+    widthRow->AddChild(thinner);
+    widthRow->AddChild(width->valueText);
+    widthRow->AddChild(thicker);
+    panel->AddChild(widthRow);
+    panel->AddChild(
+        NewVirtText({.s = Tr("Disappear after (seconds)"), .font = tb->platformFont, .textColor = TbTextColor()}));
+    auto* lifetime = new InkThicknessSlider();
+    lifetime->fractional = true;
+    lifetime->minimum = 0.1f;
+    lifetime->step = 0.1f;
+    lifetime->minVal = 0;
+    lifetime->maxVal = 1199;
+    lifetime->value = limitValue((int)roundf((gSettings->laserLifetimeSeconds - 0.1f) / 0.1f), 0, 1199);
+    lifetime->idealDx = UiScalePx(kInkSliderDx);
+    lifetime->onThickness = MkFunc1Void(OnLaserLifetime);
+    lifetime->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(lifetime);
+    lifetime->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(lifetime);
+    str::ReplaceWithCopy(&lifetime->text, Str("laser-lifetime-seconds"));
+    lifetime->valueText =
+        NewVirtText({.s = fmt("%.2f", lifetime->Width()), .font = tb->platformFont, .textColor = TbTextColor()});
+    panel->AddChild(lifetime);
+    panel->AddChild(lifetime->valueText);
     panel->AddChild(NewVirtText({.s = Tr("Color"), .font = tb->platformFont, .textColor = TbTextColor()}));
     auto* colors = new HBox();
     colors->alignCross = CrossAxisAlign::CrossCenter;
@@ -3147,14 +3460,14 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     }
     panel->AddChild(colors);
     auto* customButton = new VirtButton(Tr("Custom color..."), tb->platformFont);
-    customButton->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
-    customButton->cornerRadius = DpiScale(6);
+    customButton->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
+    customButton->cornerRadius = UiScalePx(6);
     customButton->onClick = MkFunc1(OnLaserCustomColor, win);
     panel->AddChild(customButton);
-    panel->AddChild(NewVirtText({.s = Tr("Temporary marks fade away. Press Esc to stop."),
+    panel->AddChild(NewVirtText({.s = Tr("Marks disappear after the pen lifts. Press Esc to stop."),
                                  .font = tb->platformFont,
                                  .textColor = TbDisabledColor()}));
-    ev->layout = new Padding(panel, Insets{DpiScale(10), DpiScale(10), DpiScale(10), DpiScale(10)});
+    ev->layout = new Padding(panel, Insets{UiScalePx(10), UiScalePx(10), UiScalePx(10), UiScalePx(10)});
     ev->centerOnButton = true;
 }
 
@@ -3163,10 +3476,10 @@ static void PinToolClick(MainWindow*, VirtMouseEvent*);
 static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     ParsedColor* setting = AnnotPresetColorSetting(ev->cmdId);
-    if (!tb || !setting) {
+    if (!tb || (!setting && ev->cmdId != CmdCreateAnnotInk)) {
         return;
     }
-    Color current = AnnotCurrentColor(ev->cmdId);
+    Color current = AnnotCurrentColor(win, ev->cmdId);
     EnsureAnnotPresetColor(ev->cmdId, current);
     // ink is the one annotation whose width is a choice too
     InkThicknessSlider* slider = nullptr;
@@ -3191,11 +3504,11 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
         header->alignCross = CrossAxisAlign::CrossCenter;
         header->AddChild(NewVirtText({.s = Tr("Pen types"), .font = tb->platformFont, .textColor = TbTextColor()}));
         auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
-        close->padding = {DpiScale(6), DpiScale(10), DpiScale(6), DpiScale(10)};
-        close->cornerRadius = DpiScale(6);
+        close->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
+        close->cornerRadius = UiScalePx(6);
         close->onClick = MkFunc1(OnHidePenSettings, win);
         header->AddChild(close);
-        panel->AddChild(new Padding(header, Insets{DpiScale(8), DpiScale(8), 0, DpiScale(8)}));
+        panel->AddChild(new Padding(header, Insets{UiScalePx(8), UiScalePx(8), 0, UiScalePx(8)}));
         panel->AddChild(BuildInkPenTypes(win));
         panel->AddChild(ev->layout);
         Vec<ToolbarHoverMenuItem> tools;
@@ -3305,7 +3618,7 @@ static void OnAnnotColorPopupEdit(AnnotColorPopup* p, VirtMouseEvent*) {
 
 static void PaintAnnotColorPopupBg(MainWindow*, VirtHostPaintEvent* ev) {
     ev->gfx->FillRect(ev->clientRect, TbBgColor());
-    ev->gfx->DrawRect(ev->clientRect, ThemeEdgeColor(), DpiScale(kHoverMenuBorder));
+    ev->gfx->DrawRect(ev->clientRect, ThemeEdgeColor(), UiScalePx(kHoverMenuBorder));
 }
 
 static void PostedReclaimAnnotColorPopupCapture(MainWindow*) {
@@ -3392,7 +3705,7 @@ void ShowAnnotSliderPopup(MainWindow* win, Rect anchor, Str label, int value, in
     slider->minVal = minVal;
     slider->maxVal = maxVal;
     slider->value = value;
-    slider->idealDx = DpiScale(kInkSliderDx);
+    slider->idealDx = UiScalePx(kInkSliderDx);
     slider->onInteger = onValue;
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
     slider->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(slider);
@@ -3436,11 +3749,11 @@ void ShowAnnotSliderPopup(MainWindow* win, Rect anchor, Str label, int value, in
                                    .textColor = TbTextColor(),
                                    .isRtl = IsUIRtl(),
                                }),
-                               Insets{.bottom = DpiScale(4)}));
+                               Insets{.bottom = UiScalePx(4)}));
     vbox->AddChild(slider);
     vbox->AddChild(ends);
-    int b = DpiScale(kHoverMenuBorder);
-    int pad = DpiScale(kAnnotColorsPad);
+    int b = UiScalePx(kHoverMenuBorder);
+    int pad = UiScalePx(kAnnotColorsPad);
     ILayout* layout = new Padding(vbox, Insets{b + pad, b + pad, b + pad, b + pad});
     p->slider = slider;
     ShowAnnotPopupHost(p, layout, anchor);
@@ -3515,7 +3828,7 @@ static void OnToolbarMouseLeave(MainWindow* win) {
 
 static void PaintToolbarSeparator(VirtCustom*, VirtPaintCtx* ctx) {
     Rect r = ctx->bounds;
-    int inset = DpiScale(6);
+    int inset = UiScalePx(6);
     int dy = r.dy - (2 * inset);
     if (dy <= 0) {
         return;
@@ -3526,7 +3839,7 @@ static void PaintToolbarSeparator(VirtCustom*, VirtPaintCtx* ctx) {
 
 static VirtCtrl* MakeToolbarSeparator(int rowDy) {
     auto* sep = new VirtCustom();
-    sep->idealSize = {DpiScale(8), rowDy - DpiScale(12)};
+    sep->idealSize = {UiScalePx(8), rowDy - UiScalePx(12)};
     sep->onPaint = MkFunc1(PaintToolbarSeparator, sep);
     sep->SetFlag(vwfNoHitTest, true);
     return sep;
@@ -3540,7 +3853,7 @@ static bool IsAppearanceCmd(int cmdId) {
 
 static void PaintToolbarBrand(VirtCustom*, VirtPaintCtx* ctx) {
     Rect r = ctx->bounds;
-    int sz = DpiScale(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)));
+    int sz = UiScalePx(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)));
     HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, sz, sz, 0);
     Pixmap* badge = icon ? PixmapFromHICON(icon) : nullptr;
     if (badge) {
@@ -3552,7 +3865,7 @@ static void PaintToolbarBrand(VirtCustom*, VirtPaintCtx* ctx) {
     }
     PlatformFont* font = GetAppFont();
     int lineDy = PlatformFontLineHeight(font);
-    Rect title{r.x + sz + DpiScale(6), r.y + (r.dy - lineDy * 2) / 2, r.dx - sz - DpiScale(6), lineDy};
+    Rect title{r.x + sz + UiScalePx(6), r.y + (r.dy - lineDy * 2) / 2, r.dx - sz - UiScalePx(6), lineDy};
     ctx->gfx->DrawText(StrL("SumatraPDF Enhanced"), title, gfxTextEllipsis, font, TbTextColor());
     title.y += lineDy;
     ctx->gfx->DrawText(Tr("Focused reading"), title, gfxTextEllipsis, GetAppFont(), TbDisabledColor());
@@ -3590,7 +3903,7 @@ static Edit* CreateZoomEntry(MainWindow* win) {
     edit->Create(args);
     edit->SetIdealWidthChars(7);
     edit->SetMaxWidthChars(7);
-    edit->idealDy = tb->iconSize;
+    edit->idealDy = std::max(tb->iconSize, PlatformFontLineHeight(tb->platformFont) + UiScalePx(4));
     edit->mapRtlX = true;
     edit->onChar = MkFunc1(ZoomEntryChar, win);
     return edit;
@@ -3648,8 +3961,8 @@ static void RemovePinnedTool(int index) {
 static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
     int cmd = ev->target->id;
     Str tool = PinnedToolName(win, cmd);
-    Color color = AnnotCurrentColor(cmd);
-    float width = gSettings->annotations.inkBorderWidth;
+    Color color = AnnotCurrentColor(win, cmd);
+    float width = InkPenWidth(win);
     auto*& presets = gSettings->pinnedAnnotationTools;
     if (!presets) presets = new Vec<PinnedAnnotationTool*>();
     for (int i = 0; i < len(*presets); i++) {
@@ -3677,10 +3990,10 @@ struct PinnedToolButton : VirtIconButton {
     Color inkColor = kColBlack;
     void Paint(VirtPaintCtx& ctx) override {
         VirtIconButton::Paint(ctx);
-        int sz = DpiScale(9);
-        Rect dot{ctx.bounds.Right() - sz - DpiScale(2), ctx.bounds.Bottom() - sz - DpiScale(2), sz, sz};
+        int sz = UiScalePx(9);
+        Rect dot{ctx.bounds.Right() - sz - UiScalePx(2), ctx.bounds.Bottom() - sz - UiScalePx(2), sz, sz};
         ctx.gfx->FillEllipse(dot, TbTextColor());
-        dot.Inflate(-DpiScale(1), -DpiScale(1));
+        dot.Inflate(-UiScalePx(1), -UiScalePx(1));
         ctx.gfx->FillEllipse(dot, inkColor);
     }
 };
@@ -3698,12 +4011,12 @@ static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     int cmd = PinnedToolCommand(preset->tool);
     Color color = ParseColor(preset->color);
     if (cmd == CmdAnnotationHighlightBrush || cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut) {
-        SetAnnotPresetColor(cmd, color);
+        SetAnnotPresetColor(win, cmd, color);
         HwndSendCommand(win->hwndFrame, cmd);
     } else {
         HandlePenToolCommand(win, cmd);
-        SetColorText(gSettings->annotations.inkColor, preset->color);
-        gSettings->annotations.inkBorderWidth = limitValue(preset->width, 0.1f, 64.f);
+        SetInkPenColor(win, color);
+        SetInkPenWidth(win, preset->width);
         StartAnnotationPlacement(win, CmdCreateAnnotInk);
     }
     HideToolbarHoverDropdown(win);
@@ -3712,29 +4025,208 @@ static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     ev->didHandle = true;
 }
 
+static void OnToolbarKey(MainWindow*, VirtKeyEvent*);
+
 static ILayout* BuildPinnedTools(MainWindow* win) {
     auto* tb = win->toolbarVirt;
-    auto* row = new Wrap();
-    row->colGap = DpiScale(3);
+    auto* row = new HBox();
+    row->gap = UiScalePx(3);
     auto* presets = gSettings->pinnedAnnotationTools;
     if (!presets) return row;
     for (int i = 0; i < std::min(len(*presets), 32); i++) {
         auto* preset = (*presets)[i];
         auto* button = new PinnedToolButton();
         button->index = i;
+        button->id = CmdLast + 2000 + i;
         button->inkColor = ParseColor(preset->color);
-        button->padding = {DpiScale(4), DpiScale(6), DpiScale(4), DpiScale(6)};
-        button->cornerRadius = DpiScale(6);
+        button->padding = {UiScalePx(4), UiScalePx(6), UiScalePx(4), UiScalePx(6)};
+        button->cornerRadius = UiScalePx(6);
         button->pixmap =
             GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
         button->pixmapDisabled =
             GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
-        button->SetTooltip(fmt("%s · %s · %.2f pt. Right-click to unpin.", preset->tool, preset->color, preset->width));
+        button->SetTooltip(
+            fmt("%s Â· %s Â· %.2f pt. Right-click to unpin.", preset->tool, preset->color, preset->width));
         button->onClick = MkFunc1(PinnedToolClick, win);
+        button->onKeyDown = MkFunc1(OnToolbarKey, win);
+        button->SetFlag(vwfFocusable, true);
         row->AddChild(button);
         VecAppend(tb->pinnedItems, (VirtCtrl*)button);
     }
     return row;
+}
+
+static void ShowToolbarOverflow(MainWindow* win, int anchorId);
+static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev);
+
+static void OnOverflowClicked(MainWindow* win, VirtMouseEvent* ev) {
+    if (!ToolbarDropdownJustClosed()) ShowToolbarOverflow(win, ev->target->id);
+    ev->didHandle = true;
+}
+
+bool FocusToolbar(MainWindow* win, bool backwards) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    if (!tb || !tb->host->IsVisible() || !tb->host->vroot) return false;
+    Vec<TabStop> stops;
+    CollectTabStops(tb->host->layout, stops);
+    for (int j = 0; j < len(stops); j++) {
+        auto& stop = stops[backwards ? len(stops) - 1 - j : j];
+        if (!stop.vwnd) continue;
+        tb->host->vroot->SetFocus(stop.vwnd);
+        HwndSetFocusForce(tb->host->native);
+        return true;
+    }
+    return false;
+}
+
+static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev) {
+    if (ev->vkey == VK_ESCAPE) {
+        HideToolbarHoverDropdown(win);
+        HwndSetFocus(win->hwndFrame);
+        ev->didHandle = true;
+        return;
+    }
+    if (ev->vkey == VK_LEFT || ev->vkey == VK_RIGHT) {
+        auto* root = win->toolbarVirt->host->vroot;
+        if (root) root->TabNavigate((ev->vkey == VK_LEFT) != IsUIRtl());
+        ev->didHandle = true;
+        return;
+    }
+    bool palette = ev->vkey == VK_DOWN || (ev->vkey == VK_F10 && ev->isShift);
+    if (palette && ev->target->id != ToolbarOverflowId && ev->target->id != ToolbarAnnotOverflowId) {
+        if (ShowToolbarButtonDropdown(win, ev->target->id)) {
+            auto* hover = win->toolbarVirt->hoverHost;
+            if (hover && hover->vroot) hover->vroot->TabNavigate(false);
+            ev->didHandle = true;
+        }
+        return;
+    }
+    if (ev->vkey != VK_RETURN && ev->vkey != VK_SPACE && !palette) return;
+    VirtMouseEvent click;
+    click.target = ev->target;
+    click.hit = ev->target;
+    if (ev->target->onClick.IsValid()) ev->target->onClick.Call(&click);
+    ev->didHandle = true;
+}
+
+enum class ToolbarMenuActionKind {
+    Palette,
+    Pinned
+};
+struct ToolbarMenuAction {
+    ToolbarMenuActionKind kind = ToolbarMenuActionKind::Palette;
+    int id = 0;
+};
+
+static void AppendToolbarMenu(HMENU menu, int cmdId, Str text, bool enabled, bool checked = false) {
+    UINT flags = MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED) | (checked ? MF_CHECKED : MF_UNCHECKED);
+    AppendMenuW(menu, flags, cmdId, CWStrTemp(ToWStrTemp(text)));
+}
+
+static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
+    auto* tb = win->toolbarVirt;
+    Rect anchor = GetToolbarButtonScreenRect(win, anchorId);
+    if (!tb || anchor.IsEmpty()) return;
+    Vec<VirtCtrl*> hidden = anchorId == ToolbarAnnotOverflowId ? tb->annotationOverflowItems : tb->overflowItems;
+    CollapseFindBar(win);
+    HideToolbarHoverDropdown(win);
+    HMENU menu = CreatePopupMenu();
+    Vec<ToolbarMenuAction> actions;
+    constexpr int kActionFirst = 60000;
+    auto addPalette = [&](HMENU sub, int cmdId, bool enabled) {
+        int localId = kActionFirst + len(actions);
+        VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Palette, cmdId});
+        AppendToolbarMenu(sub, localId, Tr("Tools, colors and settings"), enabled);
+    };
+    auto* ctx = NewBuildMenuCtx(win->CurrentTab(), Point{0, 0});
+    AutoCall delCtx(DeleteBuildMenuCtx, ctx);
+    Vec<int> added;
+    auto addItem = [&](VirtCtrl* ctrl) {
+        if (!ctrl || !ctrl->id || ctrl->id == WarningMsgId) return;
+        int pinned = VecFind(tb->pinnedItems, ctrl);
+        if (pinned >= 0) {
+            int localId = kActionFirst + len(actions);
+            VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Pinned, pinned});
+            AppendToolbarMenu(menu, localId, ctrl->tooltip, ctrl->IsEnabled());
+            return;
+        }
+        int cmdId = ctrl->id == PageInfoId ? CmdGoToPage : ctrl->id;
+        if (VecFind(added, cmdId) >= 0) return;
+        VecAppend(added, cmdId);
+        auto* icon = AsVirtIconButton(ctrl);
+        bool checked = icon && icon->isSelected;
+        bool enabled = IsCmdEnabled(win, cmdId, ctx) && ctrl->IsEnabled();
+        Str label = GetCommandDescription(cmdId);
+        if (auto* custom = FindCustomCommand(cmdId)) label = custom->name;
+        if (len(label) == 0) label = ctrl->tooltip;
+        if (len(label) == 0) return;
+        if (cmdId == CmdSinglePageView || cmdId == CmdZoomIn || cmdId == CmdZoomOut || IsAnnotColorCmd(cmdId) ||
+            cmdId == CmdToggleLaserPointer || cmdId == CmdSaveAnnotations) {
+            HMENU sub = CreatePopupMenu();
+            AppendMenuW(menu, MF_POPUP | (enabled ? 0 : MF_GRAYED), (UINT_PTR)sub, CWStrTemp(ToWStrTemp(label)));
+            if (cmdId == CmdSinglePageView) {
+                DisplayMode mode = win->ctrl ? win->ctrl->GetDisplayMode() : DisplayMode::SinglePage;
+                AppendToolbarMenu(sub, CmdSinglePageView, Tr("Single Page"), enabled, IsSingle(mode));
+                AppendToolbarMenu(sub, CmdFacingView, Tr("Facing"), enabled, IsFacing(mode));
+                AppendToolbarMenu(sub, CmdBookView, Tr("Book View"), enabled, IsBookView(mode));
+                AppendToolbarMenu(sub, CmdToggleContinuousView, Tr("Continuous scrolling"), enabled,
+                                  IsContinuous(mode));
+                return;
+            }
+            AppendToolbarMenu(sub, cmdId, label, enabled, checked);
+            if (cmdId == CmdZoomIn || cmdId == CmdZoomOut) {
+                Vec<ZoomHoverLevel> levels;
+                ZoomHoverLevels(levels);
+                int current = ZoomHoverCurrentIdx(win, levels);
+                for (int i = 0; i < len(levels); i++) {
+                    Str text = levels[i].zoom == kZoomFitPage    ? Tr("Fit page")
+                               : levels[i].zoom == kZoomFitWidth ? Tr("Fit width")
+                                                                 : fmt("%.0f%%", levels[i].zoom);
+                    AppendToolbarMenu(sub, levels[i].cmdId, text, enabled, i == current);
+                }
+                AppendToolbarMenu(sub, CmdZoomCustom, Tr("Custom zoom"), enabled);
+                return;
+            }
+            if (cmdId == CmdCreateAnnotInk) {
+                int pens[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
+                InkPenStyle styles[] = {InkPenStyle::Ballpoint, InkPenStyle::Fountain, InkPenStyle::Brush,
+                                        InkPenStyle::Pencil, InkPenStyle::Highlighter};
+                for (int i = 0; i < dimof(pens); i++)
+                    AppendToolbarMenu(sub, pens[i], GetCommandDescription(pens[i]), enabled,
+                                      win->inkEraseMode == 0 && win->inkPenStyle == styles[i]);
+            }
+            addPalette(sub, cmdId, enabled);
+            return;
+        }
+        if (cmdId == CmdThemeLight) checked = IsLightColor(ThemeWindowBackgroundColor());
+        if (cmdId == CmdThemeDark) checked = !IsLightColor(ThemeWindowBackgroundColor());
+        if (cmdId == CmdInvertColors) checked = GetInvertPageColors();
+        if (cmdId == CmdToggleBookmarks) checked = win->uiState.tocVisible;
+        AppendToolbarMenu(menu, cmdId, label, enabled, checked);
+    };
+    for (VirtCtrl* ctrl : hidden) addItem(ctrl);
+    MarkMenuOwnerDraw(menu);
+    UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (IsUIRtl() ? TPM_RIGHTALIGN | TPM_LAYOUTRTL : TPM_LEFTALIGN);
+    int picked =
+        TrackPopupMenu(menu, flags, IsUIRtl() ? anchor.Right() : anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    ToolbarNoteDropdownClosed();
+    if (!picked || !IsMainWindowValidAndNotClosing(win)) return;
+    if (picked >= kActionFirst && picked - kActionFirst < len(actions)) {
+        auto action = actions[picked - kActionFirst];
+        if (action.kind == ToolbarMenuActionKind::Palette) {
+            ShowToolbarButtonDropdown(win, action.id);
+            auto* hover = win->toolbarVirt->hoverHost;
+            if (hover && hover->vroot) hover->vroot->TabNavigate(false);
+        } else if (action.id < len(win->toolbarVirt->pinnedItems)) {
+            VirtMouseEvent ev;
+            ev.target = win->toolbarVirt->pinnedItems[action.id];
+            PinnedToolClick(win, &ev);
+        }
+        return;
+    }
+    ToolbarPostCommand(win, picked);
 }
 
 static void BuildToolbarLayout(MainWindow* win) {
@@ -3746,6 +4238,8 @@ static void BuildToolbarLayout(MainWindow* win) {
     VecReset(tb->annotationItems);
     VecReset(tb->pinnedItems);
     tb->zoomEdit = nullptr;
+    tb->findSlot = nullptr;
+    tb->findButton = nullptr;
     tb->annotationRow = nullptr;
     tb->pageLabel = nullptr;
     tb->pageLabel2 = nullptr;
@@ -3755,25 +4249,35 @@ static void BuildToolbarLayout(MainWindow* win) {
     win->chapterEdit = nullptr;
 
     int cyPad = ToolbarCyPad();
-    int iconPad = DpiScale(6);
+    int iconPad = UiScalePx(6);
     tb->rowDy = ToolbarRowDy(tb->iconSize);
     Color fg = TbTextColor();
     Color dis = TbDisabledColor();
 
-    auto* box = new Wrap();
-    box->colGap = DpiScale(6);
-    box->rowGap = DpiScale(6);
-    box->alignCross = CrossAxisAlign::CrossCenter;
-    box->rtl = IsUIRtl();
+    auto* mainRow = new ToolbarLine(tb);
+    tb->mainRow = mainRow;
+    mainRow->gap = UiScalePx(kButtonSpacingX);
+    mainRow->rtl = IsUIRtl();
+    bool prettyLayout = str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout);
+    if (prettyLayout) {
+        auto* brand = new VirtCustom();
+        int badgeDx = UiScalePx(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)) + 6);
+        int brandDx = PlatformFontMeasureText(GetAppFont(), StrL("SumatraPDF Enhanced")).dx + badgeDx;
+        brand->idealSize = {std::max(UiScalePx(176), brandDx),
+                            std::max(UiScalePx(36), PlatformFontLineHeight(GetAppFont()) * 2 + UiScalePx(4))};
+        brand->SetFlag(vwfNoHitTest, true);
+        brand->onPaint = MkFunc1(PaintToolbarBrand, brand);
+        mainRow->brandIdx = 0;
+        mainRow->AddChild(brand);
+    }
 
     auto newGroup = [&]() {
         auto* group = new HBox();
         group->alignCross = CrossAxisAlign::CrossCenter;
-        group->rtl = box->rtl;
+        group->rtl = mainRow->rtl;
         return group;
     };
     HBox* group = newGroup();
-    bool prettyLayout = str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout);
     HBox* appearance = newGroup();
     int n = TotalButtonsCount();
     for (int i = 0; i < n; i++) {
@@ -3783,11 +4287,11 @@ static void BuildToolbarLayout(MainWindow* win) {
         if (bi.cmdId == PageInfoId) {
             // Old toolbar: label HWND was text + kTextPaddingRight + kButtonSpacingX
             // (10dpi) so "Page:" and "/ N" were not flush against the edit.
-            int pageGap = DpiScale(kTextPaddingRight) + DpiScale(kButtonSpacingX);
+            int pageGap = UiScalePx(kTextPaddingRight) + UiScalePx(kButtonSpacingX);
             auto* label = new VirtText(Tr("Page:"), tb->platformFont);
-            label->isRtl = box->rtl;
+            label->isRtl = mainRow->rtl;
             label->SetColor(kColText, fg);
-            label->padding = {0, pageGap, 0, DpiScale(4)};
+            label->padding = {0, pageGap, 0, UiScalePx(4)};
             label->id = PageInfoId;
             tb->pageLabel = label;
             group->AddChild(label);
@@ -3799,9 +4303,9 @@ static void BuildToolbarLayout(MainWindow* win) {
             group->AddChild(chapterEdit);
 
             auto* chapterTotal = new VirtText(StrL(" "), tb->platformFont);
-            chapterTotal->isRtl = box->rtl;
+            chapterTotal->isRtl = mainRow->rtl;
             chapterTotal->SetColor(kColText, fg);
-            chapterTotal->padding = {0, DpiScale(4), 0, pageGap};
+            chapterTotal->padding = {0, UiScalePx(4), 0, pageGap};
             chapterTotal->id = PageInfoId;
             chapterTotal->SetVisibility(Visibility::Collapse);
             tb->chapterTotal = chapterTotal;
@@ -3809,9 +4313,9 @@ static void BuildToolbarLayout(MainWindow* win) {
 
             // second "Page:" label, shown before pageEdit only for HasChapters() docs
             auto* label2 = new VirtText(Tr("Page:"), tb->platformFont);
-            label2->isRtl = box->rtl;
+            label2->isRtl = mainRow->rtl;
             label2->SetColor(kColText, fg);
-            label2->padding = {0, pageGap, 0, DpiScale(4)};
+            label2->padding = {0, pageGap, 0, UiScalePx(4)};
             label2->id = PageInfoId;
             label2->SetVisibility(Visibility::Collapse);
             tb->pageLabel2 = label2;
@@ -3822,9 +4326,9 @@ static void BuildToolbarLayout(MainWindow* win) {
             group->AddChild(pageEdit);
 
             auto* total = new VirtText(StrL(" "), tb->platformFont);
-            total->isRtl = box->rtl;
+            total->isRtl = mainRow->rtl;
             total->SetColor(kColText, fg);
-            total->padding = {0, DpiScale(4), 0, pageGap};
+            total->padding = {0, UiScalePx(4), 0, pageGap};
             total->id = PageInfoId;
             tb->pageTotal = total;
             group->AddChild(total);
@@ -3835,7 +4339,7 @@ static void BuildToolbarLayout(MainWindow* win) {
             w = MakeToolbarSeparator(tb->rowDy);
         } else if (bi.isText) {
             auto* b = new VirtButton(noTranslate ? bi.toolTip : trans::GetTranslation(bi.toolTip), tb->platformFont);
-            b->isRtl = box->rtl;
+            b->isRtl = mainRow->rtl;
             b->textPadding = {cyPad, iconPad, cyPad, iconPad};
             w = b;
         } else {
@@ -3860,6 +4364,8 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
         if (bi.cmdId != 0 && bi.cmdId != PageInfoId) {
             w->onClick = MkFunc1(OnToolbarButtonClicked, win);
+            w->onKeyDown = MkFunc1(OnToolbarKey, win);
+            w->SetFlag(vwfFocusable, true);
         }
         VecAppend(tb->items, w);
         if (prettyLayout && IsAppearanceCmd(bi.cmdId)) {
@@ -3871,20 +4377,28 @@ static void BuildToolbarLayout(MainWindow* win) {
             tb->zoomEdit = CreateZoomEntry(win);
             group->AddChild(tb->zoomEdit);
         }
+        if (bi.cmdId == CmdFindFirst && !tb->findSlot) {
+            tb->findButton = w;
+            mainRow->findGroupIdx = len(mainRow->children);
+            if (auto* button = AsVirtIconButton(w)) button->cornerRadius = tb->iconSize;
+            tb->findSlot = new Spacer(0, tb->rowDy - UiScalePx(12));
+            tb->findSlot->SetVisibility(Visibility::Collapse);
+            group->AddChild(tb->findSlot);
+        }
         if (bi.cmdId == 0) {
-            box->AddChild(group);
+            mainRow->AddChild(group);
             group = newGroup();
         }
     }
-    box->AddChild(group);
+    mainRow->AddChild(group);
     if (gSettings->pinnedAnnotationTools && len(*gSettings->pinnedAnnotationTools) > 0)
-        box->AddChild(BuildPinnedTools(win));
+        mainRow->AddChild(BuildPinnedTools(win));
 
-    auto* annotationBox = new Wrap();
-    annotationBox->colGap = DpiScale(4);
-    annotationBox->rowGap = DpiScale(4);
-    annotationBox->alignCross = CrossAxisAlign::CrossCenter;
-    annotationBox->rtl = box->rtl;
+    auto* annotationBox = new ToolbarLine(tb, ToolbarLineKind::Annotations);
+    tb->annotationLine = annotationBox;
+    annotationBox->gap = UiScalePx(4);
+    annotationBox->rtl = mainRow->rtl;
+    auto* annotationGroup = newGroup();
     for (const ToolbarButtonInfo& bi : gPdfAnnotationButtons) {
         VirtCtrl* w = nullptr;
         if (!HasToolbarButtonContent(bi)) {
@@ -3903,26 +4417,43 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
         if (bi.cmdId != 0) {
             w->onClick = MkFunc1(OnToolbarButtonClicked, win);
+            w->onKeyDown = MkFunc1(OnToolbarKey, win);
+            w->SetFlag(vwfFocusable, true);
         }
         VecAppend(tb->annotationItems, w);
-        annotationBox->AddChild(w);
+        annotationGroup->AddChild(w);
+        if (bi.cmdId == 0) {
+            annotationBox->AddChild(annotationGroup);
+            annotationGroup = newGroup();
+        }
     }
+    annotationBox->AddChild(annotationGroup);
 
-    auto* mainRow = new HBox();
-    mainRow->alignCross = CrossAxisAlign::CrossCenter;
-    mainRow->gap = DpiScale(kButtonSpacingX);
-    if (prettyLayout) {
-        auto* brand = new VirtCustom();
-        int badgeDx = DpiScale(std::max(28, limitValue(gSettings->toolbarSize, 8, 64)) + 6);
-        int brandDx = PlatformFontMeasureText(GetAppFont(), StrL("SumatraPDF Enhanced")).dx + badgeDx;
-        brand->idealSize = {std::max(DpiScale(176), brandDx),
-                            std::max(DpiScale(36), PlatformFontLineHeight(GetAppFont()) * 2 + DpiScale(4))};
-        brand->SetFlag(vwfNoHitTest, true);
-        brand->onPaint = MkFunc1(PaintToolbarBrand, brand);
-        mainRow->AddChild(brand);
-    }
-    mainRow->AddChild(box, 1);
     mainRow->AddChild(appearance);
+    auto* overflow = new VirtIconButton();
+    overflow->id = ToolbarOverflowId;
+    overflow->padding = {cyPad, iconPad, cyPad, iconPad};
+    Str dots = StrL(
+        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></g></svg>)");
+    overflow->pixmap = GetCachedPixmapForSvg(dots, tb->iconSize, tb->iconSize, fg, TbBgColor());
+    overflow->SetTooltip(Tr("More toolbar commands"));
+    overflow->SetFlag(vwfFocusable, true);
+    overflow->onClick = MkFunc1(OnOverflowClicked, win);
+    overflow->onKeyDown = MkFunc1(OnToolbarKey, win);
+    ApplyToolbarItemColors(overflow);
+    tb->overflowButton = overflow;
+    mainRow->AddChild(overflow);
+    auto* annotationOverflow = new VirtIconButton();
+    annotationOverflow->id = ToolbarAnnotOverflowId;
+    annotationOverflow->padding = overflow->padding;
+    annotationOverflow->pixmap = overflow->pixmap;
+    annotationOverflow->SetTooltip(Tr("More annotation commands"));
+    annotationOverflow->SetFlag(vwfFocusable, true);
+    annotationOverflow->onClick = MkFunc1(OnOverflowClicked, win);
+    annotationOverflow->onKeyDown = MkFunc1(OnToolbarKey, win);
+    ApplyToolbarItemColors(annotationOverflow);
+    tb->annotationOverflowButton = annotationOverflow;
+    annotationBox->AddChild(annotationOverflow);
 
     SetToolbarHoverDropdown(win, CmdToggleLaserPointer, MkFunc1(BuildLaserHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSinglePageView, MkFunc1(BuildLayoutHoverMenu, win));
@@ -3938,8 +4469,8 @@ static void BuildToolbarLayout(MainWindow* win) {
 
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
-    root->AddChild(new Padding(mainRow, Insets{DpiScale(6), DpiScale(8), DpiScale(6), DpiScale(8)}));
-    tb->annotationRow = new Padding(annotationBox, Insets{DpiScale(6), DpiScale(8), DpiScale(6), DpiScale(8)});
+    root->AddChild(new Padding(mainRow, Insets{UiScalePx(6), UiScalePx(8), UiScalePx(6), UiScalePx(8)}));
+    tb->annotationRow = new Padding(annotationBox, Insets{UiScalePx(6), UiScalePx(8), UiScalePx(6), UiScalePx(8)});
     tb->annotationRow->SetVisibility(Visibility::Collapse);
     root->AddChild(tb->annotationRow);
     tb->host->SetLayout(root);
@@ -3951,7 +4482,7 @@ static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
     Rect group;
     auto paintGroup = [&]() {
         if (!group.IsEmpty()) {
-            ev->gfx->FillRoundedRect(group, DpiScale(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
+            ev->gfx->FillRoundedRect(group, UiScalePx(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
         }
         group = {};
     };
@@ -3967,6 +4498,10 @@ static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
         group = group.IsEmpty() ? r : group.Union(r);
     }
     paintGroup();
+    VirtCtrl* focused = tb->host->vroot ? tb->host->vroot->focused : nullptr;
+    if (focused && focused->IsVisible() && tb->host->HasFocus()) {
+        ev->gfx->FillRoundedRect(focused->BoundsInWindow(), UiScalePx(8), kColorTransparent, ThemeBrandColor());
+    }
 }
 
 // the default theme separates the toolbar from the canvas with a hairline.
@@ -4002,7 +4537,6 @@ void CreateToolbar(MainWindow* win) {
         DpiSet(win->frameDpi, win->frameDpi);
     }
     int iconSize = ToolbarIconSize();
-    int yPad = DpiScale(2);
 
     VirtHost::CreateArgs args;
     args.parent = win->hwndFrame;
@@ -4012,7 +4546,7 @@ void CreateToolbar(MainWindow* win) {
     args.isRtl = IsUIRtl();
     args.visible = true;
     // the old Win32 toolbar did not take the keyboard focus; a generic child
-    // would, and then accelerators (Ctrl+W, …) never reached the frame
+    // would, and then accelerators (Ctrl+W, â€¦) never reached the frame
     args.noActivate = true;
     // in overlay mode the canvas is a lower-Z sibling and would otherwise
     // paint over the floating toolbar
@@ -4034,12 +4568,7 @@ void CreateToolbar(MainWindow* win) {
     auto* tb = new ToolbarVirt();
     tb->host = host;
     tb->iconSize = iconSize;
-    int newSize = GetAppFontSize();
-    int maxFontSize = iconSize - (yPad * 2) - 2;
-    if (newSize > maxFontSize) {
-        newSize = maxFontSize;
-    }
-    tb->platformFont = GetDefaultGuiFontOfSize(newSize);
+    tb->platformFont = GetAppFontForDpi(win->frameDpi > 0 ? win->frameDpi : DpiGet());
     win->toolbarVirt = tb;
     win->hwndToolbar = host->native;
     host->SetFont(tb->platformFont);
@@ -4192,7 +4721,7 @@ static int PageEditPadL() {
 }
 
 static int PageEditPadR() {
-    return PageEditPadL() + DpiScale(4);
+    return PageEditPadL() + UiScalePx(4);
 }
 
 static Edit* ToolbarCreateLocationEdit(MainWindow* win, PlatformFont* font, int iconDy) {
@@ -4222,7 +4751,7 @@ static Edit* ToolbarCreateLocationEdit(MainWindow* win, PlatformFont* font, int 
     // ideal == max pins GetIdealSize() to this width
     e->SetIdealWidthChars(6);
     e->SetMaxWidthChars(6);
-    e->idealDy = iconDy;
+    e->idealDy = std::max(iconDy, PlatformFontLineHeight(font) + UiScalePx(4));
     e->onChar = MkFunc1(OnLocationEditChar, win);
     return e;
 }
@@ -4294,6 +4823,23 @@ static bool OnCaptionDrag(MainWindow* win, VirtHostNativeMsg* ev) {
 
 static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
     switch (ev->msg) {
+        case WM_KEYDOWN:
+            if (ev->wp == VK_TAB && !IsCtrlPressed() && !IsAltPressed()) {
+                auto* tb = win->toolbarVirt;
+                Vec<TabStop> stops;
+                CollectTabStops(tb->host->layout, stops);
+                VirtCtrl* focused = tb->host->vroot ? tb->host->vroot->focused : nullptr;
+                VirtCtrl* edge = nullptr;
+                for (auto& stop : stops) {
+                    if (!stop.vwnd) continue;
+                    if (!edge || !IsShiftPressed()) edge = stop.vwnd;
+                }
+                if (focused && focused == edge) {
+                    AdvanceFocus(win);
+                    ev->didHandle = true;
+                }
+            }
+            return;
         case WM_COMMAND:
         case WM_CTLCOLOREDIT:
         case WM_CTLCOLORSTATIC:

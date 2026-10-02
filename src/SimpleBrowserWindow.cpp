@@ -14,6 +14,7 @@
 #include "gui/win/WebView.h"
 
 #include "Settings.h"
+#include "AppSettings.h"
 #include "AppTools.h"
 #include "SumatraConfig.h"
 #include "SumatraPDF.h"
@@ -21,6 +22,8 @@
 #include "Theme.h"
 
 #include "SimpleBrowserWindow.h"
+
+static Vec<SimpleBrowserWindow*> gSimpleBrowsers;
 
 constexpr int kNavRowPadding = 6;
 constexpr int kNavBtnGap = 4;
@@ -137,6 +140,7 @@ static void HistoryChanged(void* ctx, bool canGoBack, bool canGoForward) {
 }
 
 SimpleBrowserWindow::~SimpleBrowserWindow() {
+    VecRemove(gSimpleBrowsers, this);
     // ~WindowBase deletes `layout`, which owns the buttons and the url label
     delete webView;
 }
@@ -195,7 +199,7 @@ HWND SimpleBrowserWindow::Create(const SimpleBrowserCreateArgs& args) {
         ReportIf(!frameHwnd);
     }
 
-    font = GetDefaultGuiFont();
+    font = GetAppFont();
 
     {
         // Back | Forward | url, the whole row inset by kNavRowPadding. All
@@ -281,5 +285,19 @@ SimpleBrowserWindow* SimpleBrowserWindowCreate(const SimpleBrowserCreateArgs& ar
         delete res;
         return nullptr;
     }
+    VecAppend(gSimpleBrowsers, res);
     return res;
+}
+
+void RefreshSimpleBrowserFonts() {
+    for (SimpleBrowserWindow* w : gSimpleBrowsers) {
+        if (!w->hwnd) continue;
+        DpiScope dpiScope(w->hwnd);
+        w->font = GetAppFont();
+        if (w->btnBack) w->btnBack->font = w->font;
+        if (w->btnForward) w->btnForward->font = w->font;
+        if (w->urlText) w->urlText->font = w->font;
+        LayoutControls(w);
+        HwndInvalidate(w->hwnd, true);
+    }
 }

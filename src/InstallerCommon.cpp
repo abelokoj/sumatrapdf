@@ -29,10 +29,9 @@
 #include "Installer.h"
 
 // set to true to enable shadow effect
-constexpr bool kDrawTextShadow = true;
 constexpr bool kDrawMsgTextShadow = false;
 
-constexpr Color kInstallerWinBgColor = MkRgb(0xff, 0xf2, 0); // yellow
+constexpr Color kInstallerWinBgColor = kEnhancedInstallerBg;
 
 constexpr DWORD kTenSecondsInMs = 10 * 1000;
 
@@ -61,9 +60,9 @@ Gdiplus::Color gCol4Shadow(47, 89, 127);
 Gdiplus::Color gCol5(112, 115, 207);
 Gdiplus::Color gCol5Shadow(66, 71, 118);
 
-Gdiplus::Color kColorMsgWelcome(gCol5);
-Gdiplus::Color kColorMsgOk(gCol5);
-Gdiplus::Color kColorMsgInstallation(gCol5);
+Gdiplus::Color kColorMsgWelcome(22, 101, 52);
+Gdiplus::Color kColorMsgOk(22, 101, 52);
+Gdiplus::Color kColorMsgInstallation(22, 101, 52);
 Gdiplus::Color kColorMsgFailed(gCol1);
 
 HWND gHwndFrame = nullptr;
@@ -151,7 +150,7 @@ TempStr GetExistingInstallationDirTemp() {
         return gCachedExistingInstallationDir;
     }
     log(StrL("GetExistingInstallationDir()\n"));
-    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kAppName));
+    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kEnhancedAppName));
     TempStr dir = LoggedReadRegStr2Temp(regPathUninst, StrL("InstallLocation"));
     if (len(dir) == 0) {
         return {};
@@ -159,7 +158,7 @@ TempStr GetExistingInstallationDirTemp() {
     if (str::EndsWithI(dir, StrL(".exe"))) {
         dir = path::GetDirTemp(dir);
     }
-    if (len(dir) > 0 && dir::Exists(dir)) {
+    if (IsSafeEnhancedInstallDir(dir) && dir::Exists(dir)) {
         gCachedExistingInstallationDir = str::Dup(GetPermArena(), dir);
         return gCachedExistingInstallationDir;
     }
@@ -193,6 +192,78 @@ static bool IsPathUnderOrEqualDir(Str path, Str dir) {
     }
     return false;
 }
+
+TempStr EnhancedInstallDirTemp(Str parent) {
+    return path::JoinTemp(parent, StrL(kEnhancedAppName));
+}
+
+static bool SafeEnhancedFolder(Str dir) {
+    if (len(dir) == 0 || len(path::GetDirTemp(dir)) == 0) {
+        return false;
+    }
+    TempStr base = path::GetBaseNameTemp(dir);
+    if (len(base) == 0 || str::EqI(base, StrL("SumatraPDF"))) {
+        return false;
+    }
+    int roots[] = {CSIDL_PROGRAM_FILES, CSIDL_PROGRAM_FILESX86, CSIDL_LOCAL_APPDATA,    CSIDL_APPDATA, CSIDL_WINDOWS,
+                   CSIDL_SYSTEM,        CSIDL_PROFILE,          CSIDL_DESKTOPDIRECTORY, CSIDL_PERSONAL};
+    for (int id : roots) {
+        TempStr reserved = GetSpecialFolderTemp(id, false);
+        if (reserved && path::IsSame(dir, reserved)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool InstallPathsOverlap(Str a, Str b) {
+    return IsPathUnderOrEqualDir(a, b) || IsPathUnderOrEqualDir(b, a);
+}
+
+bool IsSafeEnhancedInstallDir(Str dir) {
+    if (!SafeEnhancedFolder(dir)) {
+        return false;
+    }
+    TempStr local = GetSpecialFolderTemp(CSIDL_LOCAL_APPDATA, false);
+    if (local && InstallPathsOverlap(dir, path::JoinTemp(local, Str(kEnhancedDataDirName)))) {
+        return false;
+    }
+    Str oldKey = GetRegPathUninstTemp(StrL("SumatraPDF"));
+    HKEY keys[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    for (HKEY key : keys) {
+        TempStr official = LoggedReadRegStrTemp(key, oldKey, StrL("InstallLocation"));
+        if (str::EndsWithI(official, StrL(".exe"))) {
+            official = path::GetDirTemp(official);
+        }
+        if (official && InstallPathsOverlap(dir, official)) {
+            return false;
+        }
+    }
+    return !file::Exists(path::JoinTemp(dir, StrL("SumatraPDF.exe")));
+}
+
+#if IS_DEBUG
+bool Installer_UnitTestsIdentity() {
+    Str parent = StrL("C:\\Program Files");
+    TempStr enhanced = EnhancedInstallDirTemp(parent);
+    if (!str::EqI(enhanced, StrL("C:\\Program Files\\SumatraPDF Enhanced")) || !SafeEnhancedFolder(enhanced) ||
+        SafeEnhancedFolder({}) || SafeEnhancedFolder(StrL("C:\\Program Files\\SumatraPDF")) ||
+        SafeEnhancedFolder(StrL("C:\\"))) {
+        return false;
+    }
+    if (!InstallPathsOverlap(StrL("C:\\Apps"), StrL("C:\\Apps\\Official")) ||
+        !InstallPathsOverlap(StrL("C:\\Apps\\Official\\Enhanced"), StrL("C:\\Apps\\Official")) ||
+        !InstallPathsOverlap(StrL("C:\\Apps\\Official"), StrL("C:\\Apps\\Official")) ||
+        InstallPathsOverlap(StrL("C:\\Apps\\OfficialPlus"), StrL("C:\\Apps\\Official")) ||
+        InstallPathsOverlap(StrL("C:\\Apps\\Enhanced"), StrL("C:\\Apps\\Official"))) {
+        return false;
+    }
+    TempStr ours = GetRegPathUninstTemp(StrL(kEnhancedAppName));
+    TempStr upstream = GetRegPathUninstTemp(StrL("SumatraPDF"));
+    return !str::EqI(ours, upstream) && !str::EqI(Str(kEnhancedExeName), StrL("SumatraPDF.exe")) &&
+           !str::EqI(Str(kEnhancedDataDirName), StrL(kEnhancedAppName)) && len(StrL(ENHANCED_VERSION_STRA)) > 0;
+}
+#endif
 
 // true if path is under Program Files / Program Files (x86)
 bool IsPathUnderProgramFiles(Str path) {
@@ -264,7 +335,7 @@ void GetPreviousInstallInfo(PreviousInstallationInfo* info) {
     }
     info->searchFilterInstalled = IsSearchFilterInstalled();
     info->previewInstalled = IsPreviewInstalled();
-    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kAppName));
+    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kEnhancedAppName));
     TempStr dirLM = LoggedReadRegStrTemp(HKEY_LOCAL_MACHINE, regPathUninst, StrL("InstallLocation"));
     TempStr dirCU = LoggedReadRegStrTemp(HKEY_CURRENT_USER, regPathUninst, StrL("InstallLocation"));
     if (dirLM && dirCU) {
@@ -294,14 +365,6 @@ void GetPreviousInstallInfo(PreviousInstallationInfo* info) {
          (int)info->allUsers);
 }
 
-static TempStr GetExistingInstallationFilePathTemp(Str name) {
-    TempStr dir = GetExistingInstallationDirTemp();
-    if (len(dir) == 0) {
-        return {};
-    }
-    return path::JoinTemp(dir, name);
-}
-
 TempStr GetInstallationFilePathTemp(Str installDir, Str name) {
     TempStr res = path::JoinTemp(installDir, name);
     logf("GetInstallationFilePath(%s) = > %s\n", name, res);
@@ -313,7 +376,7 @@ TempStr GetShortcutPathTemp(int csidl) {
     if (len(dir) == 0) {
         return {};
     }
-    TempStr lnkName = str::JoinTemp(StrL(kAppName), StrL(".lnk"));
+    TempStr lnkName = str::JoinTemp(StrL(kEnhancedAppName), StrL(".lnk"));
     return path::JoinTemp(dir, lnkName);
 }
 
@@ -350,53 +413,21 @@ static bool IsProcessUsingFiles(DWORD procId, Str file1, Str file2) {
 constexpr const char* kSearchFilterDllName = "PdfFilter.dll";
 
 void RegisterSearchFilter(bool allUsers, Str installDir) {
-    TempStr dllPath = GetInstallationFilePathTemp(installDir, Str(kSearchFilterDllName));
-    logf("RegisterSearchFilter() dllPath=%s\n", dllPath);
-    bool ok = InstallSearchFilter(dllPath, allUsers);
-    if (ok) {
-        log(StrL("  did register\n"));
-        return;
-    }
-    log(StrL("  failed to register\n"));
-    NotifyFailed(Tr("Couldn't install PDF search filter"));
+    InstallSearchFilter(path::JoinTemp(installDir, StrL(kSearchFilterDllName)), allUsers);
 }
 
 void UnRegisterSearchFilter() {
-    TempStr dllPath = GetExistingInstallationFilePathTemp(Str(kSearchFilterDllName));
-    logf("UnRegisterSearchFilter() dllPath=%s\n", dllPath);
-    bool ok = UninstallSearchFilter();
-    if (ok) {
-        log(StrL("  did unregister\n"));
-        return;
-    }
-    log(StrL("  failed to unregister\n"));
-    NotifyFailed(Tr("Couldn't uninstall Sumatra search filter"));
+    UninstallSearchFilter(path::JoinTemp(GetExistingInstallationDirTemp(), StrL(kSearchFilterDllName)));
 }
 
 constexpr const char* kPreviewDllName = "PdfPreview.dll";
 
 void RegisterPreviewer(bool allUsers, Str installDir) {
-    TempStr dllPath = GetInstallationFilePathTemp(installDir, Str(kPreviewDllName));
-    logf("RegisterPreviewer() dllPath=%s\n", dllPath);
-    bool ok = InstallPreviewDll(dllPath, allUsers);
-    if (ok) {
-        log(StrL("  did register\n"));
-        return;
-    }
-    log(StrL("  failed to register\n"));
-    NotifyFailed(Tr("Couldn't install PDF previewer"));
+    InstallPreviewDll(path::JoinTemp(installDir, StrL(kPreviewDllName)), allUsers);
 }
 
 void UnRegisterPreviewer() {
-    TempStr dllPath = GetExistingInstallationFilePathTemp(Str(kPreviewDllName));
-    logf("UnRegisterPreviewer() dllPath=%s\n", dllPath);
-    bool ok = UninstallPreviewDll();
-    if (ok) {
-        log(StrL("  did unregister\n"));
-        return;
-    }
-    log(StrL(" failed to unregister\n"));
-    NotifyFailed(Tr("Couldn't uninstall PDF previewer"));
+    UninstallPreviewDll(path::JoinTemp(GetExistingInstallationDirTemp(), StrL(kPreviewDllName)));
 }
 
 static bool IsProcWithModule(DWORD processId, Str modulePath) {
@@ -514,7 +545,7 @@ static bool KillProcessesUsingInstallationDir(Str dir) {
     TempStr libmupdfLegacy = path::JoinTemp(dir, StrL("libmupdf.dll")); // through 3.6
     TempStr filterDll = path::JoinTemp(dir, Str(kSearchFilterDllName));
     TempStr previewDll = path::JoinTemp(dir, Str(kPreviewDllName));
-    TempStr exePath = path::JoinTemp(dir, Str(kExeName));
+    TempStr exePath = path::JoinTemp(dir, Str(kEnhancedExeName));
 
     AutoCloseHandle snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (INVALID_HANDLE_VALUE == snap) {
@@ -578,11 +609,11 @@ void FreeInstallationFilesInUse(Str installDir, bool allUsers, ShellExtInstallSt
 
     if (removed.searchFilter) {
         log(StrL("  unregistering search filter before file overwrite\n"));
-        UninstallSearchFilter();
+        UnRegisterSearchFilter();
     }
     if (removed.preview) {
         log(StrL("  unregistering previewer before file overwrite\n"));
-        UninstallPreviewDll();
+        UnRegisterPreviewer();
     }
 
     if (installDir) {
@@ -633,7 +664,7 @@ static void ProcessesUsingInstallation(StrVec& names) {
     TempStr libmupdfLegacy = path::JoinTemp(dir, StrL("libmupdf.dll")); // through 3.6
     TempStr filterDll = path::JoinTemp(dir, Str(kSearchFilterDllName));
     TempStr previewDll = path::JoinTemp(dir, Str(kPreviewDllName));
-    TempStr exePath = path::JoinTemp(dir, Str(kExeName));
+    TempStr exePath = path::JoinTemp(dir, Str(kEnhancedExeName));
 
     AutoCloseHandle snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (INVALID_HANDLE_VALUE == snap) {
@@ -667,8 +698,8 @@ static Str readableProcessNames[] = {
 // clang-format on
 
 static Str ReadableProcName(Str procPath) {
-    readableProcessNames[0] = Str(kExeName);
-    readableProcessNames[1] = StrL(kAppName);
+    readableProcessNames[0] = Str(kEnhancedExeName);
+    readableProcessNames[1] = StrL(kEnhancedAppName);
     TempStr procName = path::GetBaseNameTemp(procPath);
     for (size_t i = 0; i < dimof(readableProcessNames); i += 2) {
         if (str::EqI(procName, readableProcessNames[i])) {
@@ -697,10 +728,6 @@ void SetDefaultMsg() {
     SetMsg(gDefaultMsg, kColorMsgWelcome);
 }
 
-static void InvalidateFrame() {
-    HwndRepaintNow(gHwndFrame);
-}
-
 bool CheckInstallUninstallPossible(HWND hwnd, bool silent) {
     logf("CheckInstallUninstallPossible(silent=%d)\n", silent);
     KillProcessesUsingInstallation();
@@ -726,137 +753,16 @@ bool CheckInstallUninstallPossible(HWND hwnd, bool silent) {
     return possible;
 }
 
-// This display is inspired by http://letteringjs.com/
-typedef struct {
-    // part that doesn't change
-    char c;
-    Gdiplus::Color col, colShadow;
-    float rotation;
-    float dyOff; // displacement
+void AnimStep() {}
 
-    // part calculated during layout
-    float dx, dy;
-    float x;
-} LetterInfo;
-
-// clang-format off
-static LetterInfo gLetters[] = {
-    {'S', gCol1, gCol1Shadow, -3.f, 0, 0, 0},
-    {'U', gCol2, gCol2Shadow, 0.f, 0, 0, 0},
-    {'M', gCol3, gCol3Shadow, 2.f, -2.f, 0, 0},
-    {'A', gCol4, gCol4Shadow, 0.f, -2.4f, 0, 0},
-    {'T', gCol5, gCol5Shadow, 0.f, 0, 0, 0},
-    {'R', gCol5, gCol5Shadow, 2.3f, -1.4f, 0, 0},
-    {'A', gCol4, gCol4Shadow, 0.f, 0, 0, 0},
-    {'P', gCol3, gCol3Shadow, 0.f, -2.3f, 0, 0},
-    {'D', gCol2, gCol2Shadow, 0.f, 3.f, 0, 0},
-    {'F', gCol1, gCol1Shadow, 0.f, 0, 0, 0}
-};
-// clang-format on
-
-constexpr int kSumatraLettersCount = dimofi(gLetters);
-
-static void SetLettersSumatraUpTo(size_t n) {
-    Str s = StrL("SUMATRAPDF");
-    for (size_t i = 0; i < kSumatraLettersCount; i++) {
-        char c = ' ';
-        if (i < n) {
-            c = s.s[i];
-        }
-        gLetters[i].c = c;
-    }
-}
-
-static void SetLettersSumatra() {
-    SetLettersSumatraUpTo(kSumatraLettersCount);
-}
-
-// an animation that reveals letters one by one
-
-// how long the animation lasts, in seconds
-constexpr double kRevealingAnimDur = 2;
-
-static FrameTimeoutCalculator* gRevealingLettersAnim = nullptr;
-
-static int gRevealingLettersAnimLettersToShow;
-
-static void RevealingLettersAnimStart() {
-    int framesPerSec = (int)(double(kSumatraLettersCount) / kRevealingAnimDur);
-    gRevealingLettersAnim = new FrameTimeoutCalculator(framesPerSec);
-    gRevealingLettersAnimLettersToShow = 0;
-    SetLettersSumatraUpTo(0);
-}
-
-static void RevealingLettersAnimStop() {
-    delete gRevealingLettersAnim;
-    gRevealingLettersAnim = nullptr;
-    SetLettersSumatra();
-    InvalidateFrame();
-}
-
-static void RevealingLettersAnim() {
-    if (gRevealingLettersAnim->ElapsedTotal() > kRevealingAnimDur) {
-        RevealingLettersAnimStop();
-        return;
-    }
-    DWORD timeOut = gRevealingLettersAnim->GetTimeoutInMilliseconds();
-    if (timeOut != 0) {
-        return;
-    }
-    SetLettersSumatraUpTo(++gRevealingLettersAnimLettersToShow);
-    gRevealingLettersAnim->Step();
-    InvalidateFrame();
-}
-
-void AnimStep() {
-    if (gRevealingLettersAnim) {
-        RevealingLettersAnim();
-    }
-}
-
-// GDI+ Font(name, emSize) defaults to UnitPoint and converts with the Graphics
-// DPI. The installer window is already DpiScale'd; on Windows 7 GDI+ may still
-// use the real screen DPI while the process is 96-DPI virtualized, so the logo
-// is scaled twice (issue #6025). Draw in pixels at our layout DPI.
 static float ImpactPx(int sizePt) {
     return (float)DpiGet() * (float)sizePt / 72.f;
-}
-
-static void CalcLettersLayout(Graphics& g, Font* f, int dx) {
-    static int laidOutDx = 0;
-    if (laidOutDx == dx) {
-        return;
-    }
-    laidOutDx = dx;
-
-    StringFormat sfmt;
-    const float letterSpacing = -(float)DpiScale(12);
-    float totalDx = -letterSpacing; // counter last iteration of the loop
-    WCHAR s[2]{};
-    Gdiplus::PointF origin(0.f, 0.f);
-    Gdiplus::RectF bbox;
-    for (LetterInfo& li : gLetters) {
-        s[0] = li.c;
-        g.MeasureString(s, 1, f, origin, &sfmt, &bbox);
-        li.dx = bbox.Width;
-        li.dy = bbox.Height;
-        totalDx += li.dx;
-        totalDx += letterSpacing;
-    }
-
-    float x = ((float)dx - totalDx) / 2.f;
-    for (LetterInfo& li : gLetters) {
-        li.x = x;
-        x += li.dx;
-        x += letterSpacing;
-    }
-    RevealingLettersAnimStart();
 }
 
 static float DrawMessage(Graphics& g, Str msg, float y, float dx, Gdiplus::Color color) {
     WCHAR* s = CWStrTemp(msg);
 
-    Font f(L"Impact", ImpactPx(16), FontStyleRegular, UnitPixel);
+    Font f(L"Segoe UI", ImpactPx(16), FontStyleRegular, UnitPixel);
     Gdiplus::RectF maxbox(0, y, dx, 0);
     Gdiplus::RectF bbox;
     g.MeasureString(s, -1, &f, maxbox, &bbox);
@@ -883,54 +789,34 @@ static float DrawMessage(Graphics& g, Str msg, float y, float dx, Gdiplus::Color
     return bbox.Height;
 }
 
-static void DrawSumatraLetters(Graphics& g, Font* f, Font* fVer, float y) {
-    WCHAR s[2]{};
-    for (const LetterInfo& li : gLetters) {
-        s[0] = li.c;
-        if (s[0] == ' ') {
-            return;
+static void DrawEnhancedBanner(Graphics& g, Rect r) {
+    int pad = DpiScale(28);
+    int iconSize = DpiScale(66);
+    HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, iconSize,
+                                   iconSize, 0);
+    if (icon) {
+        Gdiplus::Bitmap* bitmap = Gdiplus::Bitmap::FromHICON(icon);
+        if (bitmap) {
+            g.DrawImage(bitmap, pad, DpiScale(28), iconSize, iconSize);
+            delete bitmap;
         }
-
-        g.RotateTransform(li.rotation, MatrixOrderAppend);
-        float dyOff = li.dyOff * (float)DpiGet() / 96.f;
-        if (kDrawTextShadow) {
-            // draw shadow first
-            SolidBrush b2(li.colShadow);
-            Gdiplus::PointF o2(li.x - (float)DpiScale(3), y + (float)DpiScale(4) + dyOff);
-            g.DrawString(s, 1, f, o2, &b2);
-        }
-
-        SolidBrush b1(li.col);
-        Gdiplus::PointF o1(li.x, y + dyOff);
-        g.DrawString(s, 1, f, o1, &b1);
-        g.RotateTransform(li.rotation, MatrixOrderAppend);
-        g.ResetTransform();
+        DestroyIcon(icon);
     }
-
-    // draw version number
-    float x = gLetters[dimof(gLetters) - 1].x;
-    g.TranslateTransform(x, y);
-    g.RotateTransform(45.f);
-    float x2 = (float)DpiScale(15);
-    float y2 = -(float)DpiScale(34);
-
-    const WCHAR* ver_s = L"v" CURR_VERSION_STR;
-    if (kDrawTextShadow) {
-        SolidBrush b1(Gdiplus::Color(0, 0, 0));
-        g.DrawString(ver_s, -1, fVer, Gdiplus::PointF(x2 - (float)DpiScale(2), y2 - (float)DpiScale(1)), &b1);
-    }
-    SolidBrush b2(Gdiplus::Color(0xff, 0xff, 0xff));
-    g.DrawString(ver_s, -1, fVer, Gdiplus::PointF(x2, y2), &b2);
-    g.ResetTransform();
+    SolidBrush titleBrush(Gdiplus::Color(16, 66, 39));
+    Font title(L"Segoe UI", (float)DpiScale(27), Gdiplus::FontStyleBold, UnitPixel);
+    Gdiplus::RectF titleRect((float)(pad + iconSize + DpiScale(16)), (float)DpiScale(25),
+                             (float)(r.dx - pad * 2 - iconSize - DpiScale(16)), (float)DpiScale(44));
+    g.DrawString(L"SumatraPDF Enhanced", -1, &title, titleRect, nullptr, &titleBrush);
+    Font detail(L"Segoe UI", (float)DpiScale(14), FontStyleRegular, UnitPixel);
+    Gdiplus::RectF detailRect(titleRect.X, (float)DpiScale(73), titleRect.Width, (float)DpiScale(26));
+    TempStr version = fmt("%s  |  Native reader and study tools", StrL(ENHANCED_VERSION_STRA));
+    g.DrawString(CWStrTemp(version), -1, &detail, detailRect, nullptr, &titleBrush);
 }
 
 static void DrawFrame2(Graphics& g, Rect r, bool skipMessage) {
     g.SetCompositingQuality(CompositingQualityHighQuality);
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetPageUnit(Gdiplus::UnitPixel);
-
-    Font f(L"Impact", ImpactPx(40), FontStyleRegular, UnitPixel);
-    CalcLettersLayout(g, &f, r.dx);
 
     Gdiplus::Color bgCol;
     bgCol.SetFromCOLORREF(kInstallerWinBgColor);
@@ -939,8 +825,7 @@ static void DrawFrame2(Graphics& g, Rect r, bool skipMessage) {
     r2.Inflate(1, 1);
     g.FillRectangle(&bgBrush, r2);
 
-    Font f2(L"Impact", ImpactPx(16), FontStyleRegular, UnitPixel);
-    DrawSumatraLetters(g, &f, &f2, (float)DpiScale(18));
+    DrawEnhancedBanner(g, r);
 
     if (skipMessage) {
         return;

@@ -31,6 +31,15 @@ bool IsInstallerOrUninstallerExe();
 
 void DeleteAppTools();
 
+enum class DataFolderMode {
+    CopyCurrent,
+    UseExisting
+};
+bool RequestDataFolder(Str folder, DataFolderMode mode, Str& error);
+TempStr GetDefaultDataDirTemp();
+TempStr GetPendingDataDirTemp();
+TempStr GetDataStorageErrorTemp();
+bool IsDataFolderOverridden();
 void SetAppDataDir(Str dir);
 TempStr GetAppDataDirTemp();
 TempStr GetPathInAppDataDirTemp(Str fileName);

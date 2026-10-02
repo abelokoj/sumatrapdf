@@ -15,6 +15,7 @@
 #include "gui/VirtCtrl.h"
 
 #include "Settings.h"
+#include "AppSettings.h"
 #include "DocController.h"
 #include "EngineBase.h"
 #include "base/GuessFileType.h"
@@ -157,7 +158,7 @@ VirtButton* PdfToolDialog::NewButton(Str text, bool isDefault) {
 bool PdfToolDialog::CreateToolDialog(MainWindow* w, WindowTab* tab, Str title) {
     win = w;
     srcPath = str::Dup(tab->filePath);
-    PlatformFont* dialogFont = GetDefaultGuiFont();
+    PlatformFont* dialogFont = GetAppFont();
     closeOnEsc = true;
     onClose = MkFunc1Void(PdfToolDialogOnClose);
 

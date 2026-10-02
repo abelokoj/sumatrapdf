@@ -52,7 +52,7 @@ RememberOpenedFiles = true
 UseTabs = true
 ReuseInstance = false
 UIFontFamily = system
-"@ | Set-Content -LiteralPath (Join-Path $stageDir 'SumatraPDF-settings.txt') -Encoding utf8
+"@ | Set-Content -LiteralPath (Join-Path $stageDir 'SumatraPDFEnhanced-settings.txt') -Encoding utf8
 $archive = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-$Architecture-portable.zip"
 Compress-Archive -Path $stageDir -DestinationPath $archive -Force
 $installer = Join-Path $repoDir "dist/SumatraPDF-Enhanced-$Version-$Architecture-install.exe"

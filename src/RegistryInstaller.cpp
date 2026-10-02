@@ -58,7 +58,7 @@ static bool HasRegistryValue(HKEY hkey, Str keyName, Str valName) {
 
 static bool HasOurOpenWithEntry(HKEY hkey, Str ext) {
     TempStr key = str::JoinTemp(StrL("Software\\Classes\\"), ext, StrL("\\OpenWithProgids"));
-    TempStr progID = str::JoinTemp(StrL(kAppName), ext);
+    TempStr progID = str::JoinTemp(StrL("SumatraPDFEnhanced"), ext);
     return HasRegistryValue(hkey, key, progID);
 }
 
@@ -96,7 +96,7 @@ bool WriteUninstallerRegistryInfo(HKEY hkey, bool allUsers, Str installDir) {
          (int)allUsers, installDir);
     bool ok = true;
 
-    TempStr installedExePath = path::JoinTemp(installDir, Str(kExeName));
+    TempStr installedExePath = path::JoinTemp(installDir, Str(kEnhancedExeName));
     TempStr installDate = GetInstallDateTemp();
     // uninstaller is the same executable with a different flag
     Str uninstallerPath = installedExePath;
@@ -105,16 +105,16 @@ bool WriteUninstallerRegistryInfo(HKEY hkey, bool allUsers, Str installDir) {
         uninstallCmdLine = str::JoinTemp(uninstallCmdLine, StrL(" -all-users"));
     }
 
-    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kAppName));
+    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kEnhancedAppName));
     // path to installed executable (or "$path,0" to force the first icon)
     ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayIcon"), installedExePath);
-    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayName"), StrL(kAppName));
+    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayName"), StrL(kEnhancedAppName));
     // version format: "1.2"
-    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayVersion"), StrL(CURR_VERSION_STRA));
+    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayVersion"), StrL(ENHANCED_VERSION_STRA));
     // Windows XP doesn't allow to view the version number at a glance,
     // so include it in the DisplayName
     if (!IsWindowsVistaOrGreater()) {
-        TempStr displayName = str::JoinTemp(StrL(kAppName), StrL(" "), StrL(CURR_VERSION_STRA));
+        TempStr displayName = str::JoinTemp(StrL(kEnhancedAppName), StrL(" "), StrL(ENHANCED_VERSION_STRA));
         ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("DisplayName"), displayName);
     }
     // non-recursive because we don't want to count space used for thumbnails
@@ -132,9 +132,9 @@ bool WriteUninstallerRegistryInfo(HKEY hkey, bool allUsers, Str installDir) {
     ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("UninstallString"), uninstallCmdLine);
     TempStr uninstallCmdLineSilent = str::JoinTemp(uninstallCmdLine, StrL(" -silent"));
     ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("QuietUninstallString"), uninstallCmdLineSilent);
-    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("URLInfoAbout"), StrL("https://www.sumatrapdfreader.org/"));
+    ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("URLInfoAbout"), StrL("https://github.com/abelokoj/sumatrapdf"));
     ok &= LoggedWriteRegStr(hkey, regPathUninst, StrL("URLUpdateInfo"),
-                            StrL("https://www.sumatrapdfreader.org/docs/Version-history.html"));
+                            StrL("https://github.com/abelokoj/sumatrapdf/releases"));
     if (!ok) {
         log(StrL("WriteUninstallerRegistryInfo() failed\n"));
     }
@@ -147,12 +147,12 @@ static bool RegisterForDefaultPrograms(HKEY hkey, Str installedExePath) {
     bool ok = true;
 
     // L"SOFTWARE\\SumatraPDF\\Capabilities"
-    TempStr appCapabilityPath = str::JoinTemp(StrL("SOFTWARE\\"), StrL(kAppName), StrL("\\Capabilities"));
+    TempStr appCapabilityPath = str::JoinTemp(StrL("SOFTWARE\\"), StrL(kEnhancedAppName), StrL("\\Capabilities"));
 
-    Str desc = StrL("SumatraPDF is a PDF reader.");
+    Str desc = StrL("SumatraPDF Enhanced is a PDF reader with study tools.");
     ok &= LoggedWriteRegStr(hkey, appCapabilityPath, StrL("ApplicationDescription"), desc);
-    // ApplicationName must match the RegisteredApplications value name (kAppName).
-    ok &= LoggedWriteRegStr(hkey, appCapabilityPath, StrL("ApplicationName"), StrL(kAppName));
+    // ApplicationName must match the RegisteredApplications value name (kEnhancedAppName).
+    ok &= LoggedWriteRegStr(hkey, appCapabilityPath, StrL("ApplicationName"), StrL(kEnhancedAppName));
     // icon shown next to the app in Settings > Default Apps
     TempStr appIcon = str::JoinTemp(StrL("\""), installedExePath, StrL("\",0"));
     ok &= LoggedWriteRegStr(hkey, appCapabilityPath, StrL("ApplicationIcon"), appIcon);
@@ -164,11 +164,11 @@ static bool RegisterForDefaultPrograms(HKEY hkey, Str installedExePath) {
         // must match the per-extension ProgID created by RegisterForOpenWith
         // (e.g. "SumatraPDF.pdf"); Default Apps UI hides the app if the
         // FileAssociations ProgID can't be resolved under HKCR
-        TempStr progIDName = str::JoinTemp(StrL(kAppName), ext);
+        TempStr progIDName = str::JoinTemp(StrL("SumatraPDFEnhanced"), ext);
         ok &= LoggedWriteRegStr(hkey, keyAssoc, ext, progIDName);
     }
 
-    ok &= LoggedWriteRegStr(hkey, StrL("SOFTWARE\\RegisteredApplications"), StrL(kAppName), appCapabilityPath);
+    ok &= LoggedWriteRegStr(hkey, StrL("SOFTWARE\\RegisteredApplications"), StrL(kEnhancedAppName), appCapabilityPath);
     return ok;
 }
 
@@ -201,7 +201,7 @@ static bool RegisterForOpenWith(HKEY hkey, Str installedExePath) {
     TempStr key;
     bool ok = true;
     for (Str ext = SeqStrFirst(gSupportedExts); len(ext) > 0; ext = SeqStrNext(ext)) {
-        TempStr progIDName = str::JoinTemp(StrL(kAppName), ext);
+        TempStr progIDName = str::JoinTemp(StrL("SumatraPDFEnhanced"), ext);
         TempStr progIDKey = str::JoinTemp(StrL("Software\\Classes\\"), progIDName);
         // ok &= CreateRegKey(hkey, progIDKey);
 
@@ -211,7 +211,7 @@ static bool RegisterForOpenWith(HKEY hkey, Str installedExePath) {
         // English names in Explorer's "Type" column (issue #3323). Delete any value
         // a previous version wrote so Windows falls back to the localized name.
         ok &= LoggedDeleteRegValue(hkey, progIDKey, {});
-        // ok &= LoggedWriteRegStr(hkey, progIDKey, L"AppUserModelID", L"SumatraPDF"); // ???
+        // ok &= LoggedWriteRegStr(hkey, progIDKey, L"AppUserModelID", L"SumatraPDF Enhanced"); // ???
 
         // Per https://docs.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticona
         // ",${n}" => n is 0-based index of the icon
@@ -240,7 +240,7 @@ static bool RegisterForOpenWith(HKEY hkey, Str installedExePath) {
 
         key = str::JoinTemp(progIDKey, StrL("\\Application"));
         ok &= LoggedWriteRegStr(hkey, key, StrL("ApplicationCompany"), StrL("Krzysztof Kowalczyk"));
-        ok &= LoggedWriteRegStr(hkey, key, StrL("ApplicationName"), StrL(kAppName));
+        ok &= LoggedWriteRegStr(hkey, key, StrL("ApplicationName"), StrL(kEnhancedAppName));
 
         key = str::JoinTemp(progIDKey, StrL("\\DefaultIcon"));
         ok &= LoggedWriteRegStr(hkey, key, {}, iconPath);
@@ -283,7 +283,7 @@ bool ListAsDefaultProgramPreWin10(HKEY hkey) {
     // PDF icon will be shown (we need icons and properly configure them)
     bool ok = true;
 
-    TempWStr openWithVal = str::JoinTemp(WStrL(L"\\OpenWithList\\"), kExeName);
+    TempWStr openWithVal = str::JoinTemp(WStrL(L"\\OpenWithList\\"), kEnhancedExeName);
     for (Str extUtf8 = SeqStrFirst(gSupportedExts); len(extUtf8) > 0; extUtf8 = SeqStrNext(extUtf8)) {
         TempWStr ext = ToWStrTemp(extUtf8);
         TempWStr name = str::JoinTemp(WStrL(L"Software\\Classes\\"), ext, openWithVal);
@@ -339,7 +339,8 @@ UnregisterFromBeingDefaultViewer() and RemoveInstallRegistryKeys() in Installer.
 #define kRegClassesPdf "Software\\Classes\\.pdf"
 
 static TempStr GetRegClassesAppsTemp(Str appName) {
-    return str::JoinTemp(StrL("Software\\Classes\\Applications\\"), appName, StrL(".exe"));
+    (void)appName;
+    return str::JoinTemp(StrL("Software\\Classes\\Applications\\"), Str(kEnhancedExeName));
 }
 
 // http://msdn.microsoft.com/en-us/library/cc144148(v=vs.85).aspx
@@ -370,10 +371,10 @@ bool WriteExtendedFileExtensionInfo(HKEY hkey, Str installedExePath) {
 
 bool RemoveUninstallerRegistryInfo(HKEY hkey) {
     logf("RemoveUninstallerRegistryInfo(%s)\n", RegKeyNameTemp(hkey));
-    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kAppName));
+    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kEnhancedAppName));
     bool ok1 = LoggedDeleteRegKey(hkey, regPathUninst);
     // legacy, this key was added by installers up to version 1.8
-    TempStr key = str::JoinTemp(StrL("Software\\"), StrL(kAppName));
+    TempStr key = str::JoinTemp(StrL("Software\\"), StrL(kEnhancedAppName));
     bool ok2 = LoggedDeleteRegKey(hkey, key);
     return ok1 && ok2;
 }
@@ -387,7 +388,7 @@ static TempStr GetRegClassesAppTemp(Str appName) {
 static void UnregisterFromBeingDefaultViewer(HKEY hkey) {
     log(StrL("UnregisterFromBeingDefaultViewer()\n"));
     TempStr curr = LoggedReadRegStrTemp(hkey, StrL(kRegClassesPdf), {});
-    if (len(curr) == 0 || !str::Eq(curr, StrL(kAppName))) {
+    if (len(curr) == 0 || !str::Eq(curr, StrL(kEnhancedAppName))) {
         // not the default, do nothing
     } else {
         LoggedDeleteRegValue(hkey, StrL(kRegClassesPdf), {});
@@ -395,15 +396,15 @@ static void UnregisterFromBeingDefaultViewer(HKEY hkey) {
 
     // the following settings overrule HKEY_CLASSES_ROOT\.pdf
     TempStr buf = LoggedReadRegStrTemp(hkey, StrL(kRegExplorerPdfExt), StrL("ProgId"));
-    if (str::Eq(buf, StrL(kAppName))) {
+    if (str::Eq(buf, StrL(kEnhancedAppName))) {
         LoggedDeleteRegKey(hkey, StrL(kRegExplorerPdfExt "ProgId"), true);
     }
     buf = LoggedReadRegStrTemp(hkey, StrL(kRegExplorerPdfExt), StrL("Application"));
-    if (str::EqI(buf, Str(kExeName))) {
+    if (str::EqI(buf, Str(kEnhancedExeName))) {
         LoggedDeleteRegKey(hkey, StrL(kRegExplorerPdfExt "Application"), true);
     }
     buf = LoggedReadRegStrTemp(hkey, StrL(kRegExplorerPdfExt "\\UserChoice"), StrL("ProgId"));
-    if (str::Eq(buf, StrL(kAppName))) {
+    if (str::Eq(buf, StrL(kEnhancedAppName))) {
         LoggedDeleteRegKey(hkey, StrL(kRegExplorerPdfExt "\\UserChoice"), true);
     }
 }
@@ -449,25 +450,26 @@ void RemoveInstallRegistryKeys(HKEY hkey) {
     UnregisterFromBeingDefaultViewer(hkey);
 
     // those are registry keys written before 3.4
-    TempStr regClassApp = GetRegClassesAppTemp(StrL(kAppName));
+    TempStr regClassApp = GetRegClassesAppTemp(StrL(kEnhancedAppName));
     LoggedDeleteRegKey(hkey, regClassApp);
-    TempStr regPath = GetRegClassesAppsTemp(StrL(kAppName));
+    TempStr regPath = GetRegClassesAppsTemp(StrL(kEnhancedAppName));
     LoggedDeleteRegKey(hkey, regPath);
     {
         TempStr key = str::JoinTemp(StrL(kRegClassesPdf), StrL("\\OpenWithProgids"));
-        LoggedDeleteRegValue(hkey, key, StrL(kAppName));
+        LoggedDeleteRegValue(hkey, key, StrL(kEnhancedAppName));
     }
 
     if (HKEY_LOCAL_MACHINE == hkey) {
-        TempStr key = str::JoinTemp(StrL("Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"), Str(kExeName));
+        TempStr key =
+            str::JoinTemp(StrL("Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"), Str(kEnhancedExeName));
         LoggedDeleteRegKey(hkey, key);
     }
 
     // those are registry keys written before 3.4
-    TempStr openWithVal = str::JoinTemp(StrL("\\OpenWithList\\"), Str(kExeName));
+    TempStr openWithVal = str::JoinTemp(StrL("\\OpenWithList\\"), Str(kEnhancedExeName));
     for (Str ext = SeqStrFirst(gSupportedExts); len(ext) > 0; ext = SeqStrNext(ext)) {
         TempStr keyname = str::JoinTemp(StrL("Software\\Classes\\"), ext, StrL("\\OpenWithProgids"));
-        LoggedDeleteRegValue(hkey, keyname, StrL(kAppName));
+        LoggedDeleteRegValue(hkey, keyname, StrL(kEnhancedAppName));
         DeleteEmptyRegKey(hkey, keyname);
 
         keyname = str::JoinTemp(StrL("Software\\Classes\\"), ext, openWithVal);
@@ -485,7 +487,7 @@ void RemoveInstallRegistryKeys(HKEY hkey) {
 
     // those were introduced in 3.4
     for (Str ext = SeqStrFirst(gSupportedExts); len(ext) > 0; ext = SeqStrNext(ext)) {
-        TempStr progIDName = str::JoinTemp(StrL(kAppName), ext);
+        TempStr progIDName = str::JoinTemp(StrL("SumatraPDFEnhanced"), ext);
         TempStr key = str::JoinTemp(StrL("Software\\Classes\\"), progIDName);
 
         LoggedDeleteRegKey(hkey, key);
@@ -495,8 +497,8 @@ void RemoveInstallRegistryKeys(HKEY hkey) {
     }
 
     // delete keys written in ListAsDefaultProgramWin10()
-    LoggedDeleteRegValue(hkey, StrL("SOFTWARE\\RegisteredApplications"), StrL(kAppName));
-    TempStr keyName = fmt("SOFTWARE\\%s\\Capabilities", StrL(kAppName));
+    LoggedDeleteRegValue(hkey, StrL("SOFTWARE\\RegisteredApplications"), StrL(kEnhancedAppName));
+    TempStr keyName = fmt("SOFTWARE\\%s\\Capabilities", StrL(kEnhancedAppName));
     LoggedDeleteRegKey(hkey, keyName);
 
     ShellNotifyAssociationsChanged();
@@ -527,7 +529,7 @@ void ReRegisterFileAssociations() {
     }
 
     // for all-users installs, also try to restore the HKLM entries (best effort)
-    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kAppName));
+    TempStr regPathUninst = GetRegPathUninstTemp(StrL(kEnhancedAppName));
     if (HasRegistryValue(HKEY_LOCAL_MACHINE, regPathUninst, StrL("InstallLocation"))) {
         if (!HasAllOurOpenWithEntries(HKEY_LOCAL_MACHINE)) {
             RegisterForOpenWith(HKEY_LOCAL_MACHINE, exePath);
@@ -559,12 +561,12 @@ static bool IsOurProgId(Str progId, Str ext) {
         return false;
     }
     // current scheme: SumatraPDF.pdf
-    TempStr ours = str::JoinTemp(StrL(kAppName), ext);
+    TempStr ours = str::JoinTemp(StrL("SumatraPDFEnhanced"), ext);
     if (str::EqI(progId, ours)) {
         return true;
     }
     // pre-3.4 scheme used plain "SumatraPDF" for .pdf
-    return str::EqI(progId, StrL(kAppName));
+    return str::EqI(progId, StrL("SumatraPDFEnhanced"));
 }
 
 // true if we appear under OpenWithProgids for this extension (HKCU or HKLM)
@@ -578,13 +580,13 @@ static bool IsSumatraDefaultForExt(Str ext) {
     if (!extW || !*extW) {
         return false;
     }
-    WCHAR* appNameW = CWStrTemp(StrL(kAppName));
+    WCHAR* appNameW = CWStrTemp(StrL(kEnhancedAppName));
 
     AutoReleaseComPtr<IApplicationAssociationRegistration> aar;
     HRESULT hr =
         CoCreateInstance(CLSID_ApplicationAssociationRegistration, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&aar));
     if (SUCCEEDED(hr) && aar) {
-        // RegisteredApplications name is StrL(kAppName) ("SumatraPDF")
+        // RegisteredApplications name is StrL(kEnhancedAppName) ("SumatraPDF")
         BOOL isDefault = FALSE;
         hr = aar->QueryAppIsDefault(extW, AT_FILEEXTENSION, AL_EFFECTIVE, appNameW, &isDefault);
         if (SUCCEEDED(hr)) {
@@ -697,10 +699,10 @@ void LaunchDefaultAppDialogForExtension(HWND hwnd, Str extIn) {
     // Fall back to Settings > Default apps, preferably focused on our app entry
     // (Win11 registeredAppUser / registeredAppMachine deep link).
     TempStr uri;
-    if (HasRegistryValue(HKEY_CURRENT_USER, StrL("SOFTWARE\\RegisteredApplications"), StrL(kAppName))) {
-        uri = fmt("ms-settings:defaultapps?registeredAppUser=%s", StrL(kAppName));
-    } else if (HasRegistryValue(HKEY_LOCAL_MACHINE, StrL("SOFTWARE\\RegisteredApplications"), StrL(kAppName))) {
-        uri = fmt("ms-settings:defaultapps?registeredAppMachine=%s", StrL(kAppName));
+    if (HasRegistryValue(HKEY_CURRENT_USER, StrL("SOFTWARE\\RegisteredApplications"), StrL(kEnhancedAppName))) {
+        uri = fmt("ms-settings:defaultapps?registeredAppUser=%s", StrL(kEnhancedAppName));
+    } else if (HasRegistryValue(HKEY_LOCAL_MACHINE, StrL("SOFTWARE\\RegisteredApplications"), StrL(kEnhancedAppName))) {
+        uri = fmt("ms-settings:defaultapps?registeredAppMachine=%s", StrL(kEnhancedAppName));
     } else {
         uri = StrL("ms-settings:defaultapps");
     }

@@ -8,7 +8,9 @@
 
 #include "base/HtmlTags.h"
 
+#include "Settings.h"
 #include "Theme.h"
+#include "AppSettings.h"
 #include "GumboHtmlParser.h"
 
 extern "C" {
@@ -399,7 +401,8 @@ void ParseMarkdownTocsParallel(StrVec& files, bool htmlMode, Vec<MarkdownFileToc
 
 static const char* kMarkdownPageCssFmt = R"(
 :root { %s }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px;
+%s
+body { font-family: var(--enhanced-ui-font-family); font-size: var(--enhanced-ui-font-size);
   line-height: 1.5; color: var(--fg); background: var(--bg); margin: 0; padding: 2rem 3rem; max-width: 980px; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -529,7 +532,7 @@ static TempStr MarkdownPageCssTemp() {
 
     TempStr cssVars =
         fmt("--bg:%s; --fg:%s; --link:%s; --muted:%s; --border:%s; --code-bg:%s;", bg, fg, link, muted, border, codeBg);
-    return fmt(kMarkdownPageCssFmt, cssVars);
+    return fmt(kMarkdownPageCssFmt, cssVars, GetUiFontCssTemp());
 }
 
 // Markdown pages are exposed to WebView2 as generated .html resources. Keep

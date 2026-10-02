@@ -36,6 +36,7 @@ struct VocabularyDeck {
     Str id, name, description, source, license;
     StrVec words;
     bool builtin = false;
+    const char* builtinWords = nullptr;
     ~VocabularyDeck();
 };
 
@@ -59,6 +60,7 @@ bool VocabularySetLearned(Str id, bool learned);
 bool VocabularyReview(Str id, VocabGrade grade, VocabScheduler scheduler = VocabScheduler::Sm2, i64 now = 0);
 void VocabularySearch(Str query, Str deckId, bool learnedOnly, Vec<VocabularyWord*>& out);
 void VocabularyDue(Str deckId, Vec<VocabularyWord*>& out, i64 now = 0, bool studyAhead = false);
+int VocabularyDueCount(Str deckId = {}, i64 now = 0);
 VocabularyDeck* VocabularyCreateDeck(Str name, Str description = {});
 bool VocabularyRemoveDeck(Str id);
 int VocabularyInstallDeck(Str id);

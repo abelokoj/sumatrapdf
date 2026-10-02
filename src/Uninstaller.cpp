@@ -46,7 +46,7 @@ const char* gInstalledFiles[] = {
     "PdfFilter.dll",
     "PdfPreview.dll",
     // those probably won't delete because in use
-    "SumatraPDF.exe",
+    "SumatraPDFEnhanced.exe",
     "RA-MICRO PDF Viewer.exe",
     // files no longer shipped, to be deleted
     "libmupdf.dll", // renamed to libsumatrapdf.dll in 3.7
@@ -106,8 +106,9 @@ static void RemoveInstalledFiles() {
     // can't use GetExistingInstallationDir() anymore because we
     // delete registry entries
     Str dir = gCli->installer.installDir;
-    if (len(dir) == 0) {
-        log(StrL("RemoveInstalledFiles(): dir is empty\n"));
+    if (!IsSafeEnhancedInstallDir(dir)) {
+        log(StrL("RemoveInstalledFiles(): unsafe directory\n"));
+        return;
     }
 #if 0
     for (const char* s : gInstalledFiles) {
@@ -124,7 +125,7 @@ static void RemoveInstalledFiles() {
 
 static TempStr GetInstalledExePathTemp() {
     TempStr dir = gCli->installer.installDir;
-    return path::JoinTemp(dir, Str(kExeName));
+    return path::JoinTemp(dir, Str(kEnhancedExeName));
 }
 
 static void UninstallerThread() {
@@ -157,7 +158,7 @@ static void UninstallerThread() {
     RemoveInstallDirFromPath(gCli->installer.allUsers, gCli->installer.installDir);
     RemoveInstalledFiles();
     LoggedDeleteRegValue(HKEY_CURRENT_USER, StrL("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-                         StrL("SumatraPDF-QuickLook"));
+                         StrL("SumatraPDFEnhanced-QuickLook"));
 
     // always succeed, even for partial uninstallations
     success = true;
@@ -192,7 +193,7 @@ static void OnUninstallationFinished() {
     gButtonUninstaller = nullptr;
     gButtonExit = CreateDefaultButton(gHwndFrame, Tr("Close"), isRtl);
     gButtonExit->onClick = MkFunc0Void(OnButtonExit);
-    SetMsg(Tr("SumatraPDF has been uninstalled."), gMsgError ? kColorMsgFailed : kColorMsgOk);
+    SetMsg(Tr("SumatraPDF Enhanced has been uninstalled."), gMsgError ? kColorMsgFailed : kColorMsgOk);
     gMsgError = gFirstError;
     HwndRepaintNow(gHwndFrame);
 
@@ -214,7 +215,7 @@ static bool UninstallerOnWmCommand(WPARAM wp) {
 constexpr const WCHAR* kInstallerWindowClassName = L"SUMATRA_PDF_INSTALLER_FRAME";
 
 static void CreateUninstallerWindow() {
-    TempStr title = fmt(Tr("SumatraPDF %s Uninstaller").s, StrL(CURR_VERSION_STRA));
+    TempStr title = fmt(Tr("SumatraPDF Enhanced %s Uninstaller").s, StrL(ENHANCED_VERSION_STRA));
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
     int dx = GetInstallerWinDx();
@@ -229,18 +230,18 @@ static void CreateUninstallerWindow() {
     HwndResizeClientSize(gHwndFrame, dx, dy);
 
     auto isRtl = IsUIRtl();
-    gButtonUninstaller = CreateDefaultButton(gHwndFrame, Tr("Uninstall SumatraPDF"), isRtl);
+    gButtonUninstaller = CreateDefaultButton(gHwndFrame, Tr("Uninstall SumatraPDF Enhanced"), isRtl);
     gButtonUninstaller->onClick = MkFunc0Void(OnButtonUninstall);
 }
 
 static void ShowUsage() {
     // Note: translation services aren't initialized at this point, so English only
-    TempStr caption = str::JoinTemp(StrL(kAppName), StrL(" Uninstaller Usage"));
+    TempStr caption = str::JoinTemp(StrL(kEnhancedAppName), StrL(" Uninstaller Usage"));
     TempStr msg = fmt(R"(uninstall.exe [/s][/d <path>]
 
 /s	uninstalls %s silently (without user interaction).
 /d	changes the directory from where %s will be uninstalled.)",
-                      StrL(kAppName), StrL(kAppName));
+                      StrL(kEnhancedAppName), StrL(kEnhancedAppName));
     MsgBox(nullptr, msg, caption, MB_OK | MB_ICONINFORMATION);
 }
 
@@ -257,7 +258,7 @@ static LRESULT CALLBACK WndProcUninstallerFrame(HWND hwnd, UINT msg, WPARAM wp, 
     switch (msg) {
         case WM_CTLCOLORSTATIC: {
             if (ghbrBackground == nullptr) {
-                ghbrBackground = CreateSolidBrush(MkRgb(0xff, 0xf2, 0));
+                ghbrBackground = CreateSolidBrush(kEnhancedInstallerBg);
             }
             HDC hdc = (HDC)wp;
             SetTextColor(hdc, kColBlack);
@@ -368,7 +369,7 @@ static TempStr GetUninstallerPathInTemp() {
     DWORD res = ::GetTempPathW(dimof(tempDir), tempDir);
     ReportIf(res == 0 || res >= dimof(tempDir));
     TempStr dirA = ToUtf8Temp(tempDir);
-    return path::JoinTemp(dirA, StrL("Sumatra-Uninstaller.exe"));
+    return path::JoinTemp(dirA, StrL("SumatraEnhanced-Uninstaller.exe"));
 }
 
 // %SystemRoot%\Temp, used instead of the per-user temp directory for the
@@ -382,7 +383,7 @@ static TempStr GetUninstallerPathInSystemTemp() {
         return {};
     }
     TempStr dir = path::JoinTemp(ToUtf8Temp(winDir), StrL("Temp"));
-    return path::JoinTemp(dir, StrL("Sumatra-Uninstaller.exe"));
+    return path::JoinTemp(dir, StrL("SumatraEnhanced-Uninstaller.exe"));
 }
 
 // to be able to delete installation directory we must copy
@@ -569,11 +570,12 @@ int RunUninstaller() {
     logf("Running uninstaller '%s' with args '%s' for '%s'\n", exePath, cmdLine, instDir);
 
     int ret = 1;
-    auto installerExists = file::Exists(exePath);
+    auto installerExists =
+        IsSafeEnhancedInstallDir(instDir) && file::Exists(path::JoinTemp(instDir, Str(kEnhancedExeName)));
     if (!installerExists) {
         log(StrL("Uninstaller executable doesn't exist\n"));
         auto caption = Tr("Uninstallation failed");
-        auto msg = Tr("SumatraPDF installation not found.");
+        auto msg = Tr("SumatraPDF Enhanced installation not found.");
         MsgBox(nullptr, msg, caption, MB_ICONEXCLAMATION | MB_OK);
         goto Exit;
     }
@@ -595,16 +597,12 @@ int RunUninstaller() {
         log(StrL("Previewer is installed\n"));
     }
 
-    gDefaultMsg = Tr("Are you sure you want to uninstall SumatraPDF?");
+    gDefaultMsg = Tr("Are you sure you want to uninstall SumatraPDF Enhanced?");
 
     // unregister search filter and previewer to reduce
     // possibility of blocking
-    if (gWasSearchFilterInstalled) {
-        UnRegisterSearchFilter();
-    }
-    if (gWasPreviewInstaller) {
-        UnRegisterPreviewer();
-    }
+    UnRegisterSearchFilter();
+    UnRegisterPreviewer();
 
     if (gCli->silent) {
         UninstallerThread();

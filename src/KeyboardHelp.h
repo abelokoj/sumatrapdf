@@ -19,6 +19,7 @@ struct KeyboardHelpArgs {
 KeyboardHelpDataSource* GetDefaultKeyboardHelpDataSource();
 void ToggleKeyboardHelp(const KeyboardHelpArgs&);
 void CloseKeyboardHelp();
+void RefreshKeyboardHelpFont();
 bool IsKeyboardHelpVisible();
 
 void ToggleKeyboardHelp(MainWindow*);

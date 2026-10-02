@@ -132,7 +132,7 @@ STDAPI DllRegisterServer() {
 
 STDAPI DllUnregisterServer() {
     log(StrL("DllUnregisterServer\n"));
-    bool ok = UninstallSearchFilter();
+    bool ok = UninstallSearchFilter(GetSelfExePathTemp());
     if (!ok) {
         log(StrL("DllUnregisterServer failed\n"));
     }

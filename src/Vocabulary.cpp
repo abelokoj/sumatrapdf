@@ -46,6 +46,12 @@ struct VocabularyData {
     Vec<VocabularyDeck*> decks;
     Str path, error;
     bool loaded = false, readOnly = false, batch = false, test = false;
+    u64 revision = 0, dailyRevision = 0;
+    i64 dailyDay = -1;
+    VocabularyWord* dailyWord = nullptr;
+#if IS_DEBUG
+    int dailyBuilds = 0;
+#endif
     ~VocabularyData() {
         for (auto* w : words) delete w;
         for (auto* d : decks) delete d;
@@ -111,7 +117,7 @@ static void AddBuiltins(VocabularyData& target) {
             }
         if (deck) {
             deck->builtin = true;
-            if (len(deck->words) == 0) Split(&deck->words, Str(source.words), StrL("\n"), true);
+            deck->builtinWords = source.words;
             continue;
         }
         deck = new VocabularyDeck;
@@ -128,7 +134,7 @@ static void AddBuiltins(VocabularyData& target) {
         for (const auto& item : builtinVocabAttributions) {
             if (str::Eq(deck->id, Str(item.id))) str::ReplaceWithCopy(&deck->license, Str(item.notice));
         }
-        Split(&deck->words, Str(source.words), StrL("\n"), true);
+        deck->builtinWords = source.words;
         VecAppend(target.decks, deck);
     }
 }
@@ -416,6 +422,7 @@ bool VocabularyLoad() {
     return true;
 }
 bool VocabularySave() {
+    data->revision++;
     if (!VocabularyLoad() || data->readOnly)
         return Fail(StrL(
             "The vocabulary store is damaged. Export or restore it before saving; its original file was preserved."));
@@ -555,6 +562,15 @@ void VocabularyDue(Str deck, Vec<VocabularyWord*>& out, i64 now, bool ahead) {
         return str::CmpI((*a)->word, (*b)->word);
     });
 }
+int VocabularyDueCount(Str deck, i64 now) {
+    now = Now(now);
+    int count = 0;
+    for (auto* word : VocabularyWords()) {
+        if (HasDeck(word, deck) && word->dueTime <= now && len(word->definition)) count++;
+    }
+    return count;
+}
+
 VocabularyDeck* VocabularyCreateDeck(Str name, Str description) {
     if (!VocabularyLoad() || !len(name) || len(name) > 256 || len(description) > 8192 ||
         len(data->decks) >= kMaxVocabDecks)
@@ -601,6 +617,9 @@ int VocabularyInstallDeck(Str id) {
     defer {
         data->batch = false;
     };
+    if (len(deck->words) == 0 && deck->builtinWords) {
+        Split(&deck->words, Str(deck->builtinWords), StrL("\n"), true);
+    }
     int added = 0;
     for (int i = 0; i < len(deck->words); i++) {
         Str word = deck->words[i];
@@ -695,6 +714,7 @@ bool VocabularyImport(Str path, bool merge) {
     SwapLists(data->words, target.words);
     SwapLists(data->decks, target.decks);
     data->readOnly = false;
+    data->revision++;
     str::ReplaceWithCopy(&data->error, {});
     return true;
 }
@@ -779,7 +799,10 @@ static u64 DailyWordHash(Str word) {
     }
     return hash;
 }
-VocabularyWord* VocabularyWordOfDay(i64 now) {
+static VocabularyWord* ComputeWordOfDay(i64 now) {
+#if IS_DEBUG
+    data->dailyBuilds++;
+#endif
     Vec<VocabularyWord*> ordered;
     for (auto* word : VocabularyWords()) VecAppend(ordered, word);
     int count = len(ordered);
@@ -795,6 +818,17 @@ VocabularyWord* VocabularyWordOfDay(i64 now) {
         if (!word->learned) return word;
     }
     return ordered[index];
+}
+
+VocabularyWord* VocabularyWordOfDay(i64 now) {
+    VocabularyLoad();
+    i64 day = Now(now) / kVocabDay;
+    if (data->dailyDay != day || data->dailyRevision != data->revision) {
+        data->dailyWord = ComputeWordOfDay(now);
+        data->dailyDay = day;
+        data->dailyRevision = data->revision;
+    }
+    return data->dailyWord;
 }
 
 #if IS_DEBUG
@@ -889,9 +923,31 @@ void Vocabulary_UnitTests() {
     utassert(file::WriteFile(bad, StrL("{broken")));
     utassert(!VocabularyImport(bad, false));
     utassert(len(isolated.words) == before && VocabularyFind(id) != nullptr);
+    VocabularyData lazy;
+    AddBuiltins(lazy);
+    utassert(len(lazy.decks) == dimofi(builtinVocabDecks));
+    for (auto* deck : lazy.decks) {
+        utassert(len(deck->words) == 0 && deck->builtinWords != nullptr);
+    }
+    auto* daily = VocabularyWordOfDay(1700200000);
+    utassert(daily == ComputeWordOfDay(1700200000));
+    int builds = data->dailyBuilds;
+    for (int i = 0; i < 100; i++) utassert(VocabularyWordOfDay(1700200000) == daily);
+    utassert(data->dailyBuilds == builds);
+    utassert(VocabularySetLearned(daily->id, true));
+    utassert(VocabularyWordOfDay(1700200000) == ComputeWordOfDay(1700200000));
+    utassert(VocabularySetLearned(daily->id, false));
+    Vec<VocabularyWord*> counted;
+    VocabularyDue({}, counted, 1700200000);
+    utassert(VocabularyDueCount({}, 1700200000) == len(counted));
+    VocabularyDue(StrL("deck-one"), counted, 1700200000);
+    utassert(VocabularyDueCount(StrL("deck-one"), 1700200000) == len(counted));
+    utassert(VocabularyWordOfDay(1700200000 + kVocabDay) == ComputeWordOfDay(1700200000 + kVocabDay));
     VocabularyQuestion flash;
     utassert(VocabularyMakeQuestion(id, VocabActivity::Flashcards, flash));
     utassert(str::Eq(flash.answer, VocabularyFind(id)->definition));
     utassert(!VocabularyCheckAnswer(flash, {}));
+    utassert(VocabularyRemove(daily->id));
+    utassert(VocabularyWordOfDay(1700200000) == ComputeWordOfDay(1700200000));
 }
 #endif

@@ -923,16 +923,14 @@ int PopupId(Annotation* annot) {
     return res;
 }
 
-/*
 time_t CreationDate(Annotation* annot) {
+    if (!AnnotationIsLive(annot)) return 0;
     EngineMupdf* e = annot->engine;
     auto a = annot->pdfannot;
     auto ctx = e->Ctx();
-    auto pdf = annot->pdf;
     AutoUnlockRecursiveMutex cs(&e->docLock);
     int64_t res = 0;
-    fz_try(ctx)
-    {
+    fz_try(ctx) {
         res = pdf_annot_creation_date(ctx, a);
     }
     fz_catch(ctx) {
@@ -940,7 +938,6 @@ time_t CreationDate(Annotation* annot) {
     }
     return res;
 }
-*/
 
 time_t ModificationDate(Annotation* annot) {
     if (!AnnotationIsLive(annot)) {
@@ -1591,6 +1588,58 @@ static void WriteFreeTextFontLocked(fz_context* ctx, pdf_annot* a, Str family, i
         ds.Append(StrL(";text-decoration:underline"));
     }
     pdf_set_annot_rich_defaults(ctx, a, CStrTemp(ToStrTemp(ds)));
+}
+
+static bool FontAllowsEmbedding(fz_context* ctx, fz_font* font) {
+    unsigned char* data = nullptr;
+    size_t size = fz_buffer_storage(ctx, font->buffer, &data);
+    if (size < 12) return false;
+    auto read16 = [](const unsigned char* p) { return (u32(p[0]) << 8) | p[1]; };
+    auto read32 = [](const unsigned char* p) {
+        return (u32(p[0]) << 24) | (u32(p[1]) << 16) | (u32(p[2]) << 8) | p[3];
+    };
+    bool collection = memcmp(data, "ttcf", 4) == 0;
+    u32 faces = collection ? read32(data + 8) : 1;
+    if (!faces || (collection && faces > (size - 12) / 4)) return false;
+    for (u32 face = 0; face < faces; face++) {
+        size_t start = collection ? read32(data + 12 + face * 4) : 0;
+        if (start > size - 12) return false;
+        u32 tables = read16(data + start + 4);
+        if (tables > (size - start - 12) / 16) return false;
+        for (u32 i = 0; i < tables; i++) {
+            const unsigned char* table = data + start + 12 + i * 16;
+            if (memcmp(table, "OS/2", 4)) continue;
+            size_t offset = read32(table + 8);
+            if (offset > size - 10 || read32(table + 12) < 10) return false;
+            u32 rights = read16(data + offset + 8);
+            // The subset writer cannot use restricted, bitmap-only or no-subset fonts.
+            if (rights & (0x0002 | 0x0100 | 0x0200)) return false;
+        }
+    }
+    return true;
+}
+
+FreeTextFontStatus CheckFreeTextFont(EngineMupdf* engine, Str family, int style) {
+    if (IsBase14FontFamily(family)) return FreeTextFontStatus::Available;
+    if (!engine || len(family) == 0) return FreeTextFontStatus::Unavailable;
+    fz_context* ctx = engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&engine->docLock);
+    fz_font* font = nullptr;
+    fz_var(font);
+    FreeTextFontStatus status = FreeTextFontStatus::Unavailable;
+    fz_var(status);
+    fz_try(ctx) {
+        font = fz_load_system_font(ctx, CStrTemp(family), style & kFreeTextBold, style & kFreeTextItalic, 0);
+        if (font)
+            status = FontAllowsEmbedding(ctx, font) ? FreeTextFontStatus::Available : FreeTextFontStatus::Restricted;
+    }
+    fz_always(ctx) {
+        fz_drop_font(ctx, font);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return status;
 }
 
 Str FreeTextFontFamily(Annotation* annot) {
@@ -2560,6 +2609,11 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
                     fcol = textColor;
                 }
                 pdf_set_annot_default_appearance(ctx, annot, "Helv", (float)fontSize, nCol, fcol);
+                Str defaultFamily = gSettings->annotations.freeTextFontFamily;
+                int defaultStyle = gSettings->annotations.freeTextFontStyle & 7;
+                if (CheckFreeTextFont(epdf, defaultFamily, defaultStyle) == FreeTextFontStatus::Available) {
+                    WriteFreeTextFontLocked(ctx, annot, defaultFamily, defaultStyle);
+                }
                 if (bgCol.parsedOk) {
                     float bgColor[3]{};
                     PdfColorToFloat(bgCol.pdfCol, bgColor);
@@ -3044,6 +3098,111 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
     // clang-format on
     return AnnotationType::Unknown;
 }
+
+#if IS_DEBUG
+bool Annotation_UnitTestFontRoundtrip() {
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /FreeText /Rect [10 10 500 80] /DA (/Helv 12 Tf 0 g) /Contents (College study notes) "
+        ">>",
+    };
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    bool ok = true;
+    for (Str family : {StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")}) {
+        EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("font-roundtrip.pdf"), nullptr);
+        if (!engine) return false;
+        Vec<Annotation*> annots;
+        EngineMupdfGetAnnotations(engine, annots);
+        ok = ok && len(annots) == 1;
+        if (ok) {
+            Annotation* annot = annots[0];
+            auto status = CheckFreeTextFont(annot->engine, family, 0);
+            ok = status == FreeTextFontStatus::Available;
+            ok = ok && CheckFreeTextFont(annot->engine, StrL("Enhanced missing test font 93726"), 0) ==
+                           FreeTextFontStatus::Unavailable;
+            unsigned char restricted[38]{};
+            restricted[5] = 1;
+            memcpy(restricted + 12, "OS/2", 4);
+            restricted[23] = 28;
+            restricted[27] = 10;
+            fz_font testFont{};
+            testFont.buffer = fz_new_buffer_from_shared_data(annot->engine->Ctx(), restricted, sizeof(restricted));
+            ok = ok && FontAllowsEmbedding(annot->engine->Ctx(), &testFont);
+            for (int flag : {2, 256, 512}) {
+                restricted[36] = (unsigned char)(flag >> 8);
+                restricted[37] = (unsigned char)flag;
+                ok = ok && !FontAllowsEmbedding(annot->engine->Ctx(), &testFont);
+            }
+            fz_drop_buffer(annot->engine->Ctx(), testFont.buffer);
+            SetFreeTextFont(annot, family, kFreeTextBold);
+        }
+        Str dest = str::Dup(GetTempFilePathTemp(StrL("enhanced-font")));
+        ok = ok && EngineMupdfSaveCopy(engine, dest);
+        SafeEngineRelease(&engine);
+        Str saved = ok ? file::ReadFile(dest) : Str{};
+        if (ok) {
+            engine = CreateEngineMupdfFromData(saved, StrL("reopened-font.pdf"), nullptr);
+            ok = engine != nullptr;
+            if (ok) {
+                EngineMupdfGetAnnotations(engine, annots);
+                ok = len(annots) == 1 && str::EqI(FreeTextFontFamily(annots[0]), family) &&
+                     (FreeTextFontStyle(annots[0]) & kFreeTextBold);
+                if (ok) {
+                    EngineMupdf* e = AsEngineMupdf(engine);
+                    AutoUnlockRecursiveMutex lock(&e->docLock);
+                    fz_context* ctx = e->Ctx();
+                    fz_try(ctx) {
+                        pdf_obj* ap =
+                            pdf_dict_getp(ctx, pdf_annot_obj(ctx, annots[0]->pdfannot), "AP/N/Resources/Font");
+                        bool embedded = false;
+                        for (int i = 0; i < pdf_dict_len(ctx, ap); i++) {
+                            pdf_obj* font = pdf_dict_get_val(ctx, ap, i);
+                            pdf_obj* desc = pdf_dict_get(ctx, font, PDF_NAME(FontDescriptor));
+                            if (!desc) {
+                                pdf_obj* descendants = pdf_dict_get(ctx, font, PDF_NAME(DescendantFonts));
+                                desc = pdf_dict_get(ctx, pdf_array_get(ctx, descendants, 0), PDF_NAME(FontDescriptor));
+                            }
+                            embedded |= desc && (pdf_dict_get(ctx, desc, PDF_NAME(FontFile)) ||
+                                                 pdf_dict_get(ctx, desc, PDF_NAME(FontFile2)) ||
+                                                 pdf_dict_get(ctx, desc, PDF_NAME(FontFile3)));
+                        }
+                        ok = embedded;
+                    }
+                    fz_catch(ctx) {
+                        ok = false;
+                    }
+                }
+                if (ok) {
+                    SetContents(annots[0], StrL("Edited after reopening"));
+                    ok = str::Eq(Contents(annots[0]), StrL("Edited after reopening"));
+                }
+            }
+        }
+        SafeEngineRelease(&engine);
+        WCHAR testDir[32768]{};
+        DWORD testLen = GetEnvironmentVariableW(L"ENHANCED_EXPORT_TEST_DIR", testDir, dimof(testDir));
+        if (testLen && testLen < dimof(testDir))
+            file::WriteFile(path::JoinTemp(ToUtf8Temp(WStr(testDir)), fmt("font-%s.pdf", family)), saved);
+        str::Free(saved);
+        file::Delete(dest);
+        str::Free(dest);
+        if (!ok) return false;
+    }
+    return ok;
+}
+#endif
 
 #if IS_DEBUG
 bool Annotation_UnitTestInkRoundtrip() {

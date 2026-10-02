@@ -9,13 +9,14 @@
 #include "gui/Dpi.h"
 
 #include "Settings.h"
+#include "AppSettings.h"
 #include "ImageReader.h"
 
 #include "AppTools.h"
 #include "FileThumbnails.h"
 
 Size GetThumbnailRenderSize() {
-    return {std::min(DpiScale(kThumbnailDx * 250 / 100), 2120), std::min(DpiScale(kThumbnailDy * 250 / 100), 1500)};
+    return {std::min(UiScalePx(kThumbnailDx * 250 / 100), 2120), std::min(UiScalePx(kThumbnailDy * 250 / 100), 1500)};
 }
 
 TempStr GetThumbnailPathTemp(Str filePath) {

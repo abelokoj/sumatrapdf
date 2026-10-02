@@ -3,6 +3,7 @@ import { cpus } from "node:os";
 import { join, relative } from "node:path";
 import { $ } from "bun";
 import { clearDirPreserveSettings } from "./clean";
+import { generateEnhancedVersion } from "./gen-enhanced-version";
 import { ensureNinja, ninjaDir, ninjaToRoot } from "./ninja";
 import { detectVisualStudio, runLogged } from "./util";
 
@@ -171,6 +172,7 @@ function reject(condition: boolean, message: string): void {
 
 function validateOptions(opts: BuildOptions): void {
   const mode = opts.mode!;
+  if (mode !== "build-no") generateEnhancedVersion();
   const fixedModes: BuildMode[] = ["all", "smoke", "ci", "daily", "codeql", "wine", "build-no"];
   if (fixedModes.includes(mode)) {
     reject(!!opts.config, `${opts.config ? configFlag(opts.config) : ""} is not valid with -${mode}`);
@@ -431,6 +433,7 @@ async function runWslLauncher(args: string[]): Promise<void> {
 
 async function runBuild(opts: BuildOptions): Promise<void> {
   const mode = opts.mode!;
+  if (mode !== "build-no") generateEnhancedVersion();
   if (["windows", "all", "smoke"].includes(mode)) {
     // the exe embeds the manual from .work/docs (ci / daily do this themselves)
     const { genDocsForBuild } = await import("./gen-docs");

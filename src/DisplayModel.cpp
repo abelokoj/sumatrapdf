@@ -3762,9 +3762,25 @@ void DisplayModelZoom_UnitTests() {
         if (previous) utassert(previous - level == 25);
         previous = level;
     }
+    Vec<float> picker;
+    CollectZoomPickerLevels(picker);
+    utassert(VecFind(picker, 25.f) >= 0 && VecFind(picker, 600.f) >= 0);
+    utassert(VecFind(picker, kZoomFitPage) >= 0 && VecFind(picker, kZoomFitWidth) >= 0);
+    for (float level : picker) {
+        utassert(level < 0 || (level >= 25 && level <= 600));
+    }
+    for (float level = 100; level <= 600; level += 25) {
+        utassert(VecFind(picker, level) >= 0);
+    }
+    utassert(NextZoomStep(600, kZoomMax, levels, count, 80, 165, true) == 625);
+    utassert(NextZoomStep(25, kZoomMin, levels, count, 80, 165, true) < 25);
     VecAppend(custom, 100.f);
     VecAppend(custom, 150.f);
     VecAppend(custom, 200.f);
+    Vec<float> customPicker;
+    CollectZoomPickerLevels(customPicker);
+    utassert(len(customPicker) == len(picker));
+    utassert(VecFind(customPicker, 175.f) >= 0 && VecFind(customPicker, 600.f) >= 0);
     levels = GetDefaultZoomLevels(&count);
     utassert(!(count != 3 || levels != VecData(custom)));
     utassert(!(NextZoomStep(150, kZoomMax, levels, count, 80, 165, false) != kZoomFitWidth));

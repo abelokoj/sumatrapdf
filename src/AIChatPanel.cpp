@@ -239,7 +239,7 @@ static void UpdateAIChatPanelTitle(MainWindow* win, int labelDx) {
 
     PlatformFont* font = win->aiChatLabel->font;
     if (!font) {
-        font = GetDefaultGuiFont(true, false);
+        font = GetBoldPlatformFont(GetAppFont());
     }
     if (labelDx <= 0 && win->hwndAiChatBox) {
         labelDx = HwndClientRect(win->hwndAiChatBox).dx;
@@ -1380,11 +1380,11 @@ void UpdateAIChatDpi(MainWindow* win, int dpi) {
     win->aiChatCheckbox->SetFont(font);
     win->aiChatInput->SetFont(font);
     win->aiChatStopBtn->font = font;
-    int padY = DpiScaleByDpi(dpi, 5);
-    int padX = DpiScaleByDpi(dpi, 12);
+    int padY = UiScalePxForDpi(dpi, 5);
+    int padX = UiScalePxForDpi(dpi, 12);
     win->aiChatStopBtn->textPadding = Insets{padY, padX, padY, padX};
     if (win->aiChatHeader && win->aiChatHeader->ChildrenCount() > 1) {
-        ApplyLabelWithCloseDpi(win->aiChatLabel, AsVirtCloseButton(win->aiChatHeader->LayoutChildAt(1)), dpi);
+        ApplySidebarUiScale(win->aiChatLabel, AsVirtCloseButton(win->aiChatHeader->LayoutChildAt(1)), dpi);
     }
     RelayoutAIChatPanel(win);
     HwndInvalidate(win->hwndAiChatBox, true);

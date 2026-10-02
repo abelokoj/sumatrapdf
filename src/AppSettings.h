@@ -14,6 +14,8 @@ extern bool gDontSaveSettings;
 extern Vec<SessionData*>* gInitialSessionData;
 
 struct PlatformFont;
+struct VirtText;
+struct VirtCloseButton;
 
 TempStr GetSettingsPathTemp();
 TempStr GetSettingsFileNameTemp();
@@ -31,6 +33,13 @@ void UnregisterSettingsForFileChanges();
 int GetAppFontSize();
 int GetAppFontSizeForDpi(int dpi);
 Str GetAppFontFamily();
+float GetUiScale();
+int UiScalePx(int logicalPx);
+int UiScalePxForDpi(int dpi, int logicalPx);
+int UiFontSizePx(int designPx);
+int UiFontSizePxForDpi(int dpi, int designPx);
+void ApplySidebarUiScale(VirtText*, VirtCloseButton*, int dpi);
+TempStr GetUiFontCssTemp();
 PlatformFont* GetAppFont();
 PlatformFont* GetAppFontForDpi(int dpi);
 int GetAppMenuFontSize();
@@ -56,6 +65,7 @@ TempStr ZoomLevelStrExact(float zoom);
 // the command for each level the zoom buttons step through, in that order
 Vec<int>* GetZoomStepCmdIds();
 void CollectZoomLevels(Vec<float>& out, bool forChm);
+void CollectZoomPickerLevels(Vec<float>& out);
 
 extern Settings* gSettings;
 

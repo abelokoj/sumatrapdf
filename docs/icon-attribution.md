@@ -41,3 +41,5 @@ The official [Cupertino Icons package](https://github.com/flutter/packages/tree/
 | `Invert` | `contrast.svg` |
 
 The application logo and previously copied PrettySumatra visual assets keep their existing attribution; this notice covers only the new toolbar subset.
+
+Shared Tabler outline strokes in `src/SvgIcons.cpp` now use 1.75 px with rounded caps and joins to match the toolbar. Original Enhanced dictionary, learning, study-export, presentation, laser-pointer and laser-mode vectors are included under the source file's Simplified BSD license. The laser button uses the original pointer drawing; the retained Lucide wand is no longer its default glyph. These vectors reuse the native renderer and current theme colors.

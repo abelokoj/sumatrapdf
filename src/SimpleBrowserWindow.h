@@ -35,3 +35,5 @@ struct SimpleBrowserWindow : WindowBase {
 };
 
 SimpleBrowserWindow* SimpleBrowserWindowCreate(const SimpleBrowserCreateArgs&);
+
+void RefreshSimpleBrowserFonts();

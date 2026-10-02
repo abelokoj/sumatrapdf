@@ -44,6 +44,7 @@ struct TabsCtrl : VirtCtrl {
         int tabDefaultDx = 300;
         int tabMinDx = 100;
         int tabIconDx = 18;
+        float interfaceScale = 1.f;
         int scrollButtonDx = 32;
         int scrollDx = 0;
         int viewportDx = 0;
@@ -107,6 +108,7 @@ struct TabsCtrl : VirtCtrl {
     int tabDefaultDx = 300;
     int tabMinDx = 100;
     int tabIconDx = 18;
+    float interfaceScale = 1.f;
     int scrollButtonDx = 32;
     int scrollDx = 0;
     int viewportDx = 0;
@@ -158,6 +160,7 @@ struct TabsCtrl : VirtCtrl {
     void SetIsVisible(bool);
     bool IsVisible() const;
 
+    int ScaleMetric(int logicalPx) const;
     PlatformFont* GetFont() const;
     void SetFont(PlatformFont*);
 

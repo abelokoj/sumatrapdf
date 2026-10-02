@@ -27,6 +27,7 @@ void StopLaserPointer(MainWindow*);
 void SetLaserPointerColor(MainWindow*, Color);
 void SetLaserPointerMode(MainWindow*, LaserPointerMode);
 void DeleteLaserPointerCursor();
+float NormalizeLaserWidth(float);
 void DrawCanvasKeyboardFocusIfNeeded(MainWindow* win, HDC hdc);
 void InvalidateCanvasKeyboardFocus(MainWindow* win);
 

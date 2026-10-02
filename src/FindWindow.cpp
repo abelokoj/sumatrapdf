@@ -256,7 +256,7 @@ void FindWindowWnd::UpdateButtonIcons(int dpi) {
     if (dpi <= 0) {
         dpi = GetDpi();
     }
-    int isz = RoundUp(DpiScaleByDpi(dpi, 16), 4);
+    int isz = RoundUp(UiScalePxForDpi(dpi, 16), 4);
     for (int i = 0; i < 5; i++) {
         if (btns[i]) {
             btns[i]->pixmap = GetCachedPixmapForSvg(Str(icons[i]), isz, isz);
@@ -275,7 +275,7 @@ static void FindWindowButtonClicked(FindWindowWnd* w, VirtMouseEvent* ev) {
 void FindWindowWnd::CreateButtons() {
     static const int cmds[5] = {CmdFindPrev, CmdFindNext, CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
                                 kFindWinPinCmdId};
-    int pad = DpiScale(4);
+    int pad = UiScalePx(4);
     for (int i = 0; i < 5; i++) {
         auto* b = new VirtIconButton();
         b->id = cmds[i];
@@ -296,9 +296,9 @@ static Rect FindWindowPlacementRect(MainWindow* win) {
     if (r.IsEmpty()) {
         Rect fr = HwndWindowRect(win->hwndFrame);
         int dpi = DpiGetForHwnd(win->hwndFrame);
-        int dx = DpiScaleByDpi(dpi, 520);
-        int dy = DpiScaleByDpi(dpi, 360);
-        r = {fr.x + fr.dx - dx - DpiScaleByDpi(dpi, 40), fr.y + DpiScaleByDpi(dpi, 80), dx, dy};
+        int dx = UiScalePxForDpi(dpi, 520);
+        int dy = UiScalePxForDpi(dpi, 360);
+        r = {fr.x + fr.dx - dx - UiScalePxForDpi(dpi, 40), fr.y + UiScalePxForDpi(dpi, 80), dx, dy};
     }
     return ShiftRectToWorkArea(r, win->hwndFrame, true);
 }
@@ -394,14 +394,14 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
 }
 
 void FindWindowWnd::BuildLayout() {
-    int pad = DpiScale(kFindWinPadding);
-    int gap = DpiScale(kFindWinGap);
+    int pad = UiScalePx(kFindWinPadding);
+    int gap = UiScalePx(kFindWinGap);
     // cap preferred width at the min so Wrap decides the break from the min
     // edit width, not the typed text (a long query would otherwise always wrap)
-    int minEditDx = DpiScale(kFindWinMinEditDx);
+    int minEditDx = UiScalePx(kFindWinMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
-    int pagesDx = DpiScale(160);
+    int pagesDx = UiScalePx(160);
     editPages->idealDx = pagesDx;
     editPages->maxDx = pagesDx;
 
@@ -448,7 +448,7 @@ void FindWindowWnd::BuildLayout() {
 }
 
 void FindWindowWnd::UpdateDpi(int dpi) {
-    if (dpi <= 0 || dpi == layoutDpi) {
+    if (dpi <= 0) {
         return;
     }
     // WM_DPICHANGED can arrive during CreateCustom, before the child controls
@@ -457,6 +457,7 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     if (!layout || !edit || !editPages) {
         return;
     }
+    int oldCharWidth = status->font->averageCharWidth;
     PlatformFont* appFont = GetAppFontForDpi(dpi);
     edit->SetFont(appFont);
     editPages->SetFont(appFont);
@@ -465,12 +466,12 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     results->font = appFont;
     results->dpi = dpi;
 
-    int pad = DpiScaleByDpi(dpi, kFindWinPadding);
-    int gap = DpiScaleByDpi(dpi, kFindWinGap);
-    int minEditDx = DpiScaleByDpi(dpi, kFindWinMinEditDx);
+    int pad = UiScalePxForDpi(dpi, kFindWinPadding);
+    int gap = UiScalePxForDpi(dpi, kFindWinGap);
+    int minEditDx = UiScalePxForDpi(dpi, kFindWinMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
-    int pagesDx = DpiScaleByDpi(dpi, 160);
+    int pagesDx = UiScalePxForDpi(dpi, 160);
     editPages->idealDx = pagesDx;
     editPages->maxDx = pagesDx;
     pagesBox->dx = pagesDx;
@@ -481,8 +482,8 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     headerPagesGap->dy = gap;
     pagesResultsGap->dy = pad;
     rootPadding->insets = Insets{pad, pad, pad, pad};
-    statusBox->dx = MulDiv(statusBox->dx, dpi, layoutDpi);
-    int buttonPad = DpiScaleByDpi(dpi, 4);
+    statusBox->dx = MulDiv(statusBox->dx, appFont->averageCharWidth, std::max(oldCharWidth, 1));
+    int buttonPad = UiScalePxForDpi(dpi, 4);
     for (VirtIconButton* button : btns) {
         if (button) {
             button->padding = Insets{buttonPad, buttonPad, buttonPad, buttonPad};
@@ -590,7 +591,7 @@ void FindWindowWnd::DrawResultItem(VirtListBox::DrawItemEvent* ev) {
     }
     gfx->FillRect(rc, colBg);
 
-    int pad = DpiScale(6);
+    int pad = UiScalePx(6);
     Rect rcText = rc;
     rcText.x += pad;
     rcText.dx -= 2 * pad;
@@ -600,10 +601,10 @@ void FindWindowWnd::DrawResultItem(VirtListBox::DrawItemEvent* ev) {
     // instead of fighting a per-row measured width (#5692 / #5796).
     const FindMatch& fm = win->findMatches[ev->itemIndex];
     TempStr pageStr = fmt("%s", win->ctrl->GetPageLabeTemp(fm.startPage));
-    int pageGap = DpiScale(10);
-    int pageColDx = DpiScale(40);
+    int pageGap = UiScalePx(10);
+    int pageColDx = UiScalePx(40);
     Size pageSize = gfx->MeasureText(pageStr, lb->font);
-    pageColDx = std::max(pageSize.dx + DpiScale(4), pageColDx);
+    pageColDx = std::max(pageSize.dx + UiScalePx(4), pageColDx);
     Rect rcPage = rcText;
     rcPage.x = std::max(rcText.x, rcText.x + rcText.dx - pageColDx);
     rcPage.dx = rcText.x + rcText.dx - rcPage.x;
@@ -820,6 +821,7 @@ void FindWindowWnd::ApplyDarkMode() {
 
 void FindWindowWnd::UpdateTheme() {
     WindowBase::UpdateTheme();
+    UpdateDpi(GetDpi());
     UpdatePagesLabel();
     // the icons are drawn in the theme's text color, so re-render them
     UpdateButtonIcons();
@@ -894,9 +896,9 @@ void FindWindowWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
         mmi->ptMinTrackSize.y = clientMinDy + (wr.dy - cr.dy);
         return;
     }
-    int pad = DpiScale(kFindWinPadding);
-    mmi->ptMinTrackSize.x = (2 * pad) + DpiScale(160);
-    mmi->ptMinTrackSize.y = (2 * pad) + DpiScale(80);
+    int pad = UiScalePx(kFindWinPadding);
+    mmi->ptMinTrackSize.x = (2 * pad) + UiScalePx(160);
+    mmi->ptMinTrackSize.y = (2 * pad) + UiScalePx(80);
 }
 
 void FindWindowWnd::OnClose(WindowBase::CloseEvent* /*ev*/) {
@@ -1382,7 +1384,7 @@ TempStr FindResultPageColumnClipResultTemp(int* exitCodeOut) {
         return fail(StrL("ERROR no-screen-dc"));
     }
     const int w = 110;
-    const int h = DpiScale(20);
+    const int h = UiScalePx(20);
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
     HBITMAP hbmp = CreateCompatibleBitmap(hdcScreen, w, h);
     if (!hdcMem || !hbmp) {

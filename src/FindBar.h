@@ -13,6 +13,7 @@ int FindBarFontHeight(MainWindow* win);
 int FindBarWindowHeight(MainWindow* win);
 void ShowFindBar(MainWindow* win);
 void HideFindBar(MainWindow* win);
+void CollapseFindBar(MainWindow* win);
 bool IsFindBarVisible(MainWindow* win);
 bool IsFindUIVisible(MainWindow* win);
 void FindBarReposition(MainWindow* win);
@@ -26,3 +27,7 @@ void ToggleFloatingFindUI(MainWindow* win);
 void FocusFindEditSelectAll(MainWindow* win);
 void FindBarSyncHistory(MainWindow* win);
 TempStr FindUiStateResultTemp(Str action, int* exitCodeOut = nullptr);
+
+#if IS_DEBUG
+void FindBarLayout_UnitTests();
+#endif

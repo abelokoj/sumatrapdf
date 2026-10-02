@@ -677,6 +677,12 @@ static void create_system_font_list(fz_context* ctx) {
         extend_system_font_list(ctx, szFontDir);
     }
 
+    cch = GetEnvironmentVariableW(L"LOCALAPPDATA", szFontDir, nelem(szFontDir) - 35);
+    if (cch > 0 && cch < nelem(szFontDir) - 35) {
+        wcscat_s(szFontDir, MAX_PATH, L"\\Microsoft\\Windows\\Fonts\\*.?t?");
+        extend_system_font_list(ctx, szFontDir);
+    }
+
     if (!g_win_fonts) {
         fz_warn(ctx, "couldn't find any usable system fonts");
     }
@@ -887,6 +893,24 @@ ExitNoFree:
     return font;
 }
 
+static fz_font* load_enhanced_font(fz_context* ctx, const char* name, int bold) {
+    const WCHAR* resource = NULL;
+    if (!_stricmp(name, "Manrope")) {
+        resource = bold ? L"ENHANCED_FONT_MANROPE_SEMIBOLD" : L"ENHANCED_FONT_MANROPE_REGULAR";
+    } else if (!_stricmp(name, "Pretendard Std")) {
+        resource = bold ? L"ENHANCED_FONT_PRETENDARD_SEMIBOLD" : L"ENHANCED_FONT_PRETENDARD_REGULAR";
+    } else if (!_stricmp(name, "Public Sans")) {
+        resource = bold ? L"ENHANCED_FONT_PUBLICSANS_SEMIBOLD" : L"ENHANCED_FONT_PUBLICSANS_REGULAR";
+    }
+    if (!resource) return NULL;
+    HMODULE module = GetModuleHandleW(NULL);
+    HRSRC entry = FindResourceW(module, resource, RT_RCDATA);
+    HGLOBAL handle = entry ? LoadResource(module, entry) : NULL;
+    const unsigned char* data = handle ? LockResource(handle) : NULL;
+    DWORD size = entry ? SizeofResource(module, entry) : 0;
+    return data && size ? fz_new_font_from_memory(ctx, name, data, size, 0, 1) : NULL;
+}
+
 static fz_font* load_windows_font(fz_context* ctx, const char* fontname, int bold, int italic,
                                   int needs_exact_metrics) {
     fz_font* font;
@@ -924,6 +948,9 @@ static fz_font* load_windows_font(fz_context* ctx, const char* fontname, int bol
 
         if (clean_name != fontname && !strncmp(clean_name, "Times-", 6)) return NULL;
     }
+
+    font = load_enhanced_font(ctx, fontname, bold);
+    if (font) return font;
 
     /* a stylesheet asks for "Georgia" with bold set: load the bold face, as a
        faked bold can't be written into a PDF appearance stream (#6198) */

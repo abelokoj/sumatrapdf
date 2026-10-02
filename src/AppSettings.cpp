@@ -19,6 +19,7 @@
 #include "gui/VirtCtrl.h"
 #include "gui/win/WinGui.h"
 #include "gui/win/TabsCtrl.h"
+#include "gui/win/WebView.h"
 
 #define INCLUDE_SETTINGSSTRUCTS_METADATA
 #include "Settings.h"
@@ -52,7 +53,12 @@
 #include "PagePosition.h"
 #include "CachedObjects.h"
 #include "UiFonts.h"
+#include "AIChatPanel.h"
+#include "MarkdownModel.h"
 #include "VocabularyDialog.h"
+#include "KeyboardHelp.h"
+#include "NavFilesInFolder.h"
+#include "SimpleBrowserWindow.h"
 #include "AppSettings.h"
 
 // workaround for OnMenuExit
@@ -207,6 +213,10 @@ static void ResetCachedFonts() {
 void RefreshUiFonts() {
     ResetCachedFonts();
     HomePageInvalidateLayoutCache();
+    RefreshKeyboardHelpFont();
+    RefreshSimpleBrowserFonts();
+    RefreshNavFilesFont();
+    RefreshAboutWindowFont();
     for (MainWindow* win : gWindows) {
         int dpi = win->frameDpi > 0 ? win->frameDpi : DpiGetForHwnd(win->hwndFrame);
         PlatformFont* appFont = GetAppFontForDpi(dpi);
@@ -228,8 +238,8 @@ void RefreshUiFonts() {
         if (win->favLabel) {
             win->favLabel->font = labelFont;
         }
-        ApplyLabelWithCloseDpi(win->tocLabel, win->tocCloseBtn, dpi);
-        ApplyLabelWithCloseDpi(win->favLabel, win->favCloseBtn, dpi);
+        ApplySidebarUiScale(win->tocLabel, win->tocCloseBtn, dpi);
+        ApplySidebarUiScale(win->favLabel, win->favCloseBtn, dpi);
         if (win->tocLayout) {
             win->tocLayout->lastBounds = {};
         }
@@ -247,6 +257,14 @@ void RefreshUiFonts() {
         }
         if (win->hwndFavBox) {
             SendMessageW(win->hwndFavBox, WM_SIZE, 0, 0);
+        }
+        UpdateAIChatDpi(win, dpi);
+        UpdateAIChatTheme(win);
+        for (WindowTab* tab : win->Tabs()) {
+            MarkdownModel* markdown = tab->ctrl ? tab->ctrl->AsMarkdown() : nullptr;
+            if (markdown && !markdown->isHtml) {
+                markdown->UpdateTheme();
+            }
         }
         HomePageOnDpiChanged(win, dpi);
     }
@@ -277,7 +295,7 @@ static int cmpFloat(const float* a, const float* b) {
 }
 
 TempStr GetSettingsFileNameTemp() {
-    return str::DupTemp(StrL("SumatraPDF-settings.txt"));
+    return str::DupTemp(StrL("SumatraPDFEnhanced-settings.txt"));
 }
 
 // this could be virtual path when running in app store
@@ -871,6 +889,7 @@ bool LoadSettings() {
     setMin(gprefs->sidebarDx, 0);
     setMin(gprefs->tocDy, 0);
     setMin(gprefs->treeFontSize, 0);
+    setMinMax(gprefs->interfaceScale, 50, 250);
     if (gprefs->toolbarSize == 0) {
         gprefs->toolbarSize = 18; // same as the ToolbarSize default in gen-settings.ts
     }
@@ -950,6 +969,7 @@ bool LoadSettings() {
     CreateSumatraAcceleratorTable();
 
     SetCurrentThemeFromSettings();
+    RefreshUiFonts();
     ApplySettingsToOpenWindows();
     bool readAloudVoiceCleared = ApplyReadAloudVoiceFromSettings();
 
@@ -1105,7 +1125,84 @@ void UnregisterSettingsForFileChanges() {
     gWatchedSettingsFile = nullptr;
 }
 
+#if IS_DEBUG
+bool AppSettings_UnitTestsUiScale() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    if (!gSettings) {
+        gSettings = saved;
+        return false;
+    }
+    gSettings->uIFontSize = 20;
+    gSettings->treeFontSize = 24;
+    gSettings->interfaceScale = 100;
+    bool ok = GetUiScale() == 1.0f && UiScalePxForDpi(96, 16) == 16;
+    ok &= UiFontSizePxForDpi(96, 14) == 20 && GetAppFontSizeForDpi(96) == 20;
+    gSettings->interfaceScale = 150;
+    ResetCachedFonts();
+    ok &= UiScalePxForDpi(96, 16) == 24 && UiScalePxForDpi(192, 16) == 48;
+    ok &= GetAppFontSizeForDpi(96) == 30 && GetAppFontSizeForDpi(192) == 30;
+    ok &= UiFontSizePxForDpi(96, 14) == 30 && UiFontSizePxForDpi(192, 14) == 30;
+    ok &= GetAppTreeFontForDpi(96)->GetSize() > GetAppFontForDpi(96)->GetSize();
+    VirtText label(StrL("Bookmarks"), GetAppFontForDpi(96));
+    VirtCloseButton close;
+    ApplySidebarUiScale(&label, &close, 96);
+    ok &= close.idealSize.dy >= PlatformFontLineHeight(label.font) && close.idealSize.dy >= 24;
+    gSettings->interfaceScale = 100;
+    gSettings->uIFontSize = 0;
+    ok &= UiFontSizePxForDpi(192, 14) == 28;
+    gSettings->interfaceScale = 0;
+    ok &= GetUiScale() == .5f;
+    gSettings->interfaceScale = 500;
+    ok &= GetUiScale() == 2.5f;
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    ResetCachedFonts();
+    return ok;
+}
+#endif
+
 constexpr int kMinFontSize = 9;
+
+float GetUiScale() {
+    int scale = gSettings ? gSettings->interfaceScale : 100;
+    return (float)limitValue(scale, 50, 250) / 100.0f;
+}
+
+static int ScaleUiPx(int px) {
+    return (int)lroundf(px * GetUiScale());
+}
+
+int UiScalePxForDpi(int dpi, int logicalPx) {
+    return ScaleUiPx(DpiScaleByDpi(dpi, logicalPx));
+}
+
+int UiScalePx(int logicalPx) {
+    return UiScalePxForDpi(DpiGet(), logicalPx);
+}
+
+int UiFontSizePxForDpi(int dpi, int designPx) {
+    constexpr int designBodySize = 14;
+    if (gSettings && gSettings->uIFontSize >= kMinFontSize) {
+        return std::max(1, ScaleUiPx(MulDiv(designPx, gSettings->uIFontSize, designBodySize)));
+    }
+    return std::max(1, UiScalePxForDpi(dpi, designPx));
+}
+
+int UiFontSizePx(int designPx) {
+    return UiFontSizePxForDpi(DpiGet(), designPx);
+}
+
+void ApplySidebarUiScale(VirtText* label, VirtCloseButton* close, int dpi) {
+    if (!label || !close || dpi <= 0) return;
+    int pad = UiScalePxForDpi(dpi, 2);
+    int gap = UiScalePxForDpi(dpi, 2);
+    int glyph = UiScalePxForDpi(dpi, 16);
+    if (label->font) glyph = std::max(glyph, PlatformFontLineHeight(label->font));
+    label->padding = Insets{pad, pad, pad, pad};
+    close->padding = Insets{0, pad, 0, gap};
+    close->idealSize = {glyph + pad + gap, glyph};
+}
 
 // metrics for an explicit DPI (system dpi when GetNonClientMetricsForDpi fails)
 static void GetNonClientMetricsForDpiValue(int dpi, NONCLIENTMETRICS* ncm) {
@@ -1123,11 +1220,11 @@ static void GetNonClientMetricsForDpiValue(int dpi, NONCLIENTMETRICS* ncm) {
 // A user-set UIFontSize is used as-is at every dpi.
 int GetAppMenuFontSizeForDpi(int dpi) {
     if (gSettings->uIFontSize >= kMinFontSize) {
-        return gSettings->uIFontSize;
+        return ScaleUiPx(gSettings->uIFontSize);
     }
     NONCLIENTMETRICS ncm{};
     GetNonClientMetricsForDpiValue(dpi, &ncm);
-    return std::abs(ncm.lfMenuFont.lfHeight);
+    return ScaleUiPx(std::abs(ncm.lfMenuFont.lfHeight));
 }
 
 int GetAppMenuFontSize() {
@@ -1135,12 +1232,7 @@ int GetAppMenuFontSize() {
 }
 
 int GetAppFontSizeForDpi(int dpi) {
-    auto fntSize = gSettings->uIFontSize;
-    if (fntSize < kMinFontSize) {
-        // match the menu font so tabs/toolbar text scale like native menus
-        fntSize = GetAppMenuFontSizeForDpi(dpi);
-    }
-    return fntSize;
+    return GetAppMenuFontSizeForDpi(dpi);
 }
 
 int GetAppFontSize() {
@@ -1173,7 +1265,9 @@ static int GetAppBiggerFontSizeForDpi(int dpi) {
     if (fntSize < kMinFontSize) {
         fntSize = GetAppMenuFontSizeForDpi(dpi);
         fntSize = (fntSize * 12) / 10;
-        fntSize = std::max(fntSize, kMinBiggerFontSize);
+        fntSize = std::max(fntSize, ScaleUiPx(kMinBiggerFontSize));
+    } else {
+        fntSize = ScaleUiPx(fntSize);
     }
     return fntSize;
 }
@@ -1203,6 +1297,8 @@ PlatformFont* GetAppTreeFontExForDpi(int dpi, bool bold, bool italic) {
     }
     if (fntSize < kMinFontSize) {
         fntSize = GetAppMenuFontSizeForDpi(dpi);
+    } else {
+        fntSize = ScaleUiPx(fntSize);
     }
     Str fntNameUser = gSettings->treeFontName;
     if (len(fntNameUser) == 0 || str::EqI(fntNameUser, StrL("auto")) || str::EqI(fntNameUser, StrL("automatic"))) {
@@ -1261,13 +1357,154 @@ PlatformFont* GetAppMenuFont() {
 
 bool IsMenuFontSizeDefault() {
     auto fntSize = gSettings->uIFontSize;
-    return fntSize < kMinFontSize && len(GetAppFontFamily()) == 0;
+    return fntSize < kMinFontSize && len(GetAppFontFamily()) == 0 && GetUiScale() == 1.0f;
 }
 
 bool IsAppFontSizeDefault() {
     auto fntSize = gSettings->uIFontSize;
     return fntSize < kMinFontSize;
 }
+
+static Str FontBase64(const u8* data, DWORD bytes) {
+    constexpr const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    str::Builder out;
+    out.Reserve(((bytes + 2) / 3) * 4);
+    for (DWORD i = 0; i < bytes; i += 3) {
+        u32 value = (u32)data[i] << 16;
+        if (i + 1 < bytes) value |= (u32)data[i + 1] << 8;
+        if (i + 2 < bytes) value |= data[i + 2];
+        out.AppendChar(alphabet[(value >> 18) & 63]);
+        out.AppendChar(alphabet[(value >> 12) & 63]);
+        out.AppendChar(i + 1 < bytes ? alphabet[(value >> 6) & 63] : '=');
+        out.AppendChar(i + 2 < bytes ? alphabet[value & 63] : '=');
+    }
+    return out.TakeStr();
+}
+
+static TempStr CssQuotedTemp(Str value) {
+    str::Builder out;
+    out.AppendChar('\'');
+    for (int i = 0; i < len(value); i++) {
+        u8 c = (u8)value.s[i];
+        if (c < 32 || c == 127 || c == '\'' || c == '\\' || c == '<' || c == '>' || c == '&') {
+            out.Append(fmt("\\%x ", c));
+        } else {
+            out.AppendChar((char)c);
+        }
+    }
+    out.AppendChar('\'');
+    return ToStrTemp(out);
+}
+
+struct WebFontCss {
+    INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    int family = 0;
+    Str faces;
+};
+static WebFontCss gWebFontCss[] = {{INIT_ONCE_STATIC_INIT, 0}, {INIT_ONCE_STATIC_INIT, 1}, {INIT_ONCE_STATIC_INIT, 2}};
+
+static BOOL CALLBACK LoadWebFontCss(PINIT_ONCE, PVOID context, PVOID*) {
+    auto* cached = (WebFontCss*)context;
+    const WCHAR* names[] = {
+        L"ENHANCED_FONT_MANROPE_REGULAR",     L"ENHANCED_FONT_MANROPE_SEMIBOLD",   L"ENHANCED_FONT_PRETENDARD_REGULAR",
+        L"ENHANCED_FONT_PRETENDARD_SEMIBOLD", L"ENHANCED_FONT_PUBLICSANS_REGULAR", L"ENHANCED_FONT_PUBLICSANS_SEMIBOLD",
+    };
+    str::Builder faces;
+    HMODULE module = GetModuleHandleW(nullptr);
+    for (int variant = 0; variant < 2; variant++) {
+        HRSRC resource = FindResourceW(module, names[cached->family * 2 + variant], RT_RCDATA);
+        if (!resource) continue;
+        DWORD bytes = SizeofResource(module, resource);
+        HGLOBAL loaded = LoadResource(module, resource);
+        const u8* data = loaded ? (const u8*)LockResource(loaded) : nullptr;
+        if (!data || bytes == 0) continue;
+        Str encoded = FontBase64(data, bytes);
+        faces.Append(
+            fmt("@font-face{font-family:'EnhancedUI';font-style:normal;font-weight:%s;"
+                "font-display:swap;src:url('data:%s;base64,%s') format('%s');}\n",
+                variant ? StrL("600 900") : StrL("100 500"), cached->family == 0 ? StrL("font/otf") : StrL("font/ttf"),
+                encoded, cached->family == 0 ? StrL("opentype") : StrL("truetype")));
+        str::Free(encoded);
+    }
+    cached->faces = faces.TakeStr();
+    return TRUE;
+}
+
+// WebView runs separately, so private GDI fonts must be supplied as font data.
+TempStr GetUiFontCssTemp() {
+    Str family = GetAppFontFamily();
+    Str families[] = {StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")};
+    Str faces;
+    for (int i = 0; i < dimofi(families); i++) {
+        if (!str::EqI(family, families[i])) continue;
+        WebFontCss* cached = &gWebFontCss[i];
+        InitOnceExecuteOnce(&cached->once, LoadWebFontCss, cached, nullptr);
+        faces = cached->faces;
+        if (len(faces) > 0) family = StrL("EnhancedUI");
+        break;
+    }
+    if (len(family) == 0) family = GetDefaultGuiFont()->name;
+    int size = gSettings ? GetAppFontSizeForDpi(96) : 13;
+    return fmt("%s\n:root{--enhanced-ui-font-family:%s,sans-serif;--enhanced-ui-font-size:%dpx;}\n", faces,
+               CssQuotedTemp(family), size);
+}
+
+#if IS_DEBUG
+bool AppSettings_UnitTestsUiFonts() {
+    Settings* savedSettings = gSettings;
+    gSettings = NewSettings({});
+    if (!gSettings) {
+        gSettings = savedSettings;
+        return false;
+    }
+    Str savedFamily = gSettings->uIFontFamily;
+    Str savedTreeFamily = gSettings->treeFontName;
+    int savedSize = gSettings->uIFontSize;
+    int savedTreeSize = gSettings->treeFontSize;
+    gSettings->treeFontName = {};
+    gSettings->treeFontSize = 0;
+    gSettings->uIFontSize = 27;
+    bool ok = true;
+    Str families[] = {StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")};
+    PlatformFont* previous = nullptr;
+    for (Str family : families) {
+        gSettings->uIFontFamily = family;
+        ResetCachedFonts();
+        PlatformFont* app = GetAppFontForDpi(96);
+        PlatformFont* menu = GetAppMenuFontForDpi(96);
+        PlatformFont* tree = GetAppTreeFontForDpi(96);
+        PlatformFont* label = GetAppSidebarLabelFontForDpi(96);
+        ok &= str::EqI(GetAppFontFamily(), family);
+        ok &= app && menu && tree && label;
+        if (app && menu && tree && label) {
+            ok &= str::EqI(app->name, family) && str::EqI(menu->name, family) && str::EqI(tree->name, family) &&
+                  str::EqI(label->name, family);
+            ok &= previous != app && GetAppFontForDpi(96) == app;
+            ok &= GetAppFontSizeForDpi(96) == 27 && GetAppMenuFontSizeForDpi(96) == 27;
+        }
+        TempStr css = GetUiFontCssTemp();
+        bool openType = str::EqI(family, StrL("Manrope"));
+        ok &= str::Contains(css, StrL("@font-face"));
+        ok &= str::Contains(css, openType ? StrL("data:font/otf;base64,") : StrL("data:font/ttf;base64,"));
+        ok &= str::Contains(css, openType ? StrL("format('opentype')") : StrL("format('truetype')"));
+        ok &= str::Contains(css, StrL("--enhanced-ui-font-size:27px"));
+        previous = app;
+    }
+    TempStr escaped = CssQuotedTemp(StrL("A'</style>\\B\n"));
+    ok &= !str::Contains(escaped, StrL("</style>")) && str::Contains(escaped, StrL("\\3c "));
+    Str encoded = FontBase64((const u8*)"Man", 3);
+    ok &= str::Eq(encoded, StrL("TWFu"));
+    str::Free(encoded);
+    gSettings->uIFontFamily = savedFamily;
+    gSettings->treeFontName = savedTreeFamily;
+    gSettings->uIFontSize = savedSize;
+    gSettings->treeFontSize = savedTreeSize;
+    DeleteSettings(gSettings);
+    gSettings = savedSettings;
+    ResetCachedFonts();
+    return ok;
+}
+#endif
 
 TempStr ZoomLevelStr(float zoom) {
     if (zoom == kZoomFitPage) {
@@ -1413,6 +1650,23 @@ void CollectZoomLevels(Vec<float>& out, bool forChm) {
         if (zoomLevels[i] > 0 && zoomLevels[i] < 100) {
             VecAppend(out, zoomLevels[i]);
         }
+    }
+}
+
+// Picker presets are independent of keyboard/mouse zoom steps and their full range.
+void CollectZoomPickerLevels(Vec<float>& out) {
+    VecReset(out);
+    const float smaller[] = {25, 33.33f, 50, 66.67f, 75};
+    for (float level : smaller) {
+        VecAppend(out, level);
+    }
+    VecAppend(out, 100.f);
+    VecAppend(out, kZoomFitPage);
+    VecAppend(out, kZoomFitWidth);
+    constexpr float kPickerMaxZoom = 600;
+    constexpr float kPickerZoomStep = 25;
+    for (float level = 100 + kPickerZoomStep; level <= kPickerMaxZoom; level += kPickerZoomStep) {
+        VecAppend(out, level);
     }
 }
 

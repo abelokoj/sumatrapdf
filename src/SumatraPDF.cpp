@@ -96,6 +96,7 @@
 #include "StressTesting.h"
 #include "HomePage.h"
 #include "VocabularyDialog.h"
+#include "StudyExport.h"
 #include "DocumentProperties.h"
 #include "TabGroupsManage.h"
 #include "TableOfContents.h"
@@ -5582,7 +5583,7 @@ static void ShowSavedAnnotationsNotification(HWND hwndParent, Str path) {
     msg.Append(fmt(Tr("Saved annotations to '%s'").s, path));
     NotificationCreateArgs nargs;
     nargs.hwndParent = hwndParent;
-    nargs.font = GetDefaultGuiFont();
+    nargs.font = GetAppFont();
     nargs.timeoutMs = 5000;
     nargs.msg = ToStr(msg);
     nargs.plainText = true; // `path` is not ours, don't parse it as tip markup
@@ -8402,8 +8403,8 @@ static void ApplySidebarDpiFonts(MainWindow* win, int dpi) {
     if (win->favLabel) {
         win->favLabel->font = labelFont;
     }
-    ApplyLabelWithCloseDpi(win->tocLabel, win->tocCloseBtn, dpi);
-    ApplyLabelWithCloseDpi(win->favLabel, win->favCloseBtn, dpi);
+    ApplySidebarUiScale(win->tocLabel, win->tocCloseBtn, dpi);
+    ApplySidebarUiScale(win->favLabel, win->favCloseBtn, dpi);
     // force a layout even if the box size in pixels is unchanged (the ✕
     // ideal size is what changed)
     if (win->tocLayout) {
@@ -9386,7 +9387,7 @@ static int wrapIdx(int idx, int max) {
 }
 
 void AdvanceFocus(MainWindow* win) {
-    // Tab order: Frame -> Chapter -> Page -> Find -> ToC -> Favorites -> Frame -> ...
+    // Tab order: Frame -> Toolbar -> Chapter -> Page -> ToC -> Favorites -> Frame.
 
     bool hasToolbar = !win->isFullScreen && !win->presentation && gSettings->showToolbar && win->IsDocLoaded();
     int direction = IsShiftPressed() ? -1 : 1;
@@ -9394,10 +9395,13 @@ void AdvanceFocus(MainWindow* win) {
     constexpr int kMaxWindows = 6;
     HWND tabOrder[kMaxWindows] = {win->hwndFrame};
     int nWindows = 1;
-    if (hasToolbar && ShowChapterUi(win->ctrl) && win->chapterEdit) {
+    if (hasToolbar && win->hwndToolbar && IsWindowVisible(win->hwndToolbar)) {
+        tabOrder[nWindows++] = win->hwndToolbar;
+    }
+    if (hasToolbar && ShowChapterUi(win->ctrl) && win->chapterEdit && IsWindowVisible(win->chapterEdit->hwnd)) {
         tabOrder[nWindows++] = win->chapterEdit->hwnd;
     }
-    if (hasToolbar && win->pageEdit) {
+    if (hasToolbar && win->pageEdit && IsWindowVisible(win->pageEdit->hwnd)) {
         tabOrder[nWindows++] = win->pageEdit->hwnd;
     }
     // note: the find edit is no longer in the toolbar tab order; it lives in the
@@ -9414,7 +9418,7 @@ void AdvanceFocus(MainWindow* win) {
     HWND focused = GetFocus();
     int i = 0;
     while (i < nWindows) {
-        if (tabOrder[i] == focused) {
+        if (tabOrder[i] == focused || (tabOrder[i] == win->hwndToolbar && IsChild(win->hwndToolbar, focused))) {
             break;
         }
         i++;
@@ -9425,6 +9429,9 @@ void AdvanceFocus(MainWindow* win) {
     }
     // focus the next available element
     i = wrapIdx(i + direction, nWindows);
+    if (tabOrder[i] == win->hwndToolbar && FocusToolbar(win, direction < 0)) {
+        return;
+    }
     HwndSetFocus(tabOrder[i]);
 }
 
@@ -13106,6 +13113,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             ShowNotification(nargs);
         } break;
 
+        case CmdExportStudyNotes:
+            ShowStudyExport(win);
+            break;
+
         case CmdDictionaryLookup: {
             bool textOnly = false;
             Str selection =
@@ -14551,7 +14562,7 @@ static void DrawCaptionButton(MainWindow* win, HDC hdc, ButtonInfo* bi) {
                 kind = CaptionSysButtonKind::Restore;
                 break;
         }
-        int iconPx = DpiScale(kCaptionGlyphDip);
+        int iconPx = UiScalePx(MulDiv(kCaptionGlyphDip, limitValue(gSettings->toolbarSize, 8, 64), 18));
         DrawCaptionSysButtonGlyph(hdc, kind, rc, iconCol, iconPx);
     } else if (button == CB_MENU) {
         SolidBrush bgBrMenu(GdiRgbFromColor(ThemeControlBackgroundColor()));
@@ -14587,8 +14598,8 @@ static void DrawCaptionButton(MainWindow* win, HDC hdc, ButtonInfo* bi) {
     } else if (button == CB_SYSTEM_MENU) {
         SolidBrush bgBrSys(GdiRgbFromColor(ThemeControlBackgroundColor()));
         gfx.FillRectangle(&bgBrSys, rButton.x, rButton.y, rButton.dx, rButton.dy);
-        int xIcon = DpiGetSystemMetrics(SM_CXSMICON);
-        int yIcon = DpiGetSystemMetrics(SM_CYSMICON);
+        int xIcon = std::min(rButton.dx - UiScalePx(4), ToolbarIconSize());
+        int yIcon = std::min(rButton.dy - UiScalePx(4), ToolbarIconSize());
         HICON hIcon = (HICON)GetClassLongPtr(win->hwndFrame, GCLP_HICONSM);
         int x = rButton.x + ((rButton.dx - xIcon) / 2);
         int y = rButton.y + ((rButton.dy - yIcon) / 2);
@@ -18531,6 +18542,10 @@ int APIENTRY WinMain(_In_ HINSTANCE /*hInstance*/, _In_opt_ HINSTANCE /*hPrevIns
     AtomicBoolSet(&gRenderCache->grayscalePageColors, gSettings->fixedPageUI.grayscale);
 
     SetCurrentLang(flags.lang ? flags.lang : gSettings->uiLanguage);
+    if (!flags.forTesting && !flags.silent && !flags.exitImmediately) {
+        TempStr storageError = GetDataStorageErrorTemp();
+        if (len(storageError) > 0) MsgBox(nullptr, storageError, Tr("Enhanced data folder"), MB_OK | MB_ICONWARNING);
+    }
     if (flags.showPrintersDialog) {
         // -console / -silent: list to stdout only, no dialog window (#5810)
         ShowPrintersDialog(flags.silent || flags.showConsole);

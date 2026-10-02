@@ -442,7 +442,7 @@ void PaintKeyboardLinkTargets(MainWindow* win, Gfx* gfx) {
     }
     PaintTransparentRectangles(gfx, win->canvasRc, screenRects, kLinkFollowHighlightCol, 90, 2, false);
 
-    PlatformFont* font = GetBoldPlatformFont(GetUserGuiFont(StrL("Segoe UI"), DpiScale(11)));
+    PlatformFont* font = GetBoldPlatformFont(GetAppFont());
     int rectIdx = 0;
     for (int i = 0; i < n; i++) {
         const KeyboardLinkTarget& t = win->linkFollowTargets[i];

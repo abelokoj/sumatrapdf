@@ -211,6 +211,7 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdClose,
     CmdShowInFolder,
     CmdSaveAs,
+    CmdExportStudyNotes,
     CmdSaveSelectionAsImage,
     CmdRenameFile,
     CmdDeleteFile,
@@ -238,6 +239,7 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
 };
 
 static UINT_PTR removeIfAnnotsNotSupported[] = {
+    CmdExportStudyNotes,
     CmdSaveAnnotations,
     CmdSaveAnnotationsNewFile,
     CmdDiscardChanges,

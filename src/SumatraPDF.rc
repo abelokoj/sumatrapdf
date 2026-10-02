@@ -28,8 +28,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION VER_RESOURCE
- PRODUCTVERSION VER_RESOURCE
+ FILEVERSION ENHANCED_VERSION_RESOURCE
+ PRODUCTVERSION ENHANCED_VERSION_RESOURCE
  FILEFLAGSMASK 0x0L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -45,10 +45,10 @@ BEGIN
         BLOCK "040904E4"
         BEGIN
             VALUE "FileDescription", kAppDisplayName
-            VALUE "FileVersion", VER_RESOURCE_STR
+            VALUE "FileVersion", ENHANCED_VERSION_STRA
             VALUE "LegalCopyright", kCopyrightStr
             VALUE "ProductName", kAppDisplayName
-            VALUE "ProductVersion", VER_RESOURCE_STR
+            VALUE "ProductVersion", ENHANCED_VERSION_STRA
             VALUE "CompanyName", kPublisherStr
         END
     END

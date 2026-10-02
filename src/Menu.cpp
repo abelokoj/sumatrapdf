@@ -139,6 +139,10 @@ static MenuDef menuDefFile[] = {
         CmdSaveAs,
     },
     {
+        TrN("Export highlights and notes..."),
+        CmdExportStudyNotes,
+    },
+    {
         TrN("Convert to PDF..."),
         CmdConvertToPDF,
     },

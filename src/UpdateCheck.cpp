@@ -27,6 +27,7 @@
 #include "HomePage.h"
 #include "Installer.h"
 #include "UpdateCheck.h"
+#include "EnhancedUpdate.h"
 
 static Kind kNotifUpdateCheckInProgress = StrL("notifUpdateCheckInProgress").s;
 
@@ -104,6 +105,7 @@ struct UpdateInfo {
 static UpdateInfo* gPendingUpdate = nullptr;
 
 bool HasPendingPreReleaseUpdate() {
+    if (len(StrL(ENHANCED_VERSION_STRA)) > 0) return HasEnhancedUpdate();
     return gPendingUpdate != nullptr;
 }
 
@@ -491,6 +493,10 @@ static void ShowUpdateAvailableNotification(MainWindow* win, UpdateInfo* updateI
 // it without the confirmation dialog
 // download + install the update surfaced by the pre-release update notification
 void DownloadAndInstallPendingUpdate(MainWindow* win) {
+    if (len(StrL(ENHANCED_VERSION_STRA)) > 0) {
+        DownloadEnhancedUpdate(win);
+        return;
+    }
     if (!win || !gPendingUpdate) {
         return;
     }
@@ -853,6 +859,10 @@ static void UpdateCheckAsync(UpdateCheckAsyncData* data) {
 // if autoCheck is true, this is a check *not* triggered by explicit action
 // of the user and therefore will show less UI
 void StartAsyncUpdateCheck(MainWindow* win, UpdateCheck updateCheckType) {
+    if (len(StrL(ENHANCED_VERSION_STRA)) > 0) {
+        StartEnhancedUpdateCheck(win, updateCheckType);
+        return;
+    }
     if (!ShouldCheckForUpdate(updateCheckType)) {
         return;
     }

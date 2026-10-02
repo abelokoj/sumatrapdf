@@ -157,14 +157,14 @@ void TabCtrl::SetBounds(Rect r) {
     int dx = r.dx;
     int dy = r.dy;
 
-    int closeDy = std::min(std::max(DpiScale(12), tabsCtrl->tabIconDx), dy);
+    int closeDy = std::min(std::max(tabsCtrl->ScaleMetric(12), tabsCtrl->tabIconDx), dy);
     int closeDx = closeDy;
 
     // Padding between circle and tab edge; grow with the button.
-    int closePad = std::max(DpiScale(6), closeDx / 2);
+    int closePad = std::max(tabsCtrl->ScaleMetric(6), closeDx / 2);
     // Keep the glyph inside the tab when tabs are very narrow.
     if (closeDx + closePad > dx && dx > 0) {
-        closeDx = std::min(closeDx, std::max(DpiScale(12), dx - 2));
+        closeDx = std::min(closeDx, std::max(tabsCtrl->ScaleMetric(12), dx - 2));
         closeDy = closeDx;
         closePad = std::max(1, (dx - closeDx) / 2);
     }
@@ -172,7 +172,7 @@ void TabCtrl::SetBounds(Rect r) {
 
     // Hit target: at least ~40 DIP wide (touch-friendly), full tab height.
     // Cap at half the tab so title still has a drag/select zone.
-    int minHitDx = DpiScale(40);
+    int minHitDx = tabsCtrl->ScaleMetric(40);
     int hitDx = std::max(closeDx + (2 * closePad), minHitDx);
     hitDx = std::min(hitDx, std::max(closeDx + closePad, dx / 2));
     hitDx = std::min(hitDx, dx);
@@ -216,13 +216,23 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
     gfx->FillRect(r, tabBgCol);
 
     bool isRtl = IsTabsRtl(hwnd);
+    int fadeDx = std::min(r.dx, tabsCtrl->ScaleMetric(10));
+    Color edgeCol = AccentColor(tabBgCol, 28);
+    for (int i = 0; i < fadeDx; i++) {
+        int amount = (i + 1) * 100 / fadeDx;
+        Color col = MkRgb((u8)((GetRValue(tabBgCol) * (100 - amount) + GetRValue(edgeCol) * amount) / 100),
+                          (u8)((GetGValue(tabBgCol) * (100 - amount) + GetGValue(edgeCol) * amount) / 100),
+                          (u8)((GetBValue(tabBgCol) * (100 - amount) + GetBValue(edgeCol) * amount) / 100));
+        int x = isRtl ? r.x + fadeDx - i - 1 : r.Right() - fadeDx + i;
+        gfx->FillRect({x, r.y + r.dy / 5, 1, r.dy * 3 / 5}, col);
+    }
     PlatformFont* font = tabsCtrl->GetFont();
 
     // draw text — inset from the close glyph (size varies with tab height),
     // or using the full tab width when the ✕ is hidden
     Rect rTxt = r;
-    int textPad = DpiScale(8);
-    int textGap = DpiScale(4);
+    int textPad = tabsCtrl->ScaleMetric(8);
+    int textGap = tabsCtrl->ScaleMetric(4);
     bool closeVisible = CloseVisible();
     if (isRtl) {
         // RTL: close on the left — text after the close circle
@@ -243,7 +253,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
             pageFont = scaled;
         }
         pageDx = gfx->MeasureText(ti->pageText, pageFont).dx;
-        if (pageDx + DpiScale(12) >= rTxt.dx) {
+        if (pageDx + tabsCtrl->ScaleMetric(12) >= rTxt.dx) {
             pageDx = 0;
         }
     }
@@ -271,7 +281,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
 
     // draw red dot after tab text for dirty (unsaved) tabs
     if (ti->isDirty) {
-        int dotRadius = DpiScale(3);
+        int dotRadius = tabsCtrl->ScaleMetric(3);
         // the text may have been ellipsized, so the dot goes after whichever is
         // narrower: the text or the room it had
         int textDx = std::min(gfx->MeasureText(ti->text, font).dx, rFile.dx);
@@ -391,6 +401,11 @@ TabCtrl* TabsCtrl::TabCtrlAt(int idx) {
     return tabCtrls[idx];
 }
 
+int TabsCtrl::ScaleMetric(int logicalPx) const {
+    int dpi = hwnd ? DpiGetForHwnd(hwnd) : DpiGet();
+    return DpiScaleByDpi(dpi, (int)lroundf(logicalPx * interfaceScale));
+}
+
 PlatformFont* TabsCtrl::GetFont() const {
     return font;
 }
@@ -453,7 +468,7 @@ void TabsCtrl::LayoutTabs() {
     }
     dx = std::max(tabMinDx, dx);
     hasOverflow = dx * nTabs > rect.dx;
-    scrollButtonDx = std::max(DpiScale(32), tabIconDx + DpiScale(12));
+    scrollButtonDx = std::max(ScaleMetric(32), tabIconDx + ScaleMetric(12));
     viewportDx = std::max(1, rect.dx - (hasOverflow ? scrollButtonDx * 2 : 0));
     scrollDx = limitValue(scrollDx, 0, std::max(0, dx * nTabs - viewportDx));
     tabSize = {dx, dy};
@@ -589,13 +604,14 @@ HBITMAP TabsCtrl::RenderForDragging(int idx) {
     }
 
     Gdiplus::RectF rTxt(0, 0, (float)r.dx, (float)r.dy);
-    rTxt.X += 8;
-    rTxt.Width -= (8 + 8);
+    int textPad = ScaleMetric(8);
+    rTxt.X += textPad;
+    rTxt.Width -= textPad * 2;
 
     int pageDx = 0;
     if (len(ti->pageText) > 0 && GetFont()) {
         pageDx = PlatformFontMeasureText(GetFont(), ti->pageText).dx;
-        if (pageDx + 12 >= (int)rTxt.Width) {
+        if (pageDx + ScaleMetric(12) >= (int)rTxt.Width) {
             pageDx = 0;
         }
     }

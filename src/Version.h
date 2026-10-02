@@ -3,6 +3,7 @@
 
 // Optional per-build overrides (PRE_RELEASE_VER, GIT_COMMIT_ID, …); empty by default.
 #include "BuildConfig.h"
+#include "EnhancedVersion.h"
 
 // CURR_VERSION can be over-written externally
 #ifndef CURR_VERSION

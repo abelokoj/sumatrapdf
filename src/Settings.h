@@ -33,6 +33,15 @@ constexpr float kInvalidZoom = -99.0F;
 
 // NOLINTBEGIN(modernize-use-designated-initializers)
 
+// saved settings for this pen type
+struct InkPenProfile {
+    // saved pen color; empty uses the profile default
+    ParsedColor color;
+    // saved pen width in points; 0 uses the profile default
+    float width;
+    // saved pen opacity, from 0 to 100 percent
+    int opacity;
+};
 // list of handlers for selected text, shown in context menu when text
 // selection is active. See [docs for more
 // information](https://www.sumatrapdfreader.org/docs/Customize-search-translation-services)
@@ -694,6 +703,16 @@ struct FixedPageUI {
 
 // default values for annotations in PDF documents
 struct Annotations {
+    // saved settings for this pen type
+    InkPenProfile inkBallpoint;
+    // saved settings for this pen type
+    InkPenProfile inkFountain;
+    // saved settings for this pen type
+    InkPenProfile inkBrush;
+    // saved settings for this pen type
+    InkPenProfile inkPencil;
+    // saved settings for this pen type
+    InkPenProfile inkHighlighter;
     // color of newly created highlight annotations. Use an #aarrggbb value
     // to set default opacity (00 = transparent, FF = opaque); #rrggbb is
     // fully opaque
@@ -714,6 +733,10 @@ struct Annotations {
     // opacity of free text annotation in percent (0-100); 0 - fully
     // transparent (invisible), 50 - half transparent, 100 - fully opaque
     int freeTextOpacity;
+    // default font family for new Free Text annotations
+    Str freeTextFontFamily;
+    // Free Text style bits: bold=1, italic=2, underline=4
+    int freeTextFontStyle;
     // font size of free text annotations, in points
     int freeTextSize;
     // border width of free text annotations, in points
@@ -1034,6 +1057,11 @@ struct Settings {
     float penMaxWidth;
     // pen width increment in PDF points
     float penWidthStep;
+    // temporary laser stroke lifetime in seconds (0.1 to 120)
+    float laserLifetimeSeconds;
+    // laser width in screen pixels at 100% DPI (0.1 to 32), independent of
+    // pen width
+    float laserWidth;
     // favorite annotation tool, color and width combinations
     Vec<PinnedAnnotationTool*>* pinnedAnnotationTools;
     // if both the favorites and the bookmarks part of the sidebar are
@@ -1052,6 +1080,9 @@ struct Settings {
     int uIFontSize;
     // interface font: system, Manrope, Pretendard Std or Public Sans
     Str uIFontFamily;
+    // overall interface scale, from 50 to 250 percent; document zoom is
+    // independent
+    int interfaceScale;
     // how much a single zoom in / zoom out step changes the zoom, as a
     // percentage of the current zoom level. If 0 or negative, zooming
     // steps through ZoomLevels instead
@@ -1613,7 +1644,82 @@ static const StructInfo gAntiGravityInfo = {
     "(agy cannot prompt for permissions with -p)\0background color of the Antigravity chat panel",
     false};
 
+static const FieldInfo gInkPenProfileFields[] = {
+    {offsetof(InkPenProfile, color), SettingType::Color, (intptr_t)""},
+    {offsetof(InkPenProfile, width), SettingType::Float, (intptr_t)"0"},
+    {offsetof(InkPenProfile, opacity), SettingType::Int, 100},
+};
+static const StructInfo gInkPenProfileInfo = {
+    sizeof(InkPenProfile),
+    3,
+    gInkPenProfileFields,
+    "Color\0Width\0Opacity",
+    "saved pen color; empty uses the profile default\0saved pen width in points; 0 uses the profile default\0saved pen "
+    "opacity, from 0 to 100 percent",
+    false};
+
+static const FieldInfo gInkPenProfile_1_Fields[] = {
+    {offsetof(InkPenProfile, color), SettingType::Color, (intptr_t)""},
+    {offsetof(InkPenProfile, width), SettingType::Float, (intptr_t)"0"},
+    {offsetof(InkPenProfile, opacity), SettingType::Int, 100},
+};
+static const StructInfo gInkPenProfile_1_Info = {
+    sizeof(InkPenProfile),
+    3,
+    gInkPenProfile_1_Fields,
+    "Color\0Width\0Opacity",
+    "saved pen color; empty uses the profile default\0saved pen width in points; 0 uses the profile default\0saved pen "
+    "opacity, from 0 to 100 percent",
+    false};
+
+static const FieldInfo gInkPenProfile_2_Fields[] = {
+    {offsetof(InkPenProfile, color), SettingType::Color, (intptr_t)""},
+    {offsetof(InkPenProfile, width), SettingType::Float, (intptr_t)"0"},
+    {offsetof(InkPenProfile, opacity), SettingType::Int, 100},
+};
+static const StructInfo gInkPenProfile_2_Info = {
+    sizeof(InkPenProfile),
+    3,
+    gInkPenProfile_2_Fields,
+    "Color\0Width\0Opacity",
+    "saved pen color; empty uses the profile default\0saved pen width in points; 0 uses the profile default\0saved pen "
+    "opacity, from 0 to 100 percent",
+    false};
+
+static const FieldInfo gInkPenProfile_3_Fields[] = {
+    {offsetof(InkPenProfile, color), SettingType::Color, (intptr_t)""},
+    {offsetof(InkPenProfile, width), SettingType::Float, (intptr_t)"0"},
+    {offsetof(InkPenProfile, opacity), SettingType::Int, 65},
+};
+static const StructInfo gInkPenProfile_3_Info = {
+    sizeof(InkPenProfile),
+    3,
+    gInkPenProfile_3_Fields,
+    "Color\0Width\0Opacity",
+    "saved pen color; empty uses the profile default\0saved pen width in points; 0 uses the profile default\0saved pen "
+    "opacity, from 0 to 100 percent",
+    false};
+
+static const FieldInfo gInkPenProfile_4_Fields[] = {
+    {offsetof(InkPenProfile, color), SettingType::Color, (intptr_t)""},
+    {offsetof(InkPenProfile, width), SettingType::Float, (intptr_t)"0"},
+    {offsetof(InkPenProfile, opacity), SettingType::Int, 40},
+};
+static const StructInfo gInkPenProfile_4_Info = {
+    sizeof(InkPenProfile),
+    3,
+    gInkPenProfile_4_Fields,
+    "Color\0Width\0Opacity",
+    "saved pen color; empty uses the profile default\0saved pen width in points; 0 uses the profile default\0saved pen "
+    "opacity, from 0 to 100 percent",
+    false};
+
 static const FieldInfo gAnnotationsFields[] = {
+    {offsetof(Annotations, inkBallpoint), SettingType::Struct, (intptr_t)&gInkPenProfileInfo},
+    {offsetof(Annotations, inkFountain), SettingType::Struct, (intptr_t)&gInkPenProfile_1_Info},
+    {offsetof(Annotations, inkBrush), SettingType::Struct, (intptr_t)&gInkPenProfile_2_Info},
+    {offsetof(Annotations, inkPencil), SettingType::Struct, (intptr_t)&gInkPenProfile_3_Info},
+    {offsetof(Annotations, inkHighlighter), SettingType::Struct, (intptr_t)&gInkPenProfile_4_Info},
     {offsetof(Annotations, highlightColor), SettingType::Color, (intptr_t)"#ffff00"},
     {offsetof(Annotations, underlineColor), SettingType::Color, (intptr_t)"#8bf05d"},
     {offsetof(Annotations, squigglyColor), SettingType::Color, (intptr_t)"#f199d2"},
@@ -1621,6 +1727,8 @@ static const FieldInfo gAnnotationsFields[] = {
     {offsetof(Annotations, freeTextColor), SettingType::Color, (intptr_t)""},
     {offsetof(Annotations, freeTextBackgroundColor), SettingType::Color, (intptr_t)""},
     {offsetof(Annotations, freeTextOpacity), SettingType::Int, 100},
+    {offsetof(Annotations, freeTextFontFamily), SettingType::String, (intptr_t)"Helvetica"},
+    {offsetof(Annotations, freeTextFontStyle), SettingType::Int, 0},
     {offsetof(Annotations, freeTextSize), SettingType::Int, 12},
     {offsetof(Annotations, freeTextBorderWidth), SettingType::Int, 1},
     {offsetof(Annotations, freeTextAlignment), SettingType::String, (intptr_t)"left"},
@@ -1645,39 +1753,43 @@ static const FieldInfo gAnnotationsFields[] = {
 };
 static const StructInfo gAnnotationsInfo = {
     sizeof(Annotations),
-    26,
+    33,
     gAnnotationsFields,
-    "HighlightColor\0UnderlineColor\0SquigglyColor\0StrikeOutColor\0FreeTextColor\0FreeTextBackgroundColor\0FreeTextOpa"
-    "city\0FreeTextSize\0FreeTextBorderWidth\0FreeTextAlignment\0PresetColors\0TextIconColor\0LineColor\0PolyLineColor"
-    "\0SquareColor\0CircleColor\0PolygonColor\0InkColor\0InkColors\0InkBorderWidth\0StampColor\0CaretColor\0FileAttachm"
-    "entColor\0TextIconType\0DefaultAuthor\0SignatureImage",
-    "color of newly created highlight annotations. Use an #aarrggbb value to set default opacity (00 = transparent, FF "
-    "= opaque); #rrggbb is fully opaque\0color of newly created underline annotations. #aarrggbb sets default opacity "
-    "the same way as HighlightColor\0color of newly created squiggly underline annotations. #aarrggbb sets default "
-    "opacity the same way as HighlightColor\0color of newly created strike out annotations. #aarrggbb sets default "
-    "opacity the same way as HighlightColor\0text color of newly created free text annotations\0background color of "
-    "newly created free text annotations\0opacity of free text annotation in percent (0-100); 0 - fully transparent "
-    "(invisible), 50 - half transparent, 100 - fully opaque\0font size of free text annotations, in points\0border "
-    "width of free text annotations, in points\0how text is aligned in newly created free text annotations (Text "
-    "Alignment in the compact property row): left, center or right. Right-to-left scripts (Arabic, Hebrew, Persian) "
-    "want right\0colors offered by the drop-down on the annotation toolbar's buttons, separated by space. Picking one "
-    "sets the color of new annotations of that type. The color a button currently makes annotations in is added when "
-    "it is missing\0color of newly created text (sticky note) annotations\0color of newly created line annotations. If "
-    "not set, the PDF engine's default (red) is used\0color of newly created polyline annotations. If not set, the PDF "
-    "engine's default (red) is used\0color of newly created square annotations. If not set, the PDF engine's default "
-    "(red) is used\0color of newly created circle annotations. If not set, the PDF engine's default (red) is "
-    "used\0color of newly created polygon annotations. If not set, the PDF engine's default (red) is used\0color of "
-    "newly created ink annotations, as #aarrggbb: the alpha is how translucent the stroke is (00 = transparent, FF = "
-    "opaque), so the color is exactly what ends up on the page\0colors offered by the ink button's drop-down, "
-    "separated by space. Use #aarrggbb values: the alpha is the stroke's opacity. The color ink currently draws in is "
-    "added when it is missing\0width of the stroke of new ink annotations, in points\0color of newly created stamp "
-    "annotations. If not set, the PDF engine's default (red) is used\0color of newly created caret annotations. If not "
-    "set, the PDF engine's default (red) is used\0color of newly created file attachment annotations. If not set, the "
-    "PDF engine's default (red) is used\0icon shown for text (sticky note) annotations: comment, help, insert, key, "
-    "new paragraph, note or paragraph. If not set, note is used\0author recorded on newly created annotations. If not "
-    "set, the Windows user name is used; set it to (none) to leave the author out entirely\0image (e.g. a transparent "
-    ".png of your signature) that Sign With Image stamps on the page. If not set, or the file is missing, Sign With "
-    "Image asks for an image",
+    "InkBallpoint\0InkFountain\0InkBrush\0InkPencil\0InkHighlighter\0HighlightColor\0UnderlineColor\0SquigglyColor\0Str"
+    "ikeOutColor\0FreeTextColor\0FreeTextBackgroundColor\0FreeTextOpacity\0FreeTextFontFamily\0FreeTextFontStyle\0FreeT"
+    "extSize\0FreeTextBorderWidth\0FreeTextAlignment\0PresetColors\0TextIconColor\0LineColor\0PolyLineColor\0SquareColo"
+    "r\0CircleColor\0PolygonColor\0InkColor\0InkColors\0InkBorderWidth\0StampColor\0CaretColor\0FileAttachmentColor\0Te"
+    "xtIconType\0DefaultAuthor\0SignatureImage",
+    "saved settings for this pen type\0saved settings for this pen type\0saved settings for this pen type\0saved "
+    "settings for this pen type\0saved settings for this pen type\0color of newly created highlight annotations. Use "
+    "an #aarrggbb value to set default opacity (00 = transparent, FF = opaque); #rrggbb is fully opaque\0color of "
+    "newly created underline annotations. #aarrggbb sets default opacity the same way as HighlightColor\0color of "
+    "newly created squiggly underline annotations. #aarrggbb sets default opacity the same way as "
+    "HighlightColor\0color of newly created strike out annotations. #aarrggbb sets default opacity the same way as "
+    "HighlightColor\0text color of newly created free text annotations\0background color of newly created free text "
+    "annotations\0opacity of free text annotation in percent (0-100); 0 - fully transparent (invisible), 50 - half "
+    "transparent, 100 - fully opaque\0default font family for new Free Text annotations\0Free Text style bits: bold=1, "
+    "italic=2, underline=4\0font size of free text annotations, in points\0border width of free text annotations, in "
+    "points\0how text is aligned in newly created free text annotations (Text Alignment in the compact property row): "
+    "left, center or right. Right-to-left scripts (Arabic, Hebrew, Persian) want right\0colors offered by the "
+    "drop-down on the annotation toolbar's buttons, separated by space. Picking one sets the color of new annotations "
+    "of that type. The color a button currently makes annotations in is added when it is missing\0color of newly "
+    "created text (sticky note) annotations\0color of newly created line annotations. If not set, the PDF engine's "
+    "default (red) is used\0color of newly created polyline annotations. If not set, the PDF engine's default (red) is "
+    "used\0color of newly created square annotations. If not set, the PDF engine's default (red) is used\0color of "
+    "newly created circle annotations. If not set, the PDF engine's default (red) is used\0color of newly created "
+    "polygon annotations. If not set, the PDF engine's default (red) is used\0color of newly created ink annotations, "
+    "as #aarrggbb: the alpha is how translucent the stroke is (00 = transparent, FF = opaque), so the color is exactly "
+    "what ends up on the page\0colors offered by the ink button's drop-down, separated by space. Use #aarrggbb values: "
+    "the alpha is the stroke's opacity. The color ink currently draws in is added when it is missing\0width of the "
+    "stroke of new ink annotations, in points\0color of newly created stamp annotations. If not set, the PDF engine's "
+    "default (red) is used\0color of newly created caret annotations. If not set, the PDF engine's default (red) is "
+    "used\0color of newly created file attachment annotations. If not set, the PDF engine's default (red) is "
+    "used\0icon shown for text (sticky note) annotations: comment, help, insert, key, new paragraph, note or "
+    "paragraph. If not set, note is used\0author recorded on newly created annotations. If not set, the Windows user "
+    "name is used; set it to (none) to leave the author out entirely\0image (e.g. a transparent .png of your "
+    "signature) that Sign With Image stamps on the page. If not set, or the file is missing, Sign With Image asks for "
+    "an image",
     false};
 
 static const FieldInfo gExternalViewerFields[] = {
@@ -2251,6 +2363,7 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, toolbarSize), SettingType::Int, 18},
     {offsetof(Settings, treeFontName), SettingType::String, (intptr_t)"automatic"},
     {offsetof(Settings, treeFontSize), SettingType::Int, 0},
+    {offsetof(Settings, interfaceScale), SettingType::Int, 100},
     {offsetof(Settings, uIFontFamily), SettingType::String, (intptr_t)"system"},
     {offsetof(Settings, uIFontSize), SettingType::Int, 0},
     {offsetof(Settings, disableAntiAlias), SettingType::Bool, false},
@@ -2312,6 +2425,8 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, penMinWidth), SettingType::Float, (intptr_t)"0.1"},
     {offsetof(Settings, penMaxWidth), SettingType::Float, (intptr_t)"16"},
     {offsetof(Settings, penWidthStep), SettingType::Float, (intptr_t)"0.1"},
+    {offsetof(Settings, laserLifetimeSeconds), SettingType::Float, (intptr_t)"2"},
+    {offsetof(Settings, laserWidth), SettingType::Float, (intptr_t)"8"},
     {offsetof(Settings, pinnedAnnotationTools), SettingType::Array, (intptr_t)&gPinnedAnnotationToolInfo},
     {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, themes), SettingType::Array, (intptr_t)&gThemeInfo},
@@ -2340,7 +2455,7 @@ static const FieldInfo gSettingsFields[] = {
 };
 static const StructInfo gSettingsInfo = {
     sizeof(Settings),
-    171,
+    174,
     gSettingsFields,
     "\0\0DefaultDisplayMode\0DefaultZoom\0DisableJavaScript\0AllowExternalImages\0EnableTeXEnhancements\0EscToExit\0Ful"
     "lPathInTitle\0InverseSearchCmdLine\0LazyLoading\0MainWindowBackground\0NoHomeTab\0HomePageSortByFrequentlyRead\0Ho"
@@ -2355,14 +2470,15 @@ static const StructInfo gSettingsInfo = {
     "reDestinationZoom\0HighlightLinkDestination\0CitationHoverDelay\0ReadAloudVoiceId\0ReadAloudSpeed\0ReadingAutoScro"
     "llSpeed\0ReadingBar\0FastScrollOverScrollbar\0PreventSleepInFullscreen\0MinTabWidth\0TabWidth\0Theme\0HelpTheme\0L"
     "astLightTheme\0LastDarkTheme\0DocumentColorsFollowTheme\0TocDy\0ToolbarCustomLayout\0ToolbarShowReadAloud\0Toolbar"
-    "Size\0TreeFontName\0TreeFontSize\0UIFontFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableAu"
-    "toLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0Zoom"
-    "Increment\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0Gr"
-    "okBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0"
-    "Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnipp"
-    "ets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0PinnedAnnotationTools\0\0Themes\0\0TabGroups\0\0Custom"
-    "ScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0HelpWindowP"
-    "os\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
+    "Size\0TreeFontName\0TreeFontSize\0InterfaceScale\0UIFontFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEn"
+    "hance\0DisableAutoLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0"
+    "ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0"
+    "ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0Tra"
+    "nslateEngine\0\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandl"
+    "ers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserWidth\0Pinn"
+    "edAnnotationTools\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0Wind"
+    "owState\0WindowPos\0SearchUIWindowPos\0HelpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0"
+    "OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
     "\0\0default layout of pages. valid values: automatic, single page, facing, book view, continuous, continuous "
     "facing, continuous book view, page aspect. page aspect (3.7+): first open of a PDF, XPS, DjVu or PostScript file "
     "uses page 1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered "
@@ -2463,35 +2579,35 @@ static const StructInfo gSettingsInfo = {
     "read). Read Aloud is still reachable from the Read Aloud menu when this is false\0size of the toolbar icons in "
     "pixels at 100% display scaling (8-64); the toolbar itself is a few pixels taller\0font name for bookmarks and "
     "favorites tree views. automatic means Windows default\0font size for bookmarks and favorites tree views, in "
-    "pixels; 0 means the Windows default. Not scaled by the display scaling\0interface font: system, Manrope, "
-    "Pretendard Std or Public Sans\0overrides the font size used for menus, toolbar and dialogs, in pixels; 0 means "
-    "the Windows default. Not scaled by the display scaling\0if true, render MuPDF-based documents (PDF, XPS, DjVu, "
-    "EPUB etc.) without anti-aliasing, giving sharper but jagged edges\0CAD/engineering PDF line rendering: off, auto "
-    "(enhance if a CAD drawing is detected) or on\0if true, disables auto-linking of URLs and email addresses found in "
-    "PDF text\0if true, use the Windows system colors for the document background and text. Overrides other color "
-    "settings\0if true, documents are opened in tabs instead of new windows\0if true, a small floating toolbar with "
-    "selection actions (copy, read aloud, highlight etc.) pops up after selecting text. Set to false to disable "
-    "it\0which built-in buttons the selection toolbar has and in what order, e.g. CmdCopySelection | "
-    "CmdCreateAnnotHighlight. | or Separator inserts a separator. Leave a button out to hide it. Empty (the default) "
-    "is the standard set. SelectionHandlers with SelectToolbarNameOrSvg still come last\0if true, Ctrl+Tab and "
-    "Ctrl+Shift+Tab show the tab switcher in most recently used order instead of tab-strip order\0if true, Ctrl+Tab "
-    "and Ctrl+Shift+Tab immediately switch to the next / previous tab in tab-strip order (the behavior before version "
-    "3.6) instead of showing the tab switcher\0sequence of zoom levels when zooming in/out; values must lie between "
-    "8.33 and 1000000 (the largest one becomes the maximum zoom, which is 6400 by default)\0how much a single zoom in "
-    "/ zoom out step changes the zoom, as a percentage of the current zoom level. If 0 or negative, zooming steps "
-    "through ZoomLevels instead\0\0customization options for PDF, XPS, DjVu and PostScript UI\0\0customization options "
-    "for the ebook UI (EPUB, MOBI, FB2, PDB and plain text)\0\0customization options for Comic Book "
-    "UI\0\0customization options for image files UI\0\0customization options for CHM UI. UseFixedPageUI switches to "
-    "the PDF-style view; FontName applies to that view\0\0customization options for Markdown UI. If UseFixedPageUI is "
-    "true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0customization options for HTML UI. "
-    "If UseFixedPageUI is true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0settings for "
-    "the Claude Code chat sidebar\0\0settings for the Grok Build chat sidebar\0\0settings for the OpenAI Codex chat "
-    "sidebar\0\0settings for the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 = use default); shared by "
-    "Claude Code, Grok Build, and OpenAI Codex (internal)\0\0remembered destination language for selection "
-    "translation; empty uses OS UI language\0remembered source language for selection translation; empty means "
-    "Auto\0remembered engine for Translate Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or "
-    "Antigravity\0\0default values for annotations in PDF documents\0\0list of additional external viewers for various "
-    "file types. See [docs for more "
+    "pixels; 0 means the Windows default. Not scaled by the display scaling\0overall interface scale, from 50 to 250 "
+    "percent; document zoom is independent\0interface font: system, Manrope, Pretendard Std or Public Sans\0overrides "
+    "the font size used for menus, toolbar and dialogs, in pixels; 0 means the Windows default. Not scaled by the "
+    "display scaling\0if true, render MuPDF-based documents (PDF, XPS, DjVu, EPUB etc.) without anti-aliasing, giving "
+    "sharper but jagged edges\0CAD/engineering PDF line rendering: off, auto (enhance if a CAD drawing is detected) or "
+    "on\0if true, disables auto-linking of URLs and email addresses found in PDF text\0if true, use the Windows system "
+    "colors for the document background and text. Overrides other color settings\0if true, documents are opened in "
+    "tabs instead of new windows\0if true, a small floating toolbar with selection actions (copy, read aloud, "
+    "highlight etc.) pops up after selecting text. Set to false to disable it\0which built-in buttons the selection "
+    "toolbar has and in what order, e.g. CmdCopySelection | CmdCreateAnnotHighlight. | or Separator inserts a "
+    "separator. Leave a button out to hide it. Empty (the default) is the standard set. SelectionHandlers with "
+    "SelectToolbarNameOrSvg still come last\0if true, Ctrl+Tab and Ctrl+Shift+Tab show the tab switcher in most "
+    "recently used order instead of tab-strip order\0if true, Ctrl+Tab and Ctrl+Shift+Tab immediately switch to the "
+    "next / previous tab in tab-strip order (the behavior before version 3.6) instead of showing the tab "
+    "switcher\0sequence of zoom levels when zooming in/out; values must lie between 8.33 and 1000000 (the largest one "
+    "becomes the maximum zoom, which is 6400 by default)\0how much a single zoom in / zoom out step changes the zoom, "
+    "as a percentage of the current zoom level. If 0 or negative, zooming steps through ZoomLevels "
+    "instead\0\0customization options for PDF, XPS, DjVu and PostScript UI\0\0customization options for the ebook UI "
+    "(EPUB, MOBI, FB2, PDB and plain text)\0\0customization options for Comic Book UI\0\0customization options for "
+    "image files UI\0\0customization options for CHM UI. UseFixedPageUI switches to the PDF-style view; FontName "
+    "applies to that view\0\0customization options for Markdown UI. If UseFixedPageUI is true, MuPDF is used; "
+    "otherwise WebView2 browser view is used when available\0\0customization options for HTML UI. If UseFixedPageUI is "
+    "true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0settings for the Claude Code chat "
+    "sidebar\0\0settings for the Grok Build chat sidebar\0\0settings for the OpenAI Codex chat sidebar\0\0settings for "
+    "the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 = use default); shared by Claude Code, Grok "
+    "Build, and OpenAI Codex (internal)\0\0remembered destination language for selection translation; empty uses OS UI "
+    "language\0remembered source language for selection translation; empty means Auto\0remembered engine for Translate "
+    "Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or Antigravity\0\0default values for annotations "
+    "in PDF documents\0\0list of additional external viewers for various file types. See [docs for more "
     "information](https://www.sumatrapdfreader.org/docs/Customize-external-viewers)\0\0customization options for how "
     "forward search results are shown (used from LaTeX editors)\0\0these override the default settings in the Print "
     "dialog\0\0options for fullscreen mode\0\0list of handlers for selected text, shown in context menu when text "
@@ -2499,20 +2615,21 @@ static const StructInfo gSettingsInfo = {
     "information](https://www.sumatrapdfreader.org/docs/Customize-search-translation-services)\0\0predefined text "
     "inserted as a free text annotation from the context menu or the command palette\0\0custom keyboard "
     "shortcuts\0\0minimum pen width in PDF points\0maximum pen width in PDF points\0pen width increment in PDF "
-    "points\0favorite annotation tool, color and width combinations\0\0color themes\0\0saved groups of tabs\0\0actual "
-    "resolution of the main screen in DPI, used to show documents at their physical size; if 0 or negative, the "
-    "resolution reported by Windows is used\0\0You're not expected to change those manually\0a whitespace separated "
-    "list of passwords to try when opening a password protected document (passwords containing spaces must be "
-    "quoted)\0[ISO code](langs.html) of the current UI language\0SumatraPDF won't offer to update to this version "
-    "again\0default state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0default "
-    "position (x, y) and size (width, height) of the window\0position/size of the floating find window (see "
-    "SearchUIFloating)\0position/size of the in-app Help: Manual window\0history of opened files, most recently used "
-    "first. A closed file stays here until it drops off the list or the history is cleared\0windows and tabs still "
-    "open when SumatraPDF was last closed; reopened at startup if RestoreSession is true\0data required for reloading "
-    "documents after an auto-update\0data required to determine when SumatraPDF last checked for updates\0value "
-    "required to determine recency for the OpenCount value in FileStates\0position of the document properties "
-    "window\0if true, check once a day whether an update is available\0\0Settings below are not recognized by the "
-    "current version",
+    "points\0temporary laser stroke lifetime in seconds (0.1 to 120)\0laser width in screen pixels at 100% DPI (0.1 to "
+    "32), independent of pen width\0favorite annotation tool, color and width combinations\0\0color themes\0\0saved "
+    "groups of tabs\0\0actual resolution of the main screen in DPI, used to show documents at their physical size; if "
+    "0 or negative, the resolution reported by Windows is used\0\0You're not expected to change those manually\0a "
+    "whitespace separated list of passwords to try when opening a password protected document (passwords containing "
+    "spaces must be quoted)\0[ISO code](langs.html) of the current UI language\0SumatraPDF won't offer to update to "
+    "this version again\0default state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is "
+    "minimized\0default position (x, y) and size (width, height) of the window\0position/size of the floating find "
+    "window (see SearchUIFloating)\0position/size of the in-app Help: Manual window\0history of opened files, most "
+    "recently used first. A closed file stays here until it drops off the list or the history is cleared\0windows and "
+    "tabs still open when SumatraPDF was last closed; reopened at startup if RestoreSession is true\0data required for "
+    "reloading documents after an auto-update\0data required to determine when SumatraPDF last checked for "
+    "updates\0value required to determine recency for the OpenCount value in FileStates\0position of the document "
+    "properties window\0if true, check once a day whether an update is available\0\0Settings below are not recognized "
+    "by the current version",
     false};
 static const FieldInfo gTheme_1_Fields[] = {
     {offsetof(Theme, name), SettingType::String, (intptr_t)""},

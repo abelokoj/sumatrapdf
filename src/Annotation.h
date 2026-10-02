@@ -132,6 +132,7 @@ Vec<RectF> GetQuadPointsAsRect(Annotation*);
 
 Str Author(Annotation*);
 time_t ModificationDate(Annotation*);
+time_t CreationDate(Annotation*);
 void SetModificationDateToNow(Annotation*);
 int PopupId(Annotation*); // -1 if not exist
 Str AnnotationReadableNameTemp(AnnotationType tp);
@@ -143,6 +144,12 @@ constexpr int kFreeTextItalic = 2;
 constexpr int kFreeTextUnderline = 4;
 extern SeqStrings gBase14FontFamilies; // "Courier\0Helvetica\0Times\0"
 
+enum class FreeTextFontStatus {
+    Available,
+    Unavailable,
+    Restricted
+};
+FreeTextFontStatus CheckFreeTextFont(EngineMupdf*, Str, int);
 bool IsBase14FontFamily(Str);
 Str FreeTextFontFamily(Annotation*);
 int FreeTextFontStyle(Annotation*);

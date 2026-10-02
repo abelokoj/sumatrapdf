@@ -22,6 +22,7 @@ constexpr int kDictionaryMaxResults = 64;
 static RecursiveMutex gDictionaryLock;
 static Mutex gDictionaryInstallLock;
 static Str kWordNetId = StrL("wordnet-en");
+static Str kDictionaryDownloadRoot = StrL("https://raw.githubusercontent.com/abelokoj/sumatrapdf/master/");
 static Str kWordNetTitle = StrL("Princeton WordNet 3.0 (English)");
 static const char* kWordNetFiles[] = {"data.noun", "data.verb", "data.adj", "data.adv"};
 static const char* kWordNetExceptions[] = {"noun.exc", "verb.exc", "adj.exc", "adv.exc"};
@@ -661,13 +662,12 @@ void GetDictionaryCatalog(Vec<OfflineDictPack>& packs) {
     FreeDictionaryCatalog(packs);
     for (const auto& source : builtinVocabDecks) {
         Str packId = fmt("wm-%s", Str(source.id));
-        VecAppend(
-            packs,
-            {str::Dup(packId), str::Dup(Str(source.name)), str::Dup(StrL("English")),
-             str::Dup(StrL("Wiktionary CC BY-SA 3.0; WordNet license; lists MIT")),
-             str::Dup(fmt("https://github.com/wasi-master/wmkeyboard-data/blob/master/vocab/en/%s.wmvocab.json.gz",
-                          Str(source.id))),
-             true, true});
+        VecAppend(packs,
+                  {str::Dup(packId), str::Dup(Str(source.name)), str::Dup(StrL("English")),
+                   str::Dup(StrL("Wiktionary CC BY-SA 3.0; WordNet license; lists MIT")),
+                   str::Dup(fmt("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/%s.wmvocab.json.gz",
+                                Str(source.id))),
+                   true, true});
     }
     bool bundled = HasEmbeddedWordNet() ||
                    file::Exists(path::JoinTemp(GetSelfExeDirTemp(), StrL("dictionaries\\wordnet-en\\data.noun")));
@@ -704,9 +704,7 @@ bool DownloadDictionaryPack(Str id, Str* error) {
         if (!dir::CreateAll(GetDictionaryDirTemp()))
             return FailDictionary(error, StrL("Cannot create dictionary folder."));
         Str pending = path::JoinTemp(GetDictionaryDirTemp(), fmt("%s.wmvocab.json.gz.pending", sourceId));
-        Str url =
-            fmt("https://raw.githubusercontent.com/wasi-master/wmkeyboard-data/master/vocab/en/%s.wmvocab.json.gz",
-                sourceId);
+        Str url = fmt("%sdata/vocabulary/%s.wmvocab.json.gz", kDictionaryDownloadRoot, sourceId);
         bool ok = HttpGetToFile(url, pending, {}, kDictionaryMaxFile);
         Str compressed, jsonText;
         if (ok) ok = ReadDictionary(pending, compressed);
@@ -734,10 +732,7 @@ bool DownloadDictionaryPack(Str id, Str* error) {
     }
     bool ok = true;
     for (const char* name : kWordNetPackFiles) {
-        Str url =
-            fmt("https://raw.githubusercontent.com/nltk/wordnet/ce91915ae38a341ae845be4d825ef6003cddf395/wn/data/"
-                "wordnet-3.0/%s",
-                Str(name));
+        Str url = fmt("%ssrc/dictionaries/wordnet-en/%s", kDictionaryDownloadRoot, Str(name));
         if (!HttpGetToFile(url, path::JoinTemp(folder, Str(name)), {}, kDictionaryMaxFile)) {
             ok = false;
             break;
@@ -883,6 +878,19 @@ bool OfflineDictionary_UnitTests() {
         }
         ok = ok && entityFound;
     }
+    Vec<OfflineDictPack> catalog;
+    GetDictionaryCatalog(catalog);
+    int wmCount = 0;
+    for (const OfflineDictPack& pack : catalog) {
+        if (pack.bundled && str::StartsWith(pack.id, StrL("wm-"))) {
+            wmCount++;
+            ok = ok && str::StartsWith(pack.sourceUrl,
+                                       StrL("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/"));
+            ok = ok && len(pack.license) > 0;
+        }
+    }
+    ok = ok && wmCount == 11;
+    FreeDictionaryCatalog(catalog);
     DictionaryIndex wm;
     ok = ok &&
          LoadWmJson(

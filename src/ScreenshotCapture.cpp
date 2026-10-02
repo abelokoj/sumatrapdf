@@ -836,7 +836,7 @@ static void PaintOverlayLayered(HWND hwnd, ScreenshotOverlayData* data) {
     HGDIOBJ oldTemp = SelectObject(hdcTemp, hbmTemp);
 
     // select GUI font for text drawing
-    PlatformFont* guiFont = GetDefaultGuiFont();
+    PlatformFont* guiFont = gScreenshotHost.GetFont ? gScreenshotHost.GetFont() : GetDefaultGuiFont();
     HGDIOBJ oldFont = SelectObject(hdcTemp, guiFont->GetHFont());
 
     // white background for the temp surface
