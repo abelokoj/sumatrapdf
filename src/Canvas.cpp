@@ -27,6 +27,7 @@
 #include "Settings.h"
 #include "DisplayMode.h"
 #include "Annotation.h"
+#include "PointerInput.h"
 #include "FormFields.h"
 #include "SumatraDialogs.h"
 #include "DocController.h"
@@ -5388,68 +5389,11 @@ constexpr UINT WM_POINTERUP = 0x0247;
 constexpr UINT WM_POINTERUPDATE = 0x0245;
 #endif
 
-// POINTER_INPUT_TYPE values
-constexpr int kSumatraPtTouch = 2;
-constexpr int kSumatraPtPen = 3;
-
-// pointer message flags (in HIWORD of wParam)
-constexpr int kSumatraPointerMessageFlagInContact = 0x0004;
-constexpr int kSumatraPointerMessageFlagFirstButton = 0x0010;
-
-// dynamically loaded pointer API (Windows 8+)
-// Local ABI declarations keep the Windows 7 build target while using Win8 APIs.
-struct SumatraPointerInfo {
-    DWORD pointerType;
-    UINT32 pointerId;
-    UINT32 frameId;
-    UINT32 pointerFlags;
-    HANDLE sourceDevice;
-    HWND hwndTarget;
-    POINT ptPixelLocation;
-    POINT ptHimetricLocation;
-    POINT ptPixelLocationRaw;
-    POINT ptHimetricLocationRaw;
-    DWORD time;
-    UINT32 historyCount;
-    INT32 inputData;
-    DWORD keyStates;
-    UINT64 performanceCount;
-    DWORD buttonChangeType;
-};
-
-struct SumatraPointerPenInfo {
-    SumatraPointerInfo pointerInfo;
-    UINT32 penFlags;
-    UINT32 penMask;
-    UINT32 pressure;
-    UINT32 rotation;
-    INT32 tiltX;
-    INT32 tiltY;
-};
-
-constexpr UINT32 kSumatraPenFlagInverted = 0x0002;
-constexpr UINT32 kSumatraPenFlagEraser = 0x0004;
-
-typedef BOOL(WINAPI* Sig_GetPointerType)(UINT32 pointerId, DWORD* pointerType);
-typedef BOOL(WINAPI* Sig_GetPointerPenInfo)(UINT32 pointerId, SumatraPointerPenInfo* penInfo);
-typedef BOOL(WINAPI* Sig_GetPointerPenInfoHistory)(UINT32, UINT32*, SumatraPointerPenInfo*);
-static Sig_GetPointerType DynGetPointerType = nullptr;
-static Sig_GetPointerPenInfo DynGetPointerPenInfo = nullptr;
-static Sig_GetPointerPenInfoHistory DynGetPointerPenInfoHistory = nullptr;
-static bool triedLoadPointerApi = false;
-
-static void EnsurePointerApiLoaded() {
-    if (triedLoadPointerApi) {
-        return;
-    }
-    triedLoadPointerApi = true;
-    HMODULE h = GetModuleHandleW(L"user32.dll");
-    if (h) {
-        DynGetPointerType = (Sig_GetPointerType)GetProcAddress(h, "GetPointerType");
-        DynGetPointerPenInfo = (Sig_GetPointerPenInfo)GetProcAddress(h, "GetPointerPenInfo");
-        DynGetPointerPenInfoHistory = (Sig_GetPointerPenInfoHistory)GetProcAddress(h, "GetPointerPenInfoHistory");
-    }
+#if IS_DEBUG
+bool Canvas_UnitTestPointerInput() {
+    return PointerInputTests();
 }
+#endif
 
 // A finger's contact, watched through WM_POINTER* purely to time it. Whether
 // the contact later turns into a pan gesture or into a synthesized click, the
@@ -5502,17 +5446,10 @@ static void OnTouchPointer(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LPAR
 // pen input on Windows 8+ generates WM_POINTER* instead of WM_LBUTTON*
 // and gesture configuration can prevent automatic promotion to mouse messages
 static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    EnsurePointerApiLoaded();
-    if (!DynGetPointerType) {
-        return false;
-    }
-
     UINT32 pointerId = LOWORD(wp);
-    DWORD pointerType = 0;
-    if (!DynGetPointerType(pointerId, &pointerType)) {
-        return false;
-    }
-    if (pointerType == kSumatraPtTouch) {
+    PointerSample current;
+    if (!ReadPointerSample(pointerId, current)) return false;
+    if (current.device == PointerDevice::Touch) {
         if (SuppressTouchForPen(win)) {
             return true;
         }
@@ -5526,7 +5463,7 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
         return false;
     }
     // only handle pen input; let mouse and touch go through normal paths
-    if (pointerType != kSumatraPtPen) {
+    if (current.device != PointerDevice::Pen) {
         return false;
     }
 
@@ -5535,12 +5472,15 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
     int x = pt.x;
     int y = pt.y;
 
-    SumatraPointerPenInfo penInfo{};
-    bool hasPenInfo = DynGetPointerPenInfo && DynGetPointerPenInfo(pointerId, &penInfo);
-    bool eraser = hasPenInfo && (penInfo.penFlags & (kSumatraPenFlagInverted | kSumatraPenFlagEraser)) != 0;
+    bool eraser = current.eraser;
+    if (msg == WM_POINTERDOWN || msg == WM_POINTERUP) {
+        logf("pen: id=%d pressure=%.3f valid=%d tilt=%d,%d barrel=%d eraser=%d time=%d\n", (int)current.id,
+             current.pressure, (int)current.pressureValid, current.tiltX, current.tiltY, (int)current.barrel,
+             (int)current.eraser, (int)current.time);
+    }
     if (eraser && IsPlacingInkAnnotation(win)) {
         WORD flags = HIWORD(wp);
-        bool inContact = (flags & kSumatraPointerMessageFlagInContact) != 0;
+        bool inContact = (flags & kWinPointerContact) != 0;
         if (msg == WM_POINTERDOWN || (msg == WM_POINTERUPDATE && inContact)) {
             AnnotationPlacementEraseAt(win, pt);
         }
@@ -5554,8 +5494,8 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
     if (msg == WM_POINTERDOWN) {
         mouseWp = MK_LBUTTON;
         OnMouseLeftButtonDown(win, x, y, mouseWp);
-        if (hasPenInfo && (penInfo.penMask & 1) != 0) {
-            AddInkPressure(win, penInfo.pressure);
+        if (current.pressureValid) {
+            AddInkPressure(win, (UINT32)roundf(current.pressure * (float)kWinPenPressureMax));
         }
         if (IsPlacingInkAnnotation(win) && win->inkEraseMode == 0) {
             UpdateWindow(hwnd);
@@ -5563,38 +5503,29 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
         return true;
     }
     if (msg == WM_POINTERUPDATE) {
-        bool inContact = (flags & kSumatraPointerMessageFlagInContact) != 0;
+        bool inContact = (flags & kWinPointerContact) != 0;
         if (inContact) {
             mouseWp = MK_LBUTTON;
         }
         bool ink = IsPlacingInkAnnotation(win) && win->inkEraseMode == 0;
         bool laser = win->laserPointerActive && win->laserPointerDown;
         bool usedHistory = false;
-        if ((ink || laser) && inContact && DynGetPointerPenInfoHistory) {
-            constexpr UINT32 kPenHistoryCapacity = 128;
-            SumatraPointerPenInfo history[kPenHistoryCapacity]{};
-            UINT32 count = kPenHistoryCapacity;
-            if (DynGetPointerPenInfoHistory(pointerId, &count, history)) {
-                count = std::min(count, kPenHistoryCapacity);
-                for (int i = (int)count - 1; i >= 0; i--) {
-                    SumatraPointerPenInfo& sample = history[i];
-                    if ((sample.pointerInfo.pointerFlags & kSumatraPointerMessageFlagInContact) == 0) {
-                        continue;
-                    }
-                    Point point = HwndScreenToClient(
-                        hwnd, Point(sample.pointerInfo.ptPixelLocation.x, sample.pointerInfo.ptPixelLocation.y));
-                    OnMouseMove(win, point.x, point.y, MK_LBUTTON);
-                    if ((sample.penMask & 1) != 0) {
-                        AddInkPressure(win, sample.pressure);
-                    }
-                }
-                usedHistory = count > 0;
+        if ((ink || laser) && inContact) {
+            Vec<PointerSample> history;
+            ReadPenHistory(pointerId, history);
+            for (const PointerSample& sample : history) {
+                if (!sample.contact) continue;
+                Point point = HwndScreenToClient(hwnd, sample.screen);
+                OnMouseMove(win, point.x, point.y, MK_LBUTTON);
+                if (sample.pressureValid)
+                    AddInkPressure(win, (UINT32)roundf(sample.pressure * (float)kWinPenPressureMax));
+                usedHistory = true;
             }
         }
         if (!usedHistory) {
             OnMouseMove(win, x, y, mouseWp);
-            if (hasPenInfo && inContact && (penInfo.penMask & 1) != 0) {
-                AddInkPressure(win, penInfo.pressure);
+            if (current.pressureValid && inContact) {
+                AddInkPressure(win, (UINT32)roundf(current.pressure * (float)kWinPenPressureMax));
             }
         }
         if ((ink || laser) && inContact) {

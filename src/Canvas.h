@@ -60,3 +60,7 @@ constexpr UINT_PTR kLaserTrailTimerID = 17;
 constexpr uint kAnnotationResizeRerenderDelayMs = 125;
 
 void CancelAnnotationResizeRerender(MainWindow* win);
+
+#if IS_DEBUG
+bool Canvas_UnitTestPointerInput();
+#endif

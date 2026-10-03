@@ -177,6 +177,9 @@
     <ClInclude Include="..\src\DarkMode.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\DictionarySpeech.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\DisplayMode.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -214,6 +217,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\EnhancedIcons.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\EnhancedUpdate.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\EutlTrust.h">
@@ -283,6 +289,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\JxlReader.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\KaikkiDictionary.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\KeyboardHelp.h">
@@ -414,6 +423,9 @@
     <ClInclude Include="..\src\Settings.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\ShellProviderRegistry.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\ShortcutParse.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -421,6 +433,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\StressTesting.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\StudyExport.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\SumatraControl.h">
@@ -713,6 +728,9 @@
     <ClCompile Include="..\src\DarkMode.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\DictionarySpeech.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\DisplayMode.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -765,6 +783,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\EnginePs.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\EnhancedUpdate.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\EutlTrust.cpp">
@@ -849,6 +870,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\JxlReader.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\KaikkiDictionary.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\KeyboardHelp.cpp">
@@ -1050,6 +1074,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\StressTesting.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\StudyExport.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\SumatraConfig.cpp">

@@ -64,6 +64,7 @@ int VocabularyDueCount(Str deckId = {}, i64 now = 0);
 VocabularyDeck* VocabularyCreateDeck(Str name, Str description = {});
 bool VocabularyRemoveDeck(Str id);
 int VocabularyInstallDeck(Str id);
+bool VocabularyDeckInstalled(Str id, int* count = nullptr, int* total = nullptr);
 bool VocabularyExport(Str path);
 bool VocabularyImport(Str path, bool merge = true);
 Str VocabularyLastError();

@@ -50,12 +50,18 @@ static void ReplaceDropDownItems(HWND hwnd, StrVec& items) {
 // slot widening as the count comes in - would then wipe out what the user is
 // typing, so put the caret back where it was (issue #6068).
 static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_SETFONT) {
+        LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
+        EditSetDefaultMargins(CbEditHwnd(hwnd));
+        return res;
+    }
     if (msg != WM_SIZE) {
         return DefSubclassProc(hwnd, msg, wp, lp);
     }
     int start = 0, end = 0;
     CbEditGetSelection(hwnd, start, end);
     LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
+    EditSetDefaultMargins(CbEditHwnd(hwnd));
     CbEditSelectText(hwnd, start, end);
     return res;
 }
@@ -198,6 +204,7 @@ HWND DropDown::Create(const CreateArgs& args) {
     }
 
     // SetDropDownItems(hwnd, items);
+    EditSetDefaultMargins(CbEditHwnd(hwnd));
     if (CbEditHwnd(hwnd)) {
         SetWindowSubclass(hwnd, DropDownProc, 0, 0);
     }
@@ -305,7 +312,12 @@ Size DropDown::GetIdealSize() {
     }
     // TODO: not sure if I want scrollbar. Only needed if a lot of items
     int dxPad = DpiGetSystemMetrics(SM_CXVSCROLL);
-    int dx = s1.dx + dxPad + DpiScale(8);
+    int textPadding = DpiScale(8);
+    if (HWND edit = CbEditHwnd(hwnd)) {
+        DWORD margins = (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0);
+        textPadding = std::max(textPadding, (int)LOWORD(margins) + (int)HIWORD(margins));
+    }
+    int dx = s1.dx + dxPad + textPadding;
     if (idealDx > 0 && dx < idealDx) {
         dx = idealDx;
     }

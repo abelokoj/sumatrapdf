@@ -5,12 +5,12 @@
     <img src="docs/images/enhanced-wordmark-light.svg" width="960" alt="SumatraPDF Enhanced">
   </picture><br>
 
-  <a href="https://github.com/abelokoj/sumatrapdf/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf?label=release&amp;color=168349" alt="Latest release"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf/total?color=168349" alt="Total release downloads"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf?style=flat&amp;color=eab308" alt="GitHub stars"></a>
-  <a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
-  <img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
+<a href="https://github.com/abelokoj/sumatrapdf/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf?label=release&amp;color=168349" alt="Latest release"></a>
+<a href="https://github.com/abelokoj/sumatrapdf/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf/total?color=168349" alt="Total release downloads"></a>
+<a href="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
+<a href="https://github.com/abelokoj/sumatrapdf/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf?style=flat&amp;color=eab308" alt="GitHub stars"></a>
+<a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
+<img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
 </p>
 
 <p align="center"><strong>Read, annotate and learn in one place.</strong><br>A native Windows document reader with customizable pen tools, offline dictionaries and vocabulary practice.<br><em>Built on <a href="https://github.com/sumatrapdfreader/sumatrapdf">SumatraPDF</a>, with visual inspiration from <a href="https://github.com/JaviLendi/PrettySumatraPDF">PrettySumatraPDF</a>.</em></p>
@@ -69,12 +69,17 @@ Run the installer to install the application, or run the standalone portable EXE
 ### 📖 Offline dictionary and learning
 
 - Select a word and press **Shift+D** for an offline definition, or enter a word manually.
-- The same original wmkeyboard vocabulary-pack definitions: eleven study packs and 3,890 unique meanings, with WordNet English as an offline fallback. Original data and attribution are bundled in this repository.
-- Import supported WM JSON/gzip, TSV and StarDict dictionaries; explicitly download and update packs. Lookup and practice stay offline.
+- The original WMKeyboard vocabulary definitions in eleven study packs, with WordNet English for broader offline coverage. Original data and attribution are bundled in this repository.
+- Import supported WM JSON/gzip, TSV and StarDict dictionaries; explicitly download and update packs. Offline lookup is the default, and practice works offline.
+- Download optional [Kaikki English](https://kaikki.org/dictionary/English/) and [Simple English](https://kaikki.org/simplewiktionary/) dictionaries. Current download sizes are shown before confirmation, with progress and cancellation. English is approximately 3.34 GB; Simple English is approximately 4.72 MB compressed and 37.90 MB expanded, plus an offline index. These packs are downloaded separately from the app.
+- Read separate, numbered meanings with parts of speech, examples, pronunciation and related words when the dictionary provides them.
+- Choose optional online lookup through Wiktionary, Wiktionary REST or Free Dictionary API, and set the source order.
+- Hear words with installed Windows voices offline, or explicitly play available US and UK pronunciation recordings.
 - Save vocabulary with meanings, reading context, source, page and learned status; organize custom lists and import and export backups.
 - Study Word Smart, Barron's, Magoosh, Kaplan, Powerscore, SparkNotes, Manhattan and GregMat lists.
 - A home learning hub with word of the day, due reviews, study ahead and SM-2/Leitner scheduling.
 - Six activities: **flashcards, meaning quiz, word quiz, spelling, word scramble and matching pairs**.
+- Resize word and answer panels with a divider or keyboard controls, and replay the guide whenever needed.
 
 ### ✍️ Pen and presentation tools
 

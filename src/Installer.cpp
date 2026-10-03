@@ -824,6 +824,17 @@ static void RestoreInstallCopyFiles(Str installDir) {
 // Extract binaries and known public runtime assets, never arbitrary manual paths.
 static bool IsInstallerPayload(Str name) {
     static const Str kRuntimeFiles[] = {
+        StrL("dictionaries/b1100.wmvocab.json.gz"),
+        StrL("dictionaries/b333.wmvocab.json.gz"),
+        StrL("dictionaries/b800.wmvocab.json.gz"),
+        StrL("dictionaries/gm1100.wmvocab.json.gz"),
+        StrL("dictionaries/k900.wmvocab.json.gz"),
+        StrL("dictionaries/mg1000.wmvocab.json.gz"),
+        StrL("dictionaries/mp1000.wmvocab.json.gz"),
+        StrL("dictionaries/p700.wmvocab.json.gz"),
+        StrL("dictionaries/sn1000.wmvocab.json.gz"),
+        StrL("dictionaries/ws1.wmvocab.json.gz"),
+        StrL("dictionaries/ws2.wmvocab.json.gz"),
         StrL("dictionaries/wordnet-en/adj.exc"),
         StrL("dictionaries/wordnet-en/adv.exc"),
         StrL("dictionaries/wordnet-en/data.adj"),

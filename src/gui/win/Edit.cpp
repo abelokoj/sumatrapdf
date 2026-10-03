@@ -3,6 +3,9 @@
 
 #include "base/Base.h"
 #include "base/AutoWin.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/Win.h"
 #include "base/UITask.h"
 #include "gui/Dpi.h"
@@ -186,6 +189,98 @@ void Edit::SetMaxWidthChars(int nChars) {
     maxDx = EditWidthForChars(font, nChars);
 }
 
+// The available container wins over the minimum, including at large text/DPI sizes.
+static int FitEditWidth(int content, int padding, int minimum, int available) {
+    i64 preferred = std::max((i64)std::max(content, 0) + std::max(padding, 0), (i64)std::max(minimum, 0));
+    i64 cap = available > 0 ? available : INT_MAX;
+    return (int)std::min(preferred, cap);
+}
+
+int EditPreferredWidth(HWND hwnd, Str sample, int minWidth, int availableWidth) {
+    if (!hwnd) return FitEditWidth(0, 0, minWidth, availableWidth);
+    if (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_MULTILINE) return HwndWindowRect(hwnd).dx;
+    HDC dc = GetDC(hwnd);
+    if (!dc) return FitEditWidth(0, 0, minWidth, availableWidth);
+    Size measured;
+    {
+        HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+        if (!font) font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        AutoRestoreFont selectFont(dc, font);
+        measured = HdcGetTextExtentPoint32(dc, sample);
+    }
+    ReleaseDC(hwnd, dc);
+    DWORD margins = (DWORD)SendMessageW(hwnd, EM_GETMARGINS, 0, 0);
+    Rect wr = HwndWindowRect(hwnd), cr = HwndClientRect(hwnd);
+    int padding = (int)LOWORD(margins) + (int)HIWORD(margins) + std::max(0, wr.dx - cr.dx);
+    int caretSpace = DpiScaleByDpi(DpiGetForHwnd(hwnd), 2);
+    return FitEditWidth(measured.dx, padding + caretSpace, minWidth, availableWidth);
+}
+
+int Edit::GetPreferredWidth(Str sample, int minWidth, int availableWidth) {
+    return EditPreferredWidth(hwnd, sample, minWidth, availableWidth);
+}
+
+void EditSetDefaultMargins(HWND hwnd) {
+    if (!hwnd || (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_MULTILINE)) return;
+    int inset = DpiScaleByDpi(DpiGetForHwnd(hwnd), 4);
+    HDC dc = GetDC(hwnd);
+    if (dc) {
+        {
+            HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+            if (!font) font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            AutoRestoreFont selectFont(dc, font);
+            TEXTMETRICW metrics{};
+            if (GetTextMetricsW(dc, &metrics)) inset = std::max(inset, (int)((metrics.tmAveCharWidth + 1) / 2));
+        }
+        ReleaseDC(hwnd, dc);
+    }
+    EditSetMargins(hwnd, inset, inset);
+}
+
+#if IS_DEBUG
+void EditSizing_UnitTests() {
+    utassert(FitEditWidth(24, 16, 80, 240) == 80);
+    utassert(FitEditWidth(200, 16, 80, 240) == 216);
+    utassert(FitEditWidth(800, 16, 80, 240) == 240);
+    utassert(FitEditWidth(200, 16, 120, 60) == 60);
+    utassert(FitEditWidth(400, 32, 160, 480) == 432);
+    utassert(FitEditWidth(INT_MAX, 16, 80, 240) == 240);
+    utassert(FitEditWidth(0, 16, 80, 0) == 80);
+    HWND edit = CreateWindowExW(0, WC_EDITW, L"12345", WS_POPUP | ES_AUTOHSCROLL, 0, 0, 200, 40, nullptr, nullptr,
+                                GetModuleHandleW(nullptr), nullptr);
+    utassert(edit != nullptr);
+    if (!edit) return;
+    LOGFONTW descriptor{};
+    descriptor.lfHeight = -12;
+    HFONT smallFont = CreateFontIndirectW(&descriptor);
+    descriptor.lfHeight = -36;
+    HFONT largeFont = CreateFontIndirectW(&descriptor);
+    defer {
+        DestroyWindow(edit);
+        DeleteObject(smallFont);
+        DeleteObject(largeFont);
+    };
+    utassert(smallFont && largeFont);
+    if (!smallFont || !largeFont) return;
+    SendMessageW(edit, WM_SETFONT, (WPARAM)smallFont, FALSE);
+    EditSetDefaultMargins(edit);
+    int smallWidth = EditPreferredWidth(edit, StrL("888888"), 1, 1000);
+    SendMessageW(edit, WM_SETFONT, (WPARAM)largeFont, FALSE);
+    EditSetDefaultMargins(edit);
+    EditSelectText(edit, 1, 3);
+    Rect before = HwndWindowRect(edit);
+    int largeWidth = EditPreferredWidth(edit, StrL("888888"), 1, 1000);
+    utassert(largeWidth > smallWidth);
+    utassert(EditPreferredWidth(edit, StrL("888888"), 120, 60) == 60);
+    int start = 0, end = 0;
+    EditGetSelection(edit, start, end);
+    utassert(start == 1 && end == 3);
+    utassert(str::Eq(HwndGetTextTemp(edit), StrL("12345")));
+    Rect after = HwndWindowRect(edit);
+    utassert(before.x == after.x && before.y == after.y && before.dx == after.dx && before.dy == after.dy);
+}
+#endif
+
 void Edit::SetIdealWidthFromText(Str s, int extraPx) {
     if (!hwnd || len(s) == 0) {
         return;
@@ -259,11 +354,12 @@ HWND Edit::Create(const CreateArgs& args) {
     if (args.textPadding > 0) {
         textPadding = DpiScale(args.textPadding);
     }
+    automaticMargins = !args.isMultiLine && args.marginLeft == 0 && args.marginRight == 0;
     if (args.marginLeft || args.marginRight) {
         EditSetMargins(hwnd, args.marginLeft, args.marginRight);
     }
-    SizeToIdealSize(this);
     ApplyTextPadding();
+    SizeToIdealSize(this);
 
     if (createdWithBottomBorder || createdWithFrame || centerTextVert) {
         // apply the NC strip from WM_NCCALCSIZE (frame and/or vertical centering)
@@ -284,9 +380,12 @@ HWND Edit::Create(const CreateArgs& args) {
 // its formatting rectangle to the full client area on every resize, so this has
 // to be re-applied after each WM_SIZE. Ignored by single-line edit controls.
 void Edit::ApplyTextPadding() {
-    if (!hwnd || textPadding <= 0) {
+    if (!hwnd) return;
+    if (automaticMargins) {
+        EditSetDefaultMargins(hwnd);
         return;
     }
+    if (textPadding <= 0) return;
     RECT rc;
     GetClientRect(hwnd, &rc);
     InflateRect(&rc, -textPadding, -textPadding);
@@ -320,6 +419,14 @@ void Edit::WndProc(ControlBase::WndProcEvent* ev) {
     WPARAM wp = ev->wparam;
     LPARAM lp = ev->lparam;
     switch (msg) {
+        case WM_SETFONT: {
+            LRESULT res = WndProcDefault(hwnd, msg, wp, lp);
+            ApplyTextPadding();
+            ev->result = res;
+            ev->didHandle = true;
+            return;
+        }
+
         case WM_SIZE: {
             LRESULT res = WndProcDefault(hwnd, msg, wp, lp);
             ApplyTextPadding();

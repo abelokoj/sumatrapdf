@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -1433,6 +1433,7 @@
     <ClInclude Include="..\src\CommandPalette.h" />
     <ClInclude Include="..\src\Commands.h" />
     <ClInclude Include="..\src\DarkMode.h" />
+    <ClInclude Include="..\src\DictionarySpeech.h" />
     <ClInclude Include="..\src\DisplayMode.h" />
     <ClInclude Include="..\src\DisplayModel.h" />
     <ClInclude Include="..\src\DocController.h" />
@@ -1446,6 +1447,7 @@
     <ClInclude Include="..\src\EngineBase.h" />
     <ClInclude Include="..\src\EngineMupdf.h" />
     <ClInclude Include="..\src\EnhancedIcons.h" />
+    <ClInclude Include="..\src\EnhancedUpdate.h" />
     <ClInclude Include="..\src\EutlTrust.h" />
     <ClInclude Include="..\src\ExifDump.h" />
     <ClInclude Include="..\src\ExplorerQuickLook.h" />
@@ -1469,6 +1471,7 @@
     <ClInclude Include="..\src\ImageSaveCropResize.h" />
     <ClInclude Include="..\src\Installer.h" />
     <ClInclude Include="..\src\JxlReader.h" />
+    <ClInclude Include="..\src\KaikkiDictionary.h" />
     <ClInclude Include="..\src\KeyboardHelp.h" />
     <ClInclude Include="..\src\LinkFollow.h" />
     <ClInclude Include="..\src\LitDoc.h" />
@@ -1512,9 +1515,11 @@
     <ClInclude Include="..\src\SelectionToolbar.h" />
     <ClInclude Include="..\src\SelectionTranslate.h" />
     <ClInclude Include="..\src\Settings.h" />
+    <ClInclude Include="..\src\ShellProviderRegistry.h" />
     <ClInclude Include="..\src\ShortcutParse.h" />
     <ClInclude Include="..\src\SimpleBrowserWindow.h" />
     <ClInclude Include="..\src\StressTesting.h" />
+    <ClInclude Include="..\src\StudyExport.h" />
     <ClInclude Include="..\src\SumatraControl.h" />
     <ClInclude Include="..\src\SumatraDialogs.h" />
     <ClInclude Include="..\src\SumatraLog.h" />
@@ -1534,9 +1539,6 @@
     <ClInclude Include="..\src\Version.h" />
     <ClInclude Include="..\src\Vocabulary.h" />
     <ClInclude Include="..\src\VocabularyDialog.h" />
-    <ClInclude Include="..\src\StudyExport.h" />
-    <ClInclude Include="..\src\EnhancedUpdate.h" />
-    <ClInclude Include="..\src\ShellProviderRegistry.h" />
     <ClInclude Include="..\src\WebpReader.h" />
     <ClInclude Include="..\src\WindowTab.h" />
     <ClInclude Include="..\src\base\Archive.h" />
@@ -1644,6 +1646,7 @@
     <ClCompile Include="..\src\Commands.cpp" />
     <ClCompile Include="..\src\CustomZoomDialog.cpp" />
     <ClCompile Include="..\src\DarkMode.cpp" />
+    <ClCompile Include="..\src\DictionarySpeech.cpp" />
     <ClCompile Include="..\src\DisplayMode.cpp" />
     <ClCompile Include="..\src\DisplayModel.cpp" />
     <ClCompile Include="..\src\DocController.cpp" />
@@ -1669,6 +1672,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\src\EnginePs.cpp" />
+    <ClCompile Include="..\src\EnhancedUpdate.cpp" />
     <ClCompile Include="..\src\EutlTrust.cpp" />
     <ClCompile Include="..\src\ExifDump.cpp" />
     <ClCompile Include="..\src\ExplorerQuickLook.cpp" />
@@ -1697,6 +1701,7 @@
     <ClCompile Include="..\src\InstallerCommon.cpp" />
     <ClCompile Include="..\src\InverseSearchDialog.cpp" />
     <ClCompile Include="..\src\JxlReader.cpp" />
+    <ClCompile Include="..\src\KaikkiDictionary.cpp" />
     <ClCompile Include="..\src\KeyboardHelp.cpp" />
     <ClCompile Include="..\src\LinkFollow.cpp" />
     <ClCompile Include="..\src\LitDoc.cpp" />
@@ -1765,6 +1770,7 @@
     <ClCompile Include="..\src\SignDocumentDialog.cpp" />
     <ClCompile Include="..\src\SimpleBrowserWindow.cpp" />
     <ClCompile Include="..\src\StressTesting.cpp" />
+    <ClCompile Include="..\src\StudyExport.cpp" />
     <ClCompile Include="..\src\SumatraConfig.cpp" />
     <ClCompile Include="..\src\SumatraControl.cpp" />
     <ClCompile Include="..\src\SumatraDialogs.cpp" />
@@ -1823,8 +1829,6 @@
     <ClCompile Include="..\src\UpdateCheck.cpp" />
     <ClCompile Include="..\src\Vocabulary.cpp" />
     <ClCompile Include="..\src\VocabularyDialog.cpp" />
-    <ClCompile Include="..\src\StudyExport.cpp" />
-    <ClCompile Include="..\src\EnhancedUpdate.cpp" />
     <ClCompile Include="..\src\WebpReader.cpp" />
     <ClCompile Include="..\src\WindowTab.cpp" />
     <ClCompile Include="..\src\base\Archive.cpp">

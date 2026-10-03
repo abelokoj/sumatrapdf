@@ -31,6 +31,7 @@
 #include "SvgIcons.h"
 #include "SearchAndDDE.h"
 #include "FindBar.h"
+#include "Toolbar.h"
 #include "FilterHighlightDraw.h"
 #include "Translations.h"
 #include "Theme.h"
@@ -189,6 +190,7 @@ struct FindWindowWnd : WindowBase {
     void UpdateTheme() override;
     void ApplyDarkMode() override;
     void UpdatePagesLabel();
+    int PageRangeWidth(int dpi);
 
     void OnTextChanged();
     void OnHistoryCommitted();
@@ -256,7 +258,7 @@ void FindWindowWnd::UpdateButtonIcons(int dpi) {
     if (dpi <= 0) {
         dpi = GetDpi();
     }
-    int isz = RoundUp(UiScalePxForDpi(dpi, 16), 4);
+    int isz = ToolbarIconSize(dpi);
     for (int i = 0; i < 5; i++) {
         if (btns[i]) {
             btns[i]->pixmap = GetCachedPixmapForSvg(Str(icons[i]), isz, isz);
@@ -275,7 +277,7 @@ static void FindWindowButtonClicked(FindWindowWnd* w, VirtMouseEvent* ev) {
 void FindWindowWnd::CreateButtons() {
     static const int cmds[5] = {CmdFindPrev, CmdFindNext, CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
                                 kFindWinPinCmdId};
-    int pad = UiScalePx(4);
+    int pad = UiScalePxForDpi(GetDpi(), 4);
     for (int i = 0; i < 5; i++) {
         auto* b = new VirtIconButton();
         b->id = cmds[i];
@@ -330,16 +332,18 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
     SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, (LONG_PTR)win->hwndFrame);
     SetColors(colTxt, colBg);
     DarkModeApplyToTitleBar(hwnd);
+    PlatformFont* platformFont = GetAppFontForDpi(GetDpi());
 
     {
         DropDown::CreateArgs args;
         args.parent = hwnd;
-        args.font = GetAppFont();
+        args.font = platformFont;
         args.isRtl = IsUIRtl();
         args.isEditable = true;
         edit = new DropDown();
         edit->SetColors(colTxt, colBg);
         edit->Create(args);
+        ApplyFindEditScale(edit, GetDpi());
         CbSetCueBanner(edit, Tr("Find"));
         edit->onTextChanged = MkMethod0<FindWindowWnd, &FindWindowWnd::OnTextChanged>(this);
         edit->onCloseUp = MkMethod0<FindWindowWnd, &FindWindowWnd::OnHistoryCommitted>(this);
@@ -352,14 +356,13 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
         args.isMultiLine = false;
         args.withBorder = true;
         args.cueText = StrL("e.g. 3,4-6,18-");
+        args.font = platformFont;
         args.isRtl = IsUIRtl();
         editPages = new Edit();
         editPages->SetColors(colTxt, colBg);
         editPages->Create(args);
         editPages->onTextChanged = MkMethod0<FindWindowWnd, &FindWindowWnd::OnTextChanged>(this);
     }
-
-    PlatformFont* platformFont = GetAppFont();
 
     pagesLabel = NewVirtText({
         .font = platformFont,
@@ -394,14 +397,15 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
 }
 
 void FindWindowWnd::BuildLayout() {
-    int pad = UiScalePx(kFindWinPadding);
-    int gap = UiScalePx(kFindWinGap);
+    int dpi = GetDpi();
+    int pad = UiScalePxForDpi(dpi, kFindWinPadding);
+    int gap = UiScalePxForDpi(dpi, kFindWinGap);
     // cap preferred width at the min so Wrap decides the break from the min
     // edit width, not the typed text (a long query would otherwise always wrap)
-    int minEditDx = UiScalePx(kFindWinMinEditDx);
+    int minEditDx = UiScalePxForDpi(dpi, kFindWinMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
-    int pagesDx = UiScalePx(160);
+    int pagesDx = PageRangeWidth(dpi);
     editPages->idealDx = pagesDx;
     editPages->maxDx = pagesDx;
 
@@ -444,7 +448,7 @@ void FindWindowWnd::BuildLayout() {
 
     rootPadding = new Padding(vbox, Insets{pad, pad, pad, pad});
     layout = rootPadding;
-    layoutDpi = DpiGet();
+    layoutDpi = dpi;
 }
 
 void FindWindowWnd::UpdateDpi(int dpi) {
@@ -459,7 +463,7 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     }
     int oldCharWidth = status->font->averageCharWidth;
     PlatformFont* appFont = GetAppFontForDpi(dpi);
-    edit->SetFont(appFont);
+    ApplyFindEditScale(edit, dpi);
     editPages->SetFont(appFont);
     pagesLabel->font = appFont;
     status->font = appFont;
@@ -471,7 +475,7 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     int minEditDx = UiScalePxForDpi(dpi, kFindWinMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
-    int pagesDx = UiScalePxForDpi(dpi, 160);
+    int pagesDx = PageRangeWidth(dpi);
     editPages->idealDx = pagesDx;
     editPages->maxDx = pagesDx;
     pagesBox->dx = pagesDx;
@@ -591,7 +595,7 @@ void FindWindowWnd::DrawResultItem(VirtListBox::DrawItemEvent* ev) {
     }
     gfx->FillRect(rc, colBg);
 
-    int pad = UiScalePx(6);
+    int pad = UiScalePxForDpi(layoutDpi, 6);
     Rect rcText = rc;
     rcText.x += pad;
     rcText.dx -= 2 * pad;
@@ -601,10 +605,10 @@ void FindWindowWnd::DrawResultItem(VirtListBox::DrawItemEvent* ev) {
     // instead of fighting a per-row measured width (#5692 / #5796).
     const FindMatch& fm = win->findMatches[ev->itemIndex];
     TempStr pageStr = fmt("%s", win->ctrl->GetPageLabeTemp(fm.startPage));
-    int pageGap = UiScalePx(10);
-    int pageColDx = UiScalePx(40);
+    int pageGap = UiScalePxForDpi(layoutDpi, 10);
+    int pageColDx = UiScalePxForDpi(layoutDpi, 40);
     Size pageSize = gfx->MeasureText(pageStr, lb->font);
-    pageColDx = std::max(pageSize.dx + UiScalePx(4), pageColDx);
+    pageColDx = std::max(pageSize.dx + UiScalePxForDpi(layoutDpi, 4), pageColDx);
     Rect rcPage = rcText;
     rcPage.x = std::max(rcText.x, rcText.x + rcText.dx - pageColDx);
     rcPage.dx = rcText.x + rcText.dx - rcPage.x;
@@ -794,6 +798,24 @@ void FindWindowWnd::FindNextOrPrev(bool forward) {
     }
 }
 
+int FindWindowWnd::PageRangeWidth(int dpi) {
+    int pages = win && win->ctrl ? std::max(win->ctrl->PageCount(), 1) : 1;
+    int digits = 1;
+    while (pages >= 10) {
+        pages /= 10;
+        digits++;
+    }
+    str::Builder sample;
+    for (int part = 0; part < 3; part++) {
+        if (part) sample.AppendChar(part == 1 ? ',' : '-');
+        for (int digit = 0; digit < digits; digit++) sample.AppendChar('8');
+    }
+    int minimum = UiScalePxForDpi(dpi, 160);
+    int available = UiScalePxForDpi(dpi, 240);
+    // Reserve for the document's range syntax, not the live text being typed.
+    return editPages->GetPreferredWidth(ToStrTemp(sample), minimum, available);
+}
+
 void FindWindowWnd::UpdatePagesLabel() {
     int n = 1;
     if (win && win->ctrl) {
@@ -801,6 +823,11 @@ void FindWindowWnd::UpdatePagesLabel() {
     }
     if (pagesLabel) {
         pagesLabel->SetText(fmt(Tr("Limit to pages 1-%d:").s, n));
+    }
+    if (pagesBox && editPages) {
+        int width = PageRangeWidth(layoutDpi);
+        pagesBox->dx = width;
+        editPages->idealDx = editPages->maxDx = width;
     }
 }
 
@@ -896,9 +923,10 @@ void FindWindowWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
         mmi->ptMinTrackSize.y = clientMinDy + (wr.dy - cr.dy);
         return;
     }
-    int pad = UiScalePx(kFindWinPadding);
-    mmi->ptMinTrackSize.x = (2 * pad) + UiScalePx(160);
-    mmi->ptMinTrackSize.y = (2 * pad) + UiScalePx(80);
+    int dpi = GetDpi();
+    int pad = UiScalePxForDpi(dpi, kFindWinPadding);
+    mmi->ptMinTrackSize.x = (2 * pad) + UiScalePxForDpi(dpi, 160);
+    mmi->ptMinTrackSize.y = (2 * pad) + UiScalePxForDpi(dpi, 80);
 }
 
 void FindWindowWnd::OnClose(WindowBase::CloseEvent* /*ev*/) {

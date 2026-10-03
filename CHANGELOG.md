@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Made the word and answer divider directly draggable, removed the three panel-size buttons, and retained arrow-key, Home and context-menu resizing.
+- Placed the vocabulary selector, Save word, Mark learned and Open learning hub in one compact dictionary footer row, with wrapping when space is limited.
+
+- Added optional Kaikki English and Simple English offline dictionaries, with download sizes shown before confirmation, progress and cancellation. Downloads are streamed to a disk index, retaining separate meanings and source attribution without loading the full dictionary into memory.
+
+- Preserved separate dictionary meanings, parts of speech, examples, phonetics and related words, with numbered definitions, paragraph breaks, bold headings and italic examples.
+- Added explicit online lookup through Wiktionary, Wiktionary REST and Free Dictionary API, with configurable source order. Offline lookup remains the default.
+- Bundled all eleven WMKeyboard vocabulary archives for offline lookup in installer and portable builds, retaining their attribution notices.
+- Added word pronunciation with installed Windows voices, voice selection, stop controls and optional online recordings.
+- Fixed guide navigation, added adjustable word and answer panels, and placed search beside Help / Start guide in dictionary and learning windows.
+- Added green installed-deck and learned-word marks, with partial-deck counts and accessible status labels.
+- Scaled expanded reader search fields, icons and hit targets with the interface settings and monitor DPI.
+
+- Stabilized dictionary and vocabulary scrolling with cached layouts, batched control movement, preserved reading positions and cached, wrapping answer rows.
+- Added content-fitting dictionary, practice and deck-name fields, compact expanding page and chapter fields, and shared font-aware native input sizing.
+- Added normalized Windows pointer samples with valid pressure, tilt and rotation, chronological pen history and pointer diagnostics; documented the annotation pipeline and remaining handwriting work.
+
 - Added circular search that expands horizontally, single-row reader and annotation toolbars with an overflow menu, and keyboard access to toolbar commands.
 - Persisted independent color, thickness and opacity for each pen type, including favorite-tool actions and restart restoration.
 - Added one overall interface scale in Appearance, proportional home-page typography and larger sidebar close targets.

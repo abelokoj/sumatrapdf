@@ -50,7 +50,7 @@ Rect ToolbarFindScreenRect(MainWindow*);
 bool FocusToolbar(MainWindow*, bool backwards = false);
 void TogglePdfAnnotationsToolbar(MainWindow*);
 void EnablePdfAnnotationsToolbar(MainWindow*);
-int ToolbarIconSize();
+int ToolbarIconSize(int dpi = 0);
 
 TempStr ToolbarButtonsResultTemp(int* exitCodeOut);
 

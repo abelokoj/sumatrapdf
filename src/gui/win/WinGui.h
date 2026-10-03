@@ -702,6 +702,9 @@ void EditSetNumbersOnly(Edit*, bool);
 void EditSetPasswordVisible(Edit*, bool);
 void EditSetFocus(Edit*);
 
+int EditPreferredWidth(HWND, Str sample, int minWidth, int availableWidth);
+void EditSetDefaultMargins(HWND);
+
 struct Edit : ControlBase {
     struct CreateArgs {
         HWND parent = nullptr;
@@ -770,6 +773,7 @@ struct Edit : ControlBase {
     int ncCenterTop = 0;
     bool selectAllOnFocus = false;
     bool delaySelectAll = false;
+    bool automaticMargins = false;
     // when set, shown instead of the edit's own I-beam (see SetCursorId)
     LPWSTR cursorId = nullptr;
 
@@ -788,6 +792,7 @@ struct Edit : ControlBase {
     void SetIdealWidthChars(int nChars);
     void SetMaxWidthChars(int nChars);
     void SetIdealWidthFromText(Str s, int extraPx = 0);
+    int GetPreferredWidth(Str sample, int minWidth, int availableWidth);
 
     int GetLeftTextMargin();
 

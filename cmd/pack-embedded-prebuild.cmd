@@ -80,6 +80,9 @@ if not exist "%STAGING%\dictionaries\wordnet-en\" mkdir "%STAGING%\dictionaries\
 for %%F in (adj.exc adv.exc data.adj data.adv data.noun data.verb LICENSE manifest.json noun.exc verb.exc) do (
   copy /y "%ROOT%\src\dictionaries\wordnet-en\%%F" "%STAGING%\dictionaries\wordnet-en\%%F" >nul || exit /b 1
 )
+for %%F in (b1100 b333 b800 gm1100 k900 mg1000 mp1000 p700 sn1000 ws1 ws2) do (
+  copy /y "%ROOT%\data\vocabulary\%%F.wmvocab.json.gz" "%STAGING%\dictionaries\%%F.wmvocab.json.gz" >nul || exit /b 1
+)
 if not exist "%STAGING%\docs\licenses\" mkdir "%STAGING%\docs\licenses"
 for %%F in (Manrope-OFL.txt PretendardStd-OFL.txt PublicSans-OFL.txt lucide-LICENSE.txt vocabulary-wordlists-MIT.txt vocabulary-pack-attributions.json) do (
   copy /y "%ROOT%\docs\licenses\%%F" "%STAGING%\docs\licenses\%%F" >nul || exit /b 1

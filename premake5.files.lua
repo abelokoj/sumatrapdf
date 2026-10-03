@@ -325,6 +325,8 @@ function sumatrapdf_files()
     "HangDetector.*",
     "HomePage.*",
     "OfflineDictionary.*",
+    "KaikkiDictionary.*",
+    "DictionarySpeech.*",
     "Vocabulary.*",
     "VocabularyDialog.*",
     "StudyExport.*",

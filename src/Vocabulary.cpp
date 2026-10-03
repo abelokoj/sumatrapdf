@@ -623,14 +623,15 @@ int VocabularyInstallDeck(Str id) {
     int added = 0;
     for (int i = 0; i < len(deck->words); i++) {
         Str word = deck->words[i];
-        Str definition = VocabularyBuiltinMeaning(word);
+        Str definition;
         Str dictionary = StrL("wmkeyboard-vocab-en");
         Vec<OfflineMeaning> meanings;
         Str error{};
-        if (!len(definition) && LookupOfflineWord(word, meanings, &error) && len(meanings)) {
-            definition = meanings[0].definition;
+        if (LookupOfflineWord(word, meanings, &error) && len(meanings)) {
+            definition = DictionaryMeaningText(meanings);
             dictionary = meanings[0].dictionaryId;
         }
+        if (!len(definition)) definition = DictionaryPlainText(VocabularyBuiltinMeaning(word));
         bool existed = FindWord(data->words, word, dictionary) != nullptr;
         if (len(definition) && VocabularyAdd(word, definition, dictionary, {}, {}, 0, id) && !existed) added++;
         FreeOfflineMeanings(meanings);
@@ -647,6 +648,62 @@ bool VocabularyExport(Str path) {
         str::Free(bytes);
     };
     return WriteAtomic(path, bytes);
+}
+static int CmpDeckWord(WStr a, WStr b) {
+    return CompareStringOrdinal(a.s, len(a), b.s, len(b), TRUE) - CSTR_EQUAL;
+}
+static void SortDeckWords(Vec<WStr>& words) {
+    VecSort(words, [](const WStr* a, const WStr* b) { return CmpDeckWord(*a, *b); });
+    int unique = 0;
+    for (WStr word : words) {
+        if (unique && CmpDeckWord(words[unique - 1], word) == 0) continue;
+        words[unique++] = word;
+    }
+    words.len = unique;
+}
+bool VocabularyDeckInstalled(Str id, int* count, int* total) {
+    if (count) *count = 0;
+    if (total) *total = 0;
+    if (!VocabularyLoad()) return false;
+    VocabularyDeck* deck = FindDeck(data->decks, id);
+    if (!deck) return false;
+    AutoArenaSavepoint scratch;
+    Vec<WStr> expected;
+    if (deck->builtin) {
+        StrVec split;
+        const StrVec* words = &deck->words;
+        if (!len(*words) && deck->builtinWords) {
+            Split(&split, Str(deck->builtinWords), StrL("\n"), true);
+            words = &split;
+        }
+        for (Str required : *words) {
+            Str word = CleanWord(required);
+            if (len(word)) VecAppend(expected, ToWStrTemp(word));
+        }
+        SortDeckWords(expected);
+    }
+    Vec<WStr> available;
+    for (VocabularyWord* word : data->words) {
+        if (!HasDeck(word, id) || !len(word->definition)) continue;
+        VecAppend(available, ToWStrTemp(word->word));
+    }
+    SortDeckWords(available);
+    int installed = len(available);
+    if (deck->builtin) {
+        installed = 0;
+        int required = 0, saved = 0;
+        // Sorted unique indices make membership counting linear and preserve Unicode case matching.
+        while (required < len(expected) && saved < len(available)) {
+            int comparison = CmpDeckWord(expected[required], available[saved]);
+            if (comparison == 0) installed++;
+            if (comparison <= 0) required++;
+            if (comparison >= 0) saved++;
+        }
+    }
+    int wanted = deck->builtin ? len(expected) : len(available);
+    if (count) *count = installed;
+    if (total) *total = wanted;
+    return wanted > 0 && installed >= wanted;
 }
 template <typename T>
 static void SwapLists(Vec<T>& a, Vec<T>& b) {
@@ -832,7 +889,68 @@ VocabularyWord* VocabularyWordOfDay(i64 now) {
 }
 
 #if IS_DEBUG
+static void DeckInstalledTests() {
+    VocabularyData isolated;
+    isolated.loaded = isolated.test = isolated.batch = true;
+    VocabularyData* saved = data;
+    data = &isolated;
+    defer {
+        data = saved;
+    };
+    auto* deck = new VocabularyDeck;
+    deck->id = str::Dup(StrL("status-test"));
+    deck->builtin = true;
+    deck->builtinWords = "cat\nCAT\ndog";
+    VecAppend(isolated.decks, deck);
+    int count = -1, total = -1;
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 0 && total == 2 && len(deck->words) == 0);
+    auto* cat = VocabularyAdd(StrL("cat"), StrL("A feline."), StrL("one"), {}, {}, 0, deck->id);
+    auto* duplicate = VocabularyAdd(StrL("CAT"), StrL("A feline."), StrL("two"), {}, {}, 0, deck->id);
+    utassert(cat && duplicate && cat != duplicate);
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 1 && total == 2);
+    utassert(VocabularyAdd(StrL("bird"), StrL("A bird."), {}, {}, {}, 0, deck->id));
+    auto* dog = VocabularyAdd(StrL("DOG"), StrL("A canine."), {}, {}, {}, 0, deck->id);
+    utassert(dog);
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 2 && total == 2);
+    utassert(VocabularyRemove(cat->id));
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 2 && total == 2);
+    utassert(VocabularyRemove(duplicate->id));
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 1 && total == 2);
+    deck->words.Append(StrL("dog"));
+    deck->words.Append(StrL("DOG"));
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 1 && total == 1);
+    utassert(VocabularyRemove(dog->id));
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 0 && total == 1);
+    utassert(!VocabularyDeckInstalled(StrL("missing"), &count, &total));
+    utassert(count == 0 && total == 0);
+    deck->words.Reset();
+    deck->words.Append(StrL(" \xc3\x89LAN "));
+    deck->words.Append(StrL("\xc3\xa9lan"));
+    auto* unicode = VocabularyAdd(StrL("\xc3\xa9lan"), {}, {}, {}, {}, 0, deck->id);
+    utassert(unicode);
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 0 && total == 1);
+    utassert(VocabularyAdd(StrL("\xc3\x89LAN"), StrL("Enthusiasm."), {}, {}, {}, 0, deck->id) == unicode);
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 1 && total == 1);
+    deck->builtin = false;
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 2 && total == 2);
+    utassert(VocabularyRemove(unicode->id));
+    auto* bird = isolated.words[0];
+    utassert(VocabularyRemove(bird->id));
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 0 && total == 0);
+}
 void Vocabulary_UnitTests() {
+    DeckInstalledTests();
     VocabularyData isolated;
     isolated.loaded = true;
     isolated.test = true;

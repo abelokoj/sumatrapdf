@@ -281,6 +281,11 @@ function printBinaries(dir: string, targets: Set<string>): void {
   if (existsSync(dictionarySource)) {
     cpSync(dictionarySource, join(dir, "dictionaries"), { recursive: true });
   }
+  for (const entry of readdirSync(join("data", "vocabulary"))) {
+    if (entry.endsWith(".wmvocab.json.gz")) {
+      cpSync(join("data", "vocabulary", entry), join(dir, "dictionaries", entry));
+    }
+  }
 
   const paths: string[] = [];
   const dynamicFiles = new Set([

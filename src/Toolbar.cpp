@@ -98,6 +98,15 @@ static bool FitToolbarGroups(const Vec<int>& widths, int available, int gap, int
     return true;
 }
 
+static int LocationEditWidth(int preferred, int minimum, int cap) {
+    return std::min(std::max(preferred, minimum), std::max(minimum, cap));
+}
+
+static int LocationEditCap(int available, int fixedDx, int reservedDx, int fieldCount) {
+    int budget = std::max(0, available - fixedDx - reservedDx);
+    return std::min(available / 4, budget / std::max(1, fieldCount));
+}
+
 #if IS_DEBUG
 void ToolbarLayout_UnitTests() {
     Vec<int> widths;
@@ -116,8 +125,72 @@ void ToolbarLayout_UnitTests() {
     VecAppend(widths, 100);
     utassert(!FitToolbarGroups(widths, 100, 6, 36, -1, visible));
     utassert(!visible[0] && visible[1]);
+
+    // Empty and one-digit labels stay compact; longer text grows until capped.
+    utassert(LocationEditWidth(0, 24, 100) == 24);
+    utassert(LocationEditWidth(18, 24, 100) == 24);
+    utassert(LocationEditWidth(46, 24, 100) == 46);
+    utassert(LocationEditWidth(140, 24, 100) == 100);
+    utassert(LocationEditWidth(140, 24, 12) == 24);
+    utassert(LocationEditWidth(92, 48, 60) == 60);
+
+    // Reserve the navigation group's labels/buttons and the overflow command.
+    utassert(LocationEditCap(600, 80, 36, 1) == 150);
+    utassert(LocationEditCap(200, 140, 36, 1) == 24);
+    utassert(LocationEditCap(200, 140, 36, 2) == 12);
+    utassert(LocationEditCap(100, 140, 36, 1) == 0);
+    utassert(LocationEditCap(1200, 160, 72, 1) == 300);
 }
 #endif
+
+struct ToolbarLocationEdit : Edit {
+    MainWindow* win = nullptr;
+    int preferredDx = 0;
+    int minimumDx = 0;
+    int widthCap = Inf;
+
+    int PreferredWidth() const { return LocationEditWidth(preferredDx, minimumDx, widthCap); }
+
+    bool MeasureWidth() {
+        int previous = PreferredWidth();
+        int dpi = win->frameDpi > 0 ? win->frameDpi : DpiGet();
+        int breathingRoom = UiScalePxForDpi(dpi, 8);
+        minimumDx = GetPreferredWidth(StrL("00"), 0, Inf) + breathingRoom;
+        preferredDx = GetPreferredWidth(GetTextTemp(), 0, Inf) + breathingRoom;
+        return previous != PreferredWidth();
+    }
+
+    void OnTextChanged() {
+        if (!MeasureWidth()) return;
+        auto* tb = win->toolbarVirt;
+        if (!tb || !tb->host->layout) return;
+        tb->host->Relayout();
+        tb->host->Invalidate(true);
+    }
+
+    Size GetIdealSize() override {
+        Size size = Edit::GetIdealSize();
+        size.dx = PreferredWidth();
+        return size;
+    }
+
+    void SetBounds(Rect bounds) override {
+        bool resizing = bounds.dx != lastBounds.dx && IsFocused();
+        int start = 0, end = 0;
+        if (resizing) EditGetSelection(this, start, end);
+        Edit::SetBounds(bounds);
+        if (!resizing) return;
+        int newStart = 0, newEnd = 0;
+        EditGetSelection(this, newStart, newEnd);
+        if (start != newStart || end != newEnd) EditSelectText(this, start, end);
+        SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
+    }
+};
+
+struct ToolbarLocationField {
+    ToolbarLocationEdit* edit = nullptr;
+    HBox* group = nullptr;
+};
 
 struct ToolbarHiddenLayout {
     ILayout* layout = nullptr;
@@ -133,6 +206,7 @@ enum class ToolbarLineKind {
 struct ToolbarLine : HBox {
     ToolbarVirt* tb = nullptr;
     Vec<ToolbarHiddenLayout> hidden;
+    Vec<ToolbarLocationField> locationFields;
     int brandIdx = -1;
     int findGroupIdx = -1;
     ToolbarLineKind lineKind;
@@ -173,6 +247,22 @@ struct ToolbarLine : HBox {
         return height;
     }
 
+    void SizeLocationFields(int available, int overflowDx) {
+        for (auto& field : locationFields) {
+            if (IsCollapsed(field.edit)) continue;
+            int fieldsDx = 0;
+            int count = 0;
+            for (auto& other : locationFields) {
+                if (other.group != field.group || IsCollapsed(other.edit)) continue;
+                fieldsDx += other.edit->PreferredWidth();
+                count++;
+            }
+            int fixedDx = field.group->MinIntrinsicWidth(0) - fieldsDx;
+            // Long labels share the remaining group budget, with room for other commands.
+            field.edit->widthCap = LocationEditCap(available, fixedDx, overflowDx + gap, count);
+        }
+    }
+
     Size Layout(Constraints bc) override {
         Restore();
         if (lineKind == ToolbarLineKind::Main && tb->findSlot) {
@@ -186,13 +276,14 @@ struct ToolbarLine : HBox {
         }
         auto* overflowButton = OverflowButton();
         overflowButton->SetVisibility(Visibility::Collapse);
+        int available = bc.HasBoundedWidth() ? bc.max.dx : Inf;
+        int overflowDx = overflowButton->MinIntrinsicWidth(0);
+        SizeLocationFields(available, overflowDx);
         Vec<int> widths;
         for (int i = 0; i < len(children) - 1; i++) {
             auto* child = children[i].layout;
             VecAppend(widths, IsCollapsed(child) ? 0 : child->MinIntrinsicWidth(0));
         }
-        int available = bc.HasBoundedWidth() ? bc.max.dx : Inf;
-        int overflowDx = overflowButton->MinIntrinsicWidth(0);
         if (lineKind == ToolbarLineKind::Main && tb->findExpanded && findGroupIdx >= 0 && findGroupIdx < len(widths)) {
             int withoutFind = widths[findGroupIdx] - tb->findSlot->dx;
             int searchDx = std::min(tb->findPreferredWidth,
@@ -1467,8 +1558,9 @@ static void PopulateCustomToolbarButtons() {
     }
 }
 
-int ToolbarIconSize() {
-    return RoundUp(UiScalePx(gSettings->toolbarSize), 4);
+int ToolbarIconSize(int dpi) {
+    if (dpi <= 0) dpi = DpiGet();
+    return RoundUp(UiScalePxForDpi(dpi, gSettings->toolbarSize), 4);
 }
 
 static void ApplyToolbarItemColors(VirtCtrl* w) {
@@ -4301,6 +4393,7 @@ static void BuildToolbarLayout(MainWindow* win) {
             chapterEdit->SetVisibility(Visibility::Collapse);
             win->chapterEdit = chapterEdit;
             group->AddChild(chapterEdit);
+            VecAppend(mainRow->locationFields, ToolbarLocationField{(ToolbarLocationEdit*)chapterEdit, group});
 
             auto* chapterTotal = new VirtText(StrL(" "), tb->platformFont);
             chapterTotal->isRtl = mainRow->rtl;
@@ -4324,6 +4417,7 @@ static void BuildToolbarLayout(MainWindow* win) {
             Edit* pageEdit = ToolbarCreatePageEdit(win, tb->platformFont, tb->iconSize);
             win->pageEdit = pageEdit;
             group->AddChild(pageEdit);
+            VecAppend(mainRow->locationFields, ToolbarLocationField{(ToolbarLocationEdit*)pageEdit, group});
 
             auto* total = new VirtText(StrL(" "), tb->platformFont);
             total->isRtl = mainRow->rtl;
@@ -4740,18 +4834,16 @@ static Edit* ToolbarCreateLocationEdit(MainWindow* win, PlatformFont* font, int 
     args.centerTextVert = true;
     args.marginLeft = PageEditPadL();
     args.marginRight = PageEditPadR();
-    auto* e = new Edit();
+    auto* e = new ToolbarLocationEdit();
+    e->win = win;
     e->SetColors(TbTextColor(), ThemeWindowControlBackgroundColor());
     e->Create(args);
     // the toolbar tree arranges itself right-to-left (HBox.rtl), so its bounds
     // are offsets from the physical left; don't let the RTL host mirror them
     e->mapRtlX = true;
-    // #5949: fixed width, or the box would resize to every page label while
-    // scrolling a document with named pages, shifting the icons next to it.
-    // ideal == max pins GetIdealSize() to this width
-    e->SetIdealWidthChars(6);
-    e->SetMaxWidthChars(6);
     e->idealDy = std::max(iconDy, PlatformFontLineHeight(font) + UiScalePx(4));
+    e->MeasureWidth();
+    e->onTextChanged = MkMethod0<ToolbarLocationEdit, &ToolbarLocationEdit::OnTextChanged>(e);
     e->onChar = MkFunc1(OnLocationEditChar, win);
     return e;
 }

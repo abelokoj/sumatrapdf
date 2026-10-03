@@ -6,21 +6,22 @@
 #include "base/UITask.h"
 #include "gui/Dpi.h"
 #include "gui/UIModels.h"
+#include "gui/Layout.h"
 #include "gui/PlatformFont.h"
 
-// The two native modeless-window helpers do not require the full control hierarchy.
-HWND GetCurrentModelessDialog();
-
-void SetCurrentModelessDialog(HWND);
+#include "gui/win/WinGui.h"
 #include <commdlg.h>
+#include <richedit.h>
 #include "Settings.h"
 #include "AppSettings.h"
 #include "MainWindow.h"
 #include "SumatraPDF.h"
 #include "Theme.h"
 #include "Translations.h"
+#include "KaikkiDictionary.h"
 #include "OfflineDictionary.h"
 #include "Vocabulary.h"
+#include "DictionarySpeech.h"
 #include "VocabularyDialog.h"
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
@@ -69,15 +70,58 @@ enum LearningControl {
     lcGuideSkip,
     lcGuideAction,
     lcFeedback,
+    lcSplit,
+    lcPronounce,
+    lcStopVoice,
+    lcVoice,
+    lcRecording,
+    lcRecordingUk,
+    lcLookupSource,
+    lcSourcesToggle,
+    lcOnlineFirst,
+    lcOnlineSecond,
+    lcOnlineThird,
+    lcSense,
+    lcPackInfo,
+    lcCancelDownload,
     lcLast
+};
+enum class DetailStyle {
+    Body,
+    Heading,
+    Section,
+    Example,
+    Muted,
+    WordLink
+};
+struct DetailRun {
+    int start, length;
+    DetailStyle style;
+    Str word;
+};
+struct LearningPlacement {
+    int id;
+    RECT bounds;
 };
 struct LearningWindow {
     HWND hwnd = nullptr;
     MainWindow* owner = nullptr;
     bool dictionary = false, practice = false, revealed = false, checked = false;
     bool busy = false, updating = false, ready = false, lookupBusy = false;
-    int scrollY = 0, contentHeight = 0;
+    int scrollY = 0, contentHeight = 0, wheelRemainder = 0;
+    bool layingOut = false, layoutPending = false;
+    Vec<LearningPlacement> placements;
+    RECT appliedBounds[lcLast]{};
+    bool boundsValid[lcLast]{};
     bool guideVisible = false;
+    bool sourcesVisible = false, splitting = false;
+    int promptShare = 30, splitHeight = 0;
+    int splitPointerY = 0, splitPromptHeight = 0, splitStartShare = 30;
+    int onlineOrder[3]{1, 2, 3};
+    Vec<bool> deckInstalled;
+    Vec<DetailRun> detailRuns;
+    DictionarySpeech* speech = nullptr;
+    HANDLE cancelDownload = nullptr;
     int guideStep = 0, feedbackKind = 0;
     ULONGLONG feedbackStart = 0;
     HICON smallIcon = nullptr, largeIcon = nullptr;
@@ -92,11 +136,14 @@ struct LearningWindow {
     StrVec wordIds, deckIds, session, pairWords, pairDefinitions;
     VocabularyQuestion* question = nullptr;
     ~LearningWindow() {
+        if (cancelDownload) SetEvent(cancelDownload);
         str::Free(context);
         str::Free(source);
         FreeOfflineMeanings(meanings);
         FreeDictionaryCatalog(packs);
         delete question;
+        delete speech;
+        for (auto& run : detailRuns) str::Free(run.word);
         DeleteObject(titleFont);
         DestroyIcon(smallIcon);
         DestroyIcon(largeIcon);
@@ -111,7 +158,7 @@ static HWND Control(LearningWindow* w, int id) {
     return w->controls[id];
 }
 
-static void LayoutLearning(LearningWindow* w);
+static void LayoutLearning(LearningWindow* w, bool keepAnchor = false);
 
 constexpr int kGuideSteps = 9;
 constexpr UINT_PTR kFeedbackTimer = 1;
@@ -130,11 +177,13 @@ static const GuideStep kGuide[] = {
      true, lcQuery, "Go to lookup"},
     {"Choose a dictionary",
      "Choose a pack to inspect its language, source and license. WordNet is bundled. Download adds another pack only "
-     "when you request it; Import accepts supported dictionary files. Lookups use installed packs offline.",
+     "when you request it; Import accepts supported dictionary files. Offline lookup uses installed packs. For online "
+     "lookup, choose a source; Online sources lets you order or disable providers. Nothing is sent as you type.",
      true, lcPack, "Choose pack"},
     {"Read the meanings",
      "Look up your word, then read the definitions and their sources. If no meaning is found, check the spelling or "
-     "install a pack for that language. Save word keeps the first displayed definition.",
+     "install a pack for that language. Meanings are numbered, with examples and related words when available. Choose "
+     "a meaning to save. Pronounce uses a Windows voice offline; recording buttons play available online audio.",
      true, lcDetails, "Read results"},
     {"Save with context",
      "Choose a deck, then Save word to keep the definition, selected PDF context and source page. Mark learned saves "
@@ -153,7 +202,8 @@ static const GuideStep kGuide[] = {
     {"Practice and grade",
      "Choose Flashcards, Meaning quiz, Word quiz, Spelling, Word scramble or Matching pairs, then Practice. Quizzes "
      "use Check answer and Next word. Flashcards use Show answer, then Again / Hard / Good / Easy. Matching removes "
-     "correct pairs. Feedback explains the result without relying on color.",
+     "correct pairs. Feedback explains the result without relying on color. Drag the divider between the word and "
+     "answers or focus it and use Up / Down. Home resets the panels. Right-click the divider for sizing actions.",
      false, lcActivity, "Choose practice mode"},
     {"Review due words",
      "The library status shows how many words are due. Practice reviews due words first and also includes words due "
@@ -199,10 +249,82 @@ static void SetLearningIcons(LearningWindow* w);
 static int LearningIconSize();
 static bool HasLearningGlyph(int id);
 static void FitPackDropdown(LearningWindow* w);
+static void DrawGreenCheck(HDC dc, RECT rc, Color background);
+static void FormatDetails(LearningWindow* w);
+static void ShowMeanings(LearningWindow* w);
+static void LookupWord(LearningWindow* w);
+static void RefreshVoices(LearningWindow* w);
+constexpr UINT kSpeechMessage = WM_APP + 0x541;
+static TempStr Read(LearningWindow* w, int id);
+static int Selected(LearningWindow* w, int id);
+static void AddChoice(LearningWindow* w, int id, Str text);
+static VocabularyWord* SelectedWord(LearningWindow* w);
+
+static bool IsRichDetails(HWND child) {
+    WCHAR klass[32]{};
+    GetClassNameW(child, klass, dimof(klass));
+    return _wcsicmp(klass, L"RICHEDIT50W") == 0;
+}
+static TempStr LearningPrefsPath() {
+    return path::JoinTemp(path::GetDirTemp(VocabularyStorePathTemp()), StrL("SumatraPDF-learning-layout.txt"));
+}
+static void LoadLearningPrefs(LearningWindow* w) {
+    if (!CanAccessDisk() || gDontSaveSettings) return;
+    Str bytes = file::ReadFile(LearningPrefsPath());
+    defer {
+        str::Free(bytes);
+    };
+    int share, first, second, third;
+    if (len(bytes) > 0 && len(bytes) <= 64 &&
+        sscanf_s(CStrTemp(bytes), "%d %d %d %d", &share, &first, &second, &third) == 4 && share >= 10 && share <= 80 &&
+        first >= 0 && first <= 3 && second >= 0 && second <= 3 && third >= 0 && third <= 3) {
+        w->promptShare = share;
+        w->onlineOrder[0] = first;
+        w->onlineOrder[1] = second;
+        w->onlineOrder[2] = third;
+    }
+}
+static void SaveLearningPrefs(LearningWindow* w) {
+    if (!HasPermission(Perm::SavePreferences) || !CanAccessDisk() || gDontSaveSettings) return;
+    TempStr pending = fmt("%s.tmp", LearningPrefsPath());
+    if (file::WriteFile(pending,
+                        fmt("%d %d %d %d", w->promptShare, w->onlineOrder[0], w->onlineOrder[1], w->onlineOrder[2]))) {
+        if (!MoveFileExW(CWStrTemp(pending), CWStrTemp(LearningPrefsPath()),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            DeleteFileW(CWStrTemp(pending));
+    }
+}
+static void RefreshVoices(LearningWindow* w) {
+    if (!w->speech) return;
+    int selected = Selected(w, lcVoice);
+    StrVec names;
+    w->speech->GetVoiceNames(names);
+    bool updating = w->updating;
+    w->updating = true;
+    SendMessageW(Control(w, lcVoice), CB_RESETCONTENT, 0, 0);
+    for (Str name : names) AddChoice(w, lcVoice, name);
+    SendMessageW(Control(w, lcVoice), CB_SETCURSEL, std::clamp(selected, 0, std::max(0, len(names) - 1)), 0);
+    w->updating = updating;
+}
+static Str PronunciationWord(LearningWindow* w) {
+    if (w->dictionary) return Read(w, lcQuery);
+    if (w->practice && w->question) {
+        VocabularyWord* word = VocabularyFind(w->question->wordId);
+        return word ? word->word : Str{};
+    }
+    VocabularyWord* word = SelectedWord(w);
+    return word ? word->word : Str{};
+}
 
 static void Text(LearningWindow* w, int id, Str s) {
+    if (str::Eq(HwndGetTextTemp(Control(w, id)), s)) return;
     SetWindowTextW(Control(w, id), CWStrTemp(s));
-    if (w->ready) {
+    if (id == lcDetails && IsRichDetails(Control(w, id))) {
+        for (auto& run : w->detailRuns) str::Free(run.word);
+        VecReset(w->detailRuns);
+        FormatDetails(w);
+    }
+    if (w->ready && !w->updating && id != lcDetails && id != lcQuery && id != lcAnswer && id != lcNewDeck) {
         LayoutLearning(w);
     }
 }
@@ -223,7 +345,156 @@ static void Status(LearningWindow* w, Str text) {
     Text(w, lcStatus, text);
 }
 
+static TempStr RichText(Str value) {
+    str::Builder text;
+    for (int i = 0; i < len(value); i++) {
+        char c = value.s[i];
+        if (c == '\r' && i + 1 < len(value) && value.s[i + 1] == '\n') i++;
+        text.AppendChar(c == '\n' ? '\r' : c);
+    }
+    return ToStrTemp(text);
+}
+static void FormatDetails(LearningWindow* w) {
+    HWND child = Control(w, lcDetails);
+    if (!IsRichDetails(child)) return;
+    CHARRANGE selection{};
+    SendMessageW(child, EM_EXGETSEL, 0, (LPARAM)&selection);
+    POINT scroll{};
+    SendMessageW(child, EM_GETSCROLLPOS, 0, (LPARAM)&scroll);
+    LOGFONTW font{};
+    GetObjectW(GetAppFontForDpi(DpiGet())->GetHFont(), sizeof(font), &font);
+    CHARFORMAT2W base{};
+    base.cbSize = sizeof(base);
+    base.dwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_LINK;
+    base.yHeight = MulDiv(abs(font.lfHeight), 1440, DpiGet());
+    base.crTextColor = ThemeWindowTextColor();
+    wcscpy_s(base.szFaceName, font.lfFaceName);
+    SendMessageW(child, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(child, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&base);
+    SendMessageW(child, EM_SETBKGNDCOLOR, 0, ThemeControlBackgroundColor());
+    PARAFORMAT2 paragraph{};
+    paragraph.cbSize = sizeof(paragraph);
+    paragraph.dwMask = PFM_SPACEAFTER | PFM_LINESPACING;
+    paragraph.dySpaceAfter = base.yHeight / 5;
+    paragraph.bLineSpacingRule = 5;
+    paragraph.dyLineSpacing = 23;
+    CHARRANGE all{0, -1};
+    SendMessageW(child, EM_EXSETSEL, 0, (LPARAM)&all);
+    SendMessageW(child, EM_SETPARAFORMAT, 0, (LPARAM)&paragraph);
+    auto apply = [&](int start, int length, DetailStyle style) {
+        CHARRANGE range{start, start + length};
+        SendMessageW(child, EM_EXSETSEL, 0, (LPARAM)&range);
+        CHARFORMAT2W format = base;
+        if (style == DetailStyle::Heading || style == DetailStyle::Section) format.dwEffects |= CFE_BOLD;
+        if (style == DetailStyle::Heading) format.yHeight = base.yHeight * 6 / 5;
+        if (style == DetailStyle::Example) format.dwEffects |= CFE_ITALIC;
+        if (style == DetailStyle::Muted) format.crTextColor = ThemeWindowDarkerTextColor();
+        if (style == DetailStyle::WordLink) format.dwEffects |= CFE_LINK;
+        SendMessageW(child, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
+    };
+    if (!len(w->detailRuns)) {
+        WStr value = ToWStrTemp(RichText(Read(w, lcDetails)));
+        int first = 0;
+        while (first < len(value) && value.s[first] != '\r') first++;
+        if (first < len(value)) apply(0, first, DetailStyle::Heading);
+    } else {
+        for (const auto& run : w->detailRuns) apply(run.start, run.length, run.style);
+    }
+    SendMessageW(child, EM_EXSETSEL, 0, (LPARAM)&selection);
+    SendMessageW(child, EM_SETSCROLLPOS, 0, (LPARAM)&scroll);
+    SendMessageW(child, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(child, nullptr, false);
+}
+struct DetailBuilder {
+    LearningWindow* window;
+    str::Builder text;
+    int characters = 0;
+    explicit DetailBuilder(LearningWindow* w) : window(w) {
+        for (auto& run : w->detailRuns) str::Free(run.word);
+        VecReset(w->detailRuns);
+    }
+    void Add(Str value, DetailStyle style = DetailStyle::Body, Str word = {}) {
+        Str normalized = RichText(value);
+        int length = len(ToWStrTemp(normalized));
+        if (length) VecAppend(window->detailRuns, DetailRun{characters, length, style, str::Dup(word)});
+        text.Append(normalized);
+        characters += length;
+    }
+    void Line(Str value, DetailStyle style = DetailStyle::Body) {
+        Add(value, style);
+        Add(StrL("\r"));
+    }
+    void Links(Str label, Str words) {
+        if (!len(words)) return;
+        Add(fmt("%s: ", label), DetailStyle::Section);
+        StrVec values;
+        Split(&values, words, StrL("\n"), true);
+        for (int i = 0; i < len(values); i++) {
+            if (i) Add(StrL(", "));
+            Add(values[i], DetailStyle::WordLink, values[i]);
+        }
+        Add(StrL("\r"));
+    }
+    void Finish() {
+        SetWindowTextW(Control(window, lcDetails), CWStrTemp(ToStrTemp(text)));
+        FormatDetails(window);
+        SendMessageW(Control(window, lcDetails), EM_SETSEL, 0, 0);
+        SendMessageW(Control(window, lcDetails), EM_SCROLL, SB_TOP, 0);
+    }
+};
+static void ShowMeanings(LearningWindow* w) {
+    if (!len(w->meanings)) return;
+    DetailBuilder text(w);
+    text.Line(w->meanings[0].headword, DetailStyle::Heading);
+    Str dictionary, part;
+    int number = 0;
+    for (const auto& meaning : w->meanings) {
+        if (!str::Eq(dictionary, meaning.dictionaryId)) {
+            text.Line({});
+            text.Line(meaning.dictionary, DetailStyle::Section);
+            if (len(meaning.phonetic)) text.Line(meaning.phonetic, DetailStyle::Example);
+            if (len(meaning.phoneticUk) && !str::Eq(meaning.phoneticUk, meaning.phonetic))
+                text.Line(fmt("UK: %s", meaning.phoneticUk), DetailStyle::Example);
+            if (len(meaning.sourceUrl)) text.Line(fmt("%s: %s", Tr("Source"), meaning.sourceUrl), DetailStyle::Muted);
+            if (len(meaning.license)) text.Line(meaning.license, DetailStyle::Muted);
+            dictionary = meaning.dictionaryId;
+            part = {};
+            number = 0;
+        }
+        if (!number || !str::Eq(part, meaning.partOfSpeech)) {
+            text.Line(len(meaning.partOfSpeech) ? meaning.partOfSpeech : Tr("Meanings"), DetailStyle::Section);
+            part = meaning.partOfSpeech;
+        }
+        text.Line(fmt("%d. %s", ++number, meaning.definition));
+        if (len(meaning.example)) text.Line(fmt("%s: %s", Tr("Example"), meaning.example), DetailStyle::Example);
+        text.Links(Tr("Synonyms"), meaning.synonyms);
+        text.Links(Tr("Antonyms"), meaning.antonyms);
+        text.Line({});
+    }
+    if (len(w->context)) {
+        text.Line(Tr("PDF context"), DetailStyle::Section);
+        text.Line(w->context, DetailStyle::Example);
+    }
+    if (len(w->source))
+        text.Line(fmt("%s: %s · %s %d", Tr("Document"), w->source, Tr("page"), w->page), DetailStyle::Muted);
+    text.Finish();
+}
+static void StoredDefinition(DetailBuilder& text, Str definition) {
+    StrVec lines;
+    Split(&lines, DictionaryPlainText(definition), StrL("\n"), true);
+    for (Str line : lines) {
+        DetailStyle style = DetailStyle::Body;
+        if (str::StartsWithI(line, StrL("Example:"))) style = DetailStyle::Example;
+        if (str::EqI(line, StrL("noun")) || str::EqI(line, StrL("verb")) || str::EqI(line, StrL("adjective")) ||
+            str::EqI(line, StrL("adverb")))
+            style = DetailStyle::Section;
+        text.Line(line, style);
+    }
+}
+
 static void UpdateGuide(LearningWindow* w) {
+    bool updating = w->updating;
+    w->updating = true;
     w->guideStep = std::clamp(w->guideStep, 0, kGuideSteps - 1);
     const GuideStep& step = kGuide[w->guideStep];
     Text(w, lcGuideText, fmt("Step %d of %d: %s\r\n%s", w->guideStep + 1, kGuideSteps, Tr(step.title), Tr(step.text)));
@@ -235,6 +506,7 @@ static void UpdateGuide(LearningWindow* w) {
     }
     EnableWindow(Control(w, lcGuidePrev), w->guideStep > 0);
     SaveGuideProgress(w);
+    w->updating = updating;
     LayoutLearning(w);
 }
 static void Feedback(LearningWindow* w, bool correct, Str message) {
@@ -255,19 +527,128 @@ static void Feedback(LearningWindow* w, bool correct, Str message) {
 
 static void Place(LearningWindow* w, int id, int x, int y, int dx, int dy) {
     if (Control(w, id)) {
-        HWND child = Control(w, id);
-        MoveWindow(child, x, y - w->scrollY, std::max(dx, 1), std::max(dy, 1), true);
-        WCHAR klass[32]{};
-        GetClassNameW(child, klass, dimof(klass));
-        if (wcscmp(klass, L"EDIT") == 0) {
-            HRGN region = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, DpiScale(12), DpiScale(12));
-            if (!SetWindowRgn(child, region, TRUE)) DeleteObject(region);
-            if (GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE) {
-                RECT text{DpiScale(10), DpiScale(8), dx - DpiScale(10), dy - DpiScale(8)};
-                SendMessageW(child, EM_SETRECT, 0, (LPARAM)&text);
-            }
+        VecAppend(w->placements, LearningPlacement{id, {x, y, x + std::max(dx, 1), y + std::max(dy, 1)}});
+    }
+}
+static void ApplyLearningPositions(LearningWindow* w) {
+    bool changed[lcLast]{}, resized[lcLast]{};
+    RECT next[lcLast]{};
+    int count = 0;
+    for (const auto& item : w->placements) {
+        int id = item.id;
+        next[id] = item.bounds;
+        OffsetRect(&next[id], 0, -w->scrollY);
+        if (w->boundsValid[id] && EqualRect(&next[id], &w->appliedBounds[id])) continue;
+        changed[id] = true;
+        resized[id] = !w->boundsValid[id] ||
+                      next[id].right - next[id].left != w->appliedBounds[id].right - w->appliedBounds[id].left ||
+                      next[id].bottom - next[id].top != w->appliedBounds[id].bottom - w->appliedBounds[id].top;
+        count++;
+    }
+    if (!count) return;
+    HDWP batch = BeginDeferWindowPos(count);
+    constexpr UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOCOPYBITS;
+    for (int id = 0; batch && id < lcLast; id++) {
+        if (!changed[id]) continue;
+        RECT rc = next[id];
+        batch = DeferWindowPos(batch, Control(w, id), nullptr, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+                               flags | (resized[id] ? 0 : SWP_NOSIZE));
+    }
+    if (!batch || !EndDeferWindowPos(batch)) {
+        for (int id = 0; id < lcLast; id++) {
+            if (!changed[id]) continue;
+            RECT rc = next[id];
+            SetWindowPos(Control(w, id), nullptr, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+                         flags | (resized[id] ? 0 : SWP_NOSIZE));
         }
     }
+    for (int id = 0; id < lcLast; id++) {
+        if (!changed[id]) continue;
+        w->appliedBounds[id] = next[id];
+        w->boundsValid[id] = true;
+        if (!resized[id]) continue;
+        HWND child = Control(w, id);
+        WCHAR klass[32]{};
+        GetClassNameW(child, klass, dimof(klass));
+        if (_wcsicmp(klass, L"EDIT") != 0 && !IsRichDetails(child)) continue;
+        int dx = next[id].right - next[id].left, dy = next[id].bottom - next[id].top;
+        HRGN region = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, UiScalePx(12), UiScalePx(12));
+        if (!SetWindowRgn(child, region, FALSE)) DeleteObject(region);
+        if (GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE) {
+            int line = (int)SendMessageW(child, EM_GETFIRSTVISIBLELINE, 0, 0);
+            int anchor = (int)SendMessageW(child, EM_LINEINDEX, line, 0);
+            RECT text{UiScalePx(10), UiScalePx(8), dx - UiScalePx(10), dy - UiScalePx(8)};
+            SendMessageW(child, EM_SETRECTNP, 0, (LPARAM)&text);
+            int target = (int)SendMessageW(child, EM_LINEFROMCHAR, std::max(anchor, 0), 0);
+            int current = (int)SendMessageW(child, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageW(child, EM_LINESCROLL, 0, target - current);
+        }
+    }
+    RedrawWindow(w->hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+static int WheelDistance(WPARAM wp, int distance, int& remainder) {
+    int delta = GET_WHEEL_DELTA_WPARAM(wp);
+    LONGLONG amount = (LONGLONG)delta * distance + remainder;
+    remainder = (int)(amount % WHEEL_DELTA);
+    return (int)(amount / WHEEL_DELTA);
+}
+static int WheelStep(int viewport) {
+    UINT lines = 3;
+    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    return lines == WHEEL_PAGESCROLL ? viewport : UiScalePx(32) * (int)std::min(lines, (UINT)100);
+}
+static int LearningTextWidth(HWND control) {
+    HDC dc = GetDC(control);
+    HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(dc, font ? font : GetAppFont()->GetHFont());
+    WStr text = ToWStrTemp(HwndGetTextTemp(control));
+    SIZE size{};
+    GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &size);
+    SelectObject(dc, old);
+    ReleaseDC(control, dc);
+    return size.cx;
+}
+static int LearningInputWidth(LearningWindow* w, int id, int available, int row) {
+    return std::min(available, EditPreferredWidth(Control(w, id), Read(w, id), row * 3, available) + UiScalePx(12));
+}
+static void FitLearningInput(LearningWindow* w, int id) {
+    if (!w->ready || w->layingOut || (id != lcQuery && id != lcAnswer && id != lcNewDeck)) return;
+    LearningPlacement* input = nullptr;
+    for (auto& item : w->placements) {
+        if (item.id == id) input = &item;
+    }
+    if (!input) return;
+    RECT client;
+    GetClientRect(w->hwnd, &client);
+    int available = client.right - UiScalePx(20) - input->bounds.left;
+    for (const auto& item : w->placements) {
+        if (item.id != id && item.bounds.top == input->bounds.top && item.bounds.left > input->bounds.left) {
+            available -= item.bounds.right - item.bounds.left + UiScalePx(10);
+        }
+    }
+    int row = std::max(UiScalePx(32), GetAppFontSize() + UiScalePx(16));
+    int oldWidth = input->bounds.right - input->bounds.left;
+    int width = LearningInputWidth(w, id, std::max(available, 1), row);
+    int shift = width - oldWidth;
+    if (!shift) return;
+    for (auto& item : w->placements) {
+        if (item.id != id && item.bounds.top == input->bounds.top && item.bounds.left > input->bounds.left) {
+            OffsetRect(&item.bounds, shift, 0);
+        }
+    }
+    input->bounds.right = input->bounds.left + width;
+    ApplyLearningPositions(w);
+}
+static void ScrollLearning(LearningWindow* w, int requested) {
+    RECT client;
+    GetClientRect(w->hwnd, &client);
+    int offset = std::clamp(requested, 0, std::max(0, w->contentHeight - (int)client.bottom));
+    if (offset == w->scrollY) return;
+    w->scrollY = offset;
+    SCROLLINFO scroll{sizeof(scroll), SIF_POS};
+    scroll.nPos = offset;
+    SetScrollInfo(w->hwnd, SB_VERT, &scroll, true);
+    ApplyLearningPositions(w);
 }
 
 static void Visible(LearningWindow* w, int id, bool value) {
@@ -286,26 +667,62 @@ static void RefreshDecks(LearningWindow* w) {
     w->updating = true;
     SendMessageW(Control(w, lcDeck), CB_RESETCONTENT, 0, 0);
     w->deckIds.Reset();
+    VecReset(w->deckInstalled);
     AddChoice(w, lcDeck, Tr("All vocabulary"));
     w->deckIds.Append({});
+    VecAppend(w->deckInstalled, false);
     for (VocabularyDeck* deck : VocabularyDecks()) {
-        AddChoice(w, lcDeck, deck->name);
+        int count = 0, total = 0;
+        bool installed = VocabularyDeckInstalled(deck->id, &count, &total);
+        Str caption =
+            !installed && count > 0 && total > count ? fmt("%s (%d/%d)", deck->name, count, total) : deck->name;
+        AddChoice(w, lcDeck, installed ? fmt("%s · %s", caption, Tr("installed")) : caption);
         w->deckIds.Append(deck->id);
+        VecAppend(w->deckInstalled, installed);
     }
     int i = w->deckIds.Find(previous);
     SendMessageW(Control(w, lcDeck), CB_SETCURSEL, std::max(i, 0), 0);
     str::Free(previous);
     w->updating = false;
+    FitPackDropdown(w);
+}
+static TempStr DictionarySize(i64 bytes) {
+    if (bytes >= 1000000000) return fmt("%.2f GB", (double)bytes / 1000000000);
+    if (bytes >= 1000000) return fmt("%.2f MB", (double)bytes / 1000000);
+    if (bytes >= 1000) return fmt("%.2f kB", (double)bytes / 1000);
+    return fmt("%lld bytes", bytes);
+}
+static void PackDownloadInfo(LearningWindow* w) {
+    int i = Selected(w, lcPack);
+    bool sized = i >= 0 && i < len(w->packs) && w->packs[i].downloadBytes > 0;
+    if (sized) {
+        const auto& p = w->packs[i];
+        Text(w, lcPackInfo,
+             fmt("%s: approximately %s%s to download; %s dictionary data plus a disk index. "
+                 "The current download size is confirmed before downloading.",
+                 p.title, DictionarySize(p.downloadBytes), p.compressed ? StrL(" compressed") : Str(),
+                 DictionarySize(p.expandedBytes)));
+    }
+    Visible(w, lcPackInfo, sized);
+    if (w->ready) LayoutLearning(w, true);
 }
 static void RefreshPacks(LearningWindow* w) {
-    FreeDictionaryCatalog(w->packs);
+    int selected = Selected(w, lcPack);
+    Str previous = selected >= 0 && selected < len(w->packs) ? str::Dup(w->packs[selected].id) : Str();
     GetDictionaryCatalog(w->packs);
+    w->updating = true;
     SendMessageW(Control(w, lcPack), CB_RESETCONTENT, 0, 0);
-    for (const OfflineDictPack& pack : w->packs) {
+    int next = 0;
+    for (int i = 0; i < len(w->packs); i++) {
+        const auto& pack = w->packs[i];
         AddChoice(w, lcPack, fmt("%s · %s", pack.title, pack.installed ? Tr("installed") : Tr("not installed")));
+        if (str::Eq(pack.id, previous)) next = i;
     }
-    SendMessageW(Control(w, lcPack), CB_SETCURSEL, 0, 0);
+    SendMessageW(Control(w, lcPack), CB_SETCURSEL, next, 0);
+    w->updating = false;
+    str::Free(previous);
     FitPackDropdown(w);
+    PackDownloadInfo(w);
 }
 static void WordDetails(LearningWindow* w) {
     VocabularyWord* word = SelectedWord(w);
@@ -316,43 +733,61 @@ static void WordDetails(LearningWindow* w) {
              Tr("No saved words here yet. Select a word in a document and press Shift+D to look it up and save it."));
         return;
     }
-    str::Builder text;
-    text.Append(fmt("%s\r\n\r\n%s", word->word, word->definition));
+    DetailBuilder text(w);
+    text.Line(word->word, DetailStyle::Heading);
+    text.Line({});
+    StoredDefinition(text, word->definition);
     if (len(word->context)) {
-        text.Append(fmt("\r\n\r\nContext\r\n%s", word->context));
+        text.Line({});
+        text.Line(Tr("PDF context"), DetailStyle::Section);
+        text.Line(word->context, DetailStyle::Example);
     }
     if (len(word->sourcePath)) {
-        text.Append(fmt("\r\n\r\nSource: %s · page %d", word->sourcePath, word->page));
+        text.Line(fmt("%s: %s · %s %d", Tr("Document"), word->sourcePath, Tr("page"), word->page), DetailStyle::Muted);
     }
-    text.Append(
-        fmt("\r\n\r\nReviews: %d · lapses: %d · interval: %d days", word->reviews, word->lapses, word->intervalDays));
-    Text(w, lcDetails, ToStrTemp(text));
+    text.Line(fmt("Reviews: %d · lapses: %d · interval: %d days", word->reviews, word->lapses, word->intervalDays),
+              DetailStyle::Muted);
+    text.Finish();
     Text(w, lcLearned, word->learned ? Tr("Mark unlearned") : Tr("Mark learned"));
 }
 static void RefreshLibrary(LearningWindow* w) {
     w->updating = true;
     Vec<VocabularyWord*> words;
     VocabularySearch(Read(w, lcQuery), CurrentDeck(w), false, words);
-    w->wordIds.Reset();
-    SendMessageW(Control(w, lcLibrary), LB_RESETCONTENT, 0, 0);
-    for (VocabularyWord* word : words) {
-        w->wordIds.Append(word->id);
-        SendMessageW(Control(w, lcLibrary), LB_ADDSTRING, 0,
-                     (LPARAM)CWStrTemp(fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{})));
+    Str previous;
+    if (auto* word = SelectedWord(w)) previous = str::Dup(word->id);
+    defer {
+        str::Free(previous);
+    };
+    bool changed = len(words) != len(w->wordIds);
+    for (int i = 0; !changed && i < len(words); i++) {
+        VocabularyWord* word = words[i];
+        changed =
+            !str::Eq(word->id, w->wordIds[i]) || !str::Eq(ToUtf8Temp(LbGetTextTemp(Control(w, lcLibrary), i)),
+                                                          fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{}));
     }
-    if (len(words)) {
-        SendMessageW(Control(w, lcLibrary), LB_SETCURSEL, 0, 0);
+    if (changed) {
+        w->wordIds.Reset();
+        SendMessageW(Control(w, lcLibrary), LB_RESETCONTENT, 0, 0);
+        for (VocabularyWord* word : words) {
+            w->wordIds.Append(word->id);
+            SendMessageW(Control(w, lcLibrary), LB_ADDSTRING, 0,
+                         (LPARAM)CWStrTemp(fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{})));
+        }
+        if (len(words)) {
+            SendMessageW(Control(w, lcLibrary), LB_SETCURSEL, std::max(0, w->wordIds.Find(previous)), 0);
+        }
     }
-    Vec<VocabularyWord*> due;
-    VocabularyDue(CurrentDeck(w), due);
+    int due = VocabularyDueCount(CurrentDeck(w));
     Status(w,
            len(words)
-               ? fmt("%d saved words · %d due for review", len(words), len(due))
+               ? fmt("%d saved words · %d due for review", len(words), due)
                : Tr("Start by selecting a built-in deck and Install deck, or save a word while reading with Shift+D."));
     w->updating = false;
     if (!w->practice) {
         WordDetails(w);
     }
+    LayoutLearning(w);
 }
 static TempStr ChoiceLabel(int index) {
     char letters[16]{};
@@ -375,60 +810,55 @@ static int WrappedHeight(HWND control, WStr text, int width) {
 }
 static int LabelWidth(HWND control, int index) {
     HDC dc = GetDC(control);
-    HGDIOBJ old = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
+    HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(dc, font ? font : GetAppFontForDpi(DpiGet())->GetHFont());
     WStr label = ToWStrTemp(ChoiceLabel(index));
     SIZE size{};
     GetTextExtentPoint32W(dc, CWStrTemp(label), len(label), &size);
     SelectObject(dc, old);
     ReleaseDC(control, dc);
-    return size.cx + DpiScale(12);
+    return size.cx + UiScalePx(12);
 }
-static void WrapChoices(HWND control) {
-    if (!control) {
-        return;
-    }
-    int count = (int)SendMessageW(control, LB_GETCOUNT, 0, 0);
-    int label = 0;
-    if (GetDlgCtrlID(control) != lcLibrary) {
-        for (int i = 0; i < count; i++) {
-            label = std::max(label, LabelWidth(control, i));
-        }
-    }
-    for (int pass = 0; pass < 2; pass++) {
-        RECT before, after;
-        GetClientRect(control, &before);
-        for (int i = 0; i < count; i++) {
-            int height = WrappedHeight(control, LbGetTextTemp(control, i), before.right - label - DpiScale(24));
-            SendMessageW(control, LB_SETITEMHEIGHT, i, height + DpiScale(20));
-        }
-        GetClientRect(control, &after);
-        if (before.right == after.right) {
-            break;
-        }
-    }
-}
-static void LayoutLearning(LearningWindow* w) {
+static void WrapChoices(HWND control);
+static void MeasureLearning(LearningWindow* w) {
     if (!w->ready) {
         return;
     }
     RECT client;
     GetClientRect(w->hwnd, &client);
-    int pad = DpiScale(20), gap = DpiScale(10);
-    int row = std::max(DpiScale(32), GetAppFontSizeForDpi(DpiGet()) + DpiScale(16));
+    VecReset(w->placements);
+    int pad = UiScalePx(20), gap = UiScalePx(10);
+    int row = std::max(UiScalePx(32), GetAppFontSizeForDpi(DpiGet()) + UiScalePx(16));
     int width = std::max((int)client.right - pad * 2, row * 3), y = pad;
+    bool measuring = false;
     // Stack overflowing groups instead of shrinking their text or hit targets.
     auto group = [&](std::initializer_list<int> ids) {
         int x = pad, height = row;
+        bool found = false;
         for (int id : ids) {
             HWND child = Control(w, id);
             if (!child || !(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE)) {
                 continue;
             }
+            found = true;
             WCHAR klass[32]{};
             GetClassNameW(child, klass, dimof(klass));
-            bool combo = wcscmp(klass, L"COMBOBOX") == 0;
-            bool edit = wcscmp(klass, L"EDIT") == 0;
+            bool combo = _wcsicmp(klass, L"COMBOBOX") == 0;
+            bool edit = _wcsicmp(klass, L"EDIT") == 0;
+            bool footer = w->dictionary && (id == lcDeck || id == lcSave || id == lcLearned || id == lcOpenVocabulary);
+            int inset = footer ? gap : pad;
             int size = combo || edit ? std::max(width / 2, row * 4) : row * 3;
+            if (footer && combo) {
+                int reserved = 0;
+                for (int action : {lcSave, lcLearned, lcOpenVocabulary}) {
+                    HWND button = Control(w, action);
+                    if (!button || !(GetWindowLongPtrW(button, GWL_STYLE) & WS_VISIBLE)) continue;
+                    reserved +=
+                        LearningTextWidth(button) + gap * 3 + (HasLearningGlyph(action) ? LearningIconSize() + gap : 0);
+                }
+                size = std::max(row * 3, LearningTextWidth(child) + row + gap * 2);
+                if (width - reserved >= row * 3) size = std::min(size, width - reserved);
+            }
             if (!combo && !edit) {
                 HDC dc = GetDC(child);
                 HGDIOBJ old = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
@@ -438,7 +868,13 @@ static void LayoutLearning(LearningWindow* w) {
                 SelectObject(dc, old);
                 ReleaseDC(child, dc);
                 size =
-                    std::min(width, (int)extent.cx + pad * 2 + (HasLearningGlyph(id) ? LearningIconSize() + gap : 0));
+                    std::min(width, (int)extent.cx + inset * 2 + (HasLearningGlyph(id) ? LearningIconSize() + gap : 0));
+            }
+            if (edit && (id == lcQuery || id == lcAnswer || id == lcNewDeck)) {
+                int action = id == lcQuery ? lcLookup : id == lcAnswer ? lcCheck : lcCreateDeck;
+                int reserved = Control(w, action) ? LearningTextWidth(Control(w, action)) + pad * 2 + gap : 0;
+                if (Control(w, action) && HasLearningGlyph(action)) reserved += LearningIconSize() + gap;
+                size = LearningInputWidth(w, id, std::max(row * 3, width - reserved), row);
             }
             size = std::min(width, size);
             if (x > pad && x + size > pad + width) {
@@ -449,17 +885,18 @@ static void LayoutLearning(LearningWindow* w) {
             int h =
                 std::max(row, WrappedHeight(child, ToWStrTemp(Read(w, id)),
                                             size - gap * 2 - (HasLearningGlyph(id) ? LearningIconSize() + gap : 0)) +
-                                  gap * 2);
-            Place(w, id, x, y, size, combo ? row * 10 : h);
+                                  (footer ? gap : gap * 2));
+            if (edit && !(GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE)) h = row;
+            if (!measuring) Place(w, id, x, y, size, combo ? row * 10 : h);
             height = std::max(height, combo ? row : h);
             x += size + gap;
         }
-        y += height + gap;
+        if (found) y += height + gap;
     };
     int title = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - LearningIconSize() - pad);
     Place(w, lcTitle, pad, y, width, title);
     y += title + gap;
-    group({lcGuideStart});
+    group({lcGuideStart, lcQuery, lcLookup});
     if (w->guideVisible) {
         int guideHeight =
             WrappedHeight(Control(w, lcGuideText), ToWStrTemp(Read(w, lcGuideText)), width - pad * 2) + pad * 2;
@@ -467,14 +904,24 @@ static void LayoutLearning(LearningWindow* w) {
         y += guideHeight + gap;
         group({lcGuidePrev, lcGuideNext, lcGuideSkip, lcGuideAction});
     }
-    group({lcQuery, lcLookup});
     if (w->dictionary) {
-        group({lcPack, lcImportPack, lcDownload, lcRemovePack});
+        group({lcLookupSource, lcSourcesToggle});
+        if (w->sourcesVisible) {
+            group({lcOnlineFirst, lcOnlineSecond, lcOnlineThird});
+        }
+        group({lcPack, lcImportPack, lcDownload, lcRemovePack, lcCancelDownload});
+        if (Control(w, lcPackInfo) && (GetWindowLongPtrW(Control(w, lcPackInfo), GWL_STYLE) & WS_VISIBLE)) {
+            int infoHeight = WrappedHeight(Control(w, lcPackInfo), ToWStrTemp(Read(w, lcPackInfo)), width);
+            Place(w, lcPackInfo, pad, y, width, infoHeight);
+            y += infoHeight + gap;
+        }
     } else {
         group({lcDeck, lcInstallDeck, lcDeleteDeck});
         group({lcNewDeck, lcCreateDeck, lcExport, lcImport});
         group({lcActivity, lcScheduler, lcPractice});
     }
+    group({lcPronounce, lcStopVoice, lcVoice});
+    if (w->dictionary) group({lcRecording, lcRecordingUk});
     int detailHeight = std::max(row * 4, (int)client.bottom - y - row * 5);
     if (!w->dictionary && !w->practice) {
         if (width < row * 16) {
@@ -486,36 +933,53 @@ static void LayoutLearning(LearningWindow* w) {
             Place(w, lcLibrary, pad, y, listWidth, detailHeight);
             Place(w, lcDetails, pad + listWidth + gap, y, width - listWidth - gap, detailHeight);
         }
-        WrapChoices(Control(w, lcLibrary));
         y += detailHeight + gap;
         group({lcLearned, lcDeleteWord});
-    } else {
+    } else if (w->dictionary) {
         Place(w, lcDetails, pad, y, width, detailHeight);
         y += detailHeight + gap;
-        if (w->dictionary) {
-            group({lcDeck, lcSave, lcLearned});
-            group({lcOpenVocabulary});
-        } else {
-            bool matching = Selected(w, lcActivity) == (int)VocabActivity::MatchPairs;
-            if ((GetWindowLongPtrW(Control(w, lcChoices), GWL_STYLE) & WS_VISIBLE)) {
-                int listWidth = matching && width >= row * 16 ? (width - gap) / 2 : width;
-                int listHeight = row * 5;
-                Place(w, lcChoices, pad, y, listWidth, listHeight);
-                WrapChoices(Control(w, lcChoices));
-                if (matching) {
-                    if (listWidth == width) {
-                        y += listHeight + gap;
-                        Place(w, lcPairs, pad, y, width, listHeight);
-                    } else {
-                        Place(w, lcPairs, pad + listWidth + gap, y, listWidth, listHeight);
-                    }
-                    WrapChoices(Control(w, lcPairs));
+        group({lcSense});
+        group({lcDeck, lcSave, lcLearned, lcOpenVocabulary});
+    } else {
+        bool choices = (GetWindowLongPtrW(Control(w, lcChoices), GWL_STYLE) & WS_VISIBLE) != 0;
+        bool matching = Selected(w, lcActivity) == (int)VocabActivity::MatchPairs;
+        int start = y;
+        measuring = true;
+        y = 0;
+        group({lcAnswer, lcCheck});
+        group({lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy});
+        int tail = y + WrappedHeight(Control(w, lcStatus), ToWStrTemp(Read(w, lcStatus)), width) + pad;
+        if (w->feedbackKind)
+            tail += WrappedHeight(Control(w, lcFeedback), ToWStrTemp(Read(w, lcFeedback)), width - pad * 2) + pad + gap;
+        measuring = false;
+        y = start;
+        int listWidth = matching && width >= row * 16 ? (width - gap) / 2 : width;
+        int stacks = matching && listWidth == width ? 2 : 1;
+        int grip = std::max(UiScalePx(24), LearningIconSize());
+        int minimumAnswers = row * 3 * stacks;
+        int panels = std::max(row * 2 + minimumAnswers, (int)client.bottom - y - tail - grip - gap * (stacks + 2));
+        int prompt = choices ? std::clamp(panels * w->promptShare / 100, row * 2, panels - minimumAnswers)
+                             : std::max(row * 3, (int)client.bottom - y - tail - gap);
+        w->splitHeight = panels;
+        Place(w, lcDetails, pad, y, width, prompt);
+        y += prompt + gap;
+        if (choices) {
+            Place(w, lcSplit, pad, y, width, grip);
+            y += grip + gap;
+            int listHeight = (panels - prompt) / stacks;
+            Place(w, lcChoices, pad, y, listWidth, listHeight);
+            if (matching) {
+                if (stacks == 2) {
+                    y += listHeight + gap;
+                    Place(w, lcPairs, pad, y, width, listHeight);
+                } else {
+                    Place(w, lcPairs, pad + listWidth + gap, y, listWidth, listHeight);
                 }
-                y += listHeight + gap;
             }
-            group({lcAnswer, lcCheck});
-            group({lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy});
+            y += listHeight + gap;
         }
+        group({lcAnswer, lcCheck});
+        group({lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy});
     }
     if (w->feedbackKind) {
         int h = WrappedHeight(Control(w, lcFeedback), ToWStrTemp(Read(w, lcFeedback)), width - pad * 2) + pad;
@@ -525,16 +989,58 @@ static void LayoutLearning(LearningWindow* w) {
     int status = WrappedHeight(Control(w, lcStatus), ToWStrTemp(Read(w, lcStatus)), width);
     Place(w, lcStatus, pad, y, width, status);
     w->contentHeight = y + status + pad;
-    int scrollY = std::clamp(w->scrollY, 0, std::max(0, w->contentHeight - (int)client.bottom));
-    SCROLLINFO scroll{sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS};
-    scroll.nMax = w->contentHeight - 1;
-    scroll.nPage = client.bottom;
-    scroll.nPos = scrollY;
-    SetScrollInfo(w->hwnd, SB_VERT, &scroll, true);
-    if (scrollY != w->scrollY) {
-        w->scrollY = scrollY;
-        LayoutLearning(w);
+}
+static void LayoutLearning(LearningWindow* w, bool keepAnchor) {
+    if (!w->ready) return;
+    if (w->layingOut) {
+        w->layoutPending = true;
         return;
+    }
+    int anchorId = 0, anchorOffset = 0;
+    if (keepAnchor && w->scrollY > 0) {
+        for (const auto& item : w->placements) {
+            HWND child = Control(w, item.id);
+            if (!(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE)) continue;
+            RECT bounds;
+            GetWindowRect(child, &bounds);
+            if (item.bounds.top + bounds.bottom - bounds.top > w->scrollY) {
+                anchorId = item.id;
+                anchorOffset = w->scrollY - item.bounds.top;
+                break;
+            }
+        }
+    }
+    w->layingOut = true;
+    defer {
+        w->layingOut = false;
+    };
+    for (int pass = 0; pass < 2; pass++) {
+        w->layoutPending = false;
+        RECT client, after;
+        GetClientRect(w->hwnd, &client);
+        MeasureLearning(w);
+        if (anchorId) {
+            for (const auto& item : w->placements) {
+                if (item.id == anchorId) {
+                    w->scrollY = item.bounds.top + anchorOffset;
+                    break;
+                }
+            }
+        }
+        w->scrollY = std::clamp(w->scrollY, 0, std::max(0, w->contentHeight - (int)client.bottom));
+        SCROLLINFO scroll{sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL};
+        scroll.nMax = std::max(0, w->contentHeight - 1);
+        scroll.nPage = client.bottom;
+        scroll.nPos = w->scrollY;
+        SetScrollInfo(w->hwnd, SB_VERT, &scroll, true);
+        GetClientRect(w->hwnd, &after);
+        if (client.right == after.right && client.bottom == after.bottom && !w->layoutPending) break;
+    }
+    ApplyLearningPositions(w);
+    for (int id : {lcLibrary, lcChoices, lcPairs}) {
+        if (Control(w, id) && (GetWindowLongPtrW(Control(w, id), GWL_STYLE) & WS_VISIBLE)) {
+            WrapChoices(Control(w, id));
+        }
     }
     InvalidateRect(w->hwnd, nullptr, false);
 }
@@ -546,15 +1052,15 @@ static void RevealFocusedControl(LearningWindow* w, HWND child) {
     GetWindowRect(child, &rc);
     GetClientRect(w->hwnd, &client);
     MapWindowPoints(nullptr, w->hwnd, (POINT*)&rc, 2);
-    int margin = DpiScale(12);
-    if (rc.top < margin) {
-        w->scrollY += rc.top - margin;
+    int margin = UiScalePx(12), offset = w->scrollY;
+    if (rc.top < margin || rc.bottom - rc.top > client.bottom - margin * 2) {
+        offset += rc.top - margin;
     } else if (rc.bottom > client.bottom - margin) {
-        w->scrollY += rc.bottom - client.bottom + margin;
+        offset += rc.bottom - client.bottom + margin;
     } else {
         return;
     }
-    LayoutLearning(w);
+    ScrollLearning(w, offset);
 }
 
 static void PracticeControls(LearningWindow* w) {
@@ -570,6 +1076,7 @@ static void PracticeControls(LearningWindow* w) {
     Visible(w, lcAnswer, active && !cards && !choices && !pairs);
     Visible(w, lcChoices, active && (choices || pairs));
     Visible(w, lcPairs, active && pairs);
+    Visible(w, lcSplit, active && (choices || pairs));
     Visible(w, lcCheck, active && !cards && !pairs);
     Visible(w, lcReveal, active && cards && !w->revealed);
     int grades[] = {lcAgain, lcHard, lcGood, lcEasy};
@@ -602,12 +1109,12 @@ static void NextQuestion(LearningWindow* w) {
     }
     w->revealed = false;
     w->checked = false;
-    Text(w, lcDetails, w->question->prompt);
+    Text(w, lcDetails, DictionaryPlainText(w->question->prompt));
     Text(w, lcAnswer, {});
     Text(w, lcCheck, Tr("Check answer"));
     SendMessageW(Control(w, lcChoices), LB_RESETCONTENT, 0, 0);
     for (Str choice : w->question->choices) {
-        SendMessageW(Control(w, lcChoices), LB_ADDSTRING, 0, (LPARAM)CWStrTemp(choice));
+        SendMessageW(Control(w, lcChoices), LB_ADDSTRING, 0, (LPARAM)CWStrTemp(DictionaryPlainText(choice)));
     }
     Status(w, fmt("Review %d of %d · %d correct", w->position + 1, len(w->session), w->correct));
     PracticeControls(w);
@@ -657,7 +1164,7 @@ static void StartPractice(LearningWindow* w) {
     for (int i = 0; i < count; i++) {
         VocabularyWord* word = VocabularyFind(w->session[(i + rotation) % count]);
         w->pairDefinitions.Append(word->id);
-        SendMessageW(Control(w, lcPairs), LB_ADDSTRING, 0, (LPARAM)CWStrTemp(word->definition));
+        SendMessageW(Control(w, lcPairs), LB_ADDSTRING, 0, (LPARAM)CWStrTemp(DictionaryPlainText(word->definition)));
     }
     Text(w, lcDetails,
          Tr("Match words to meanings. Select a word on the left and its definition on the right. Matching pairs "
@@ -752,6 +1259,7 @@ static TempStr ChooseLearningFile(HWND owner, bool save, bool dictionary) {
 
 enum class DictionaryJobKind {
     Lookup,
+    DownloadInfo,
     Download,
     Import,
     Remove,
@@ -763,13 +1271,61 @@ struct DictionaryJob {
     DictionaryJobKind kind;
     Str value, error;
     bool ok = false;
+    i64 downloadBytes = 0;
+    HANDLE cancel = nullptr;
+    ULONGLONG lastProgress = 0;
+    DictionarySource sources[3]{DictionarySource::Offline};
+    int sourceCount = 1;
     Vec<OfflineMeaning> meanings;
     ~DictionaryJob() {
+        if (cancel) CloseHandle(cancel);
         str::Free(value);
         str::Free(error);
         FreeOfflineMeanings(meanings);
     }
 };
+static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str value, i64 approvedBytes = 0);
+struct DictionaryProgressMessage {
+    HWND hwnd;
+    int serial, ticket;
+    Str text;
+    ~DictionaryProgressMessage() { str::Free(text); }
+};
+static void ShowDictionaryProgress(DictionaryProgressMessage* message) {
+    auto* w = IsWindow(message->hwnd) ? (LearningWindow*)GetWindowLongPtrW(message->hwnd, GWLP_USERDATA) : nullptr;
+    if (w && w->serial == message->serial && w->ticket == message->ticket && w->busy) Status(w, message->text);
+    delete message;
+}
+static void ReportDictionaryProgress(DictionaryJob* job, KaikkiProgress* progress) {
+    ULONGLONG now = GetTickCount64();
+    if (now - job->lastProgress < 300) return;
+    job->lastProgress = now;
+    auto* message = new DictionaryProgressMessage();
+    message->hwnd = job->hwnd;
+    message->serial = job->serial;
+    message->ticket = job->ticket;
+    message->text = str::Dup(progress->indexing
+                                 ? fmt("Preparing offline index… %d%%. You can cancel or keep reading.",
+                                       progress->total > 0 ? (int)(100.0 * progress->downloaded / progress->total) : 0)
+                                 : fmt("Downloading… %s of %s. You can cancel or keep reading.",
+                                       DictionarySize(progress->downloaded), DictionarySize(progress->total)));
+    uitask::Post(MkFunc0(ShowDictionaryProgress, message), "Dictionary download progress");
+}
+static void DictionaryCancelled(DictionaryJob* job, bool* cancelled) {
+    *cancelled = job->cancel && WaitForSingleObject(job->cancel, 0) == WAIT_OBJECT_0;
+}
+static TempStr KaikkiDownloadConfirmation(const KaikkiPack& pack, i64 bytes) {
+    return fmt(
+        "Download %s?\r\n\r\nDownload size: %s (%lld bytes)%s\r\n"
+        "Dictionary data: approximately %s, plus a disk index.\r\n"
+        "Free space needed before installation: at least %s, including temporary indexing space.\r\n\r\n"
+        "Source: %s\r\nLicence: %s\r\nSave in: %s\r\n\r\n"
+        "This optional pack works offline after installation. You can cancel the download; "
+        "an existing installed copy stays available if the update fails or is cancelled.",
+        pack.title, DictionarySize(bytes), bytes, pack.compressed ? StrL(" compressed") : Str(),
+        DictionarySize(pack.expandedBytes), DictionarySize(KaikkiRequiredFreeSpace(pack.id, bytes)), pack.sourceUrl,
+        pack.license, GetDictionaryDirTemp());
+}
 static void CompleteDictionaryJob(DictionaryJob* job) {
     auto* w = IsWindow(job->hwnd) ? (LearningWindow*)GetWindowLongPtrW(job->hwnd, GWLP_USERDATA) : nullptr;
     if (!w || w->serial != job->serial || w->ticket != job->ticket) {
@@ -778,37 +1334,63 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
     }
     w->busy = false;
     w->lookupBusy = false;
+    w->cancelDownload = nullptr;
+    Visible(w, lcCancelDownload, false);
+    EnableWindow(Control(w, lcPack), true);
     int actions[] = {lcLookup, lcImportPack, lcDownload, lcRemovePack, lcInstallDeck};
     for (int id : actions) {
         EnableWindow(Control(w, id), true);
     }
-    if (job->kind == DictionaryJobKind::Lookup) {
+    if (job->kind == DictionaryJobKind::DownloadInfo) {
+        const KaikkiPack* pack = FindKaikkiPack(job->value);
+        if (!job->ok || !pack) {
+            Status(w, len(job->error) ? job->error : Tr("Could not confirm the dictionary download size. Try again."));
+        } else {
+            w->busy = true;
+            int answer = MessageBoxW(w->hwnd, CWStrTemp(KaikkiDownloadConfirmation(*pack, job->downloadBytes)),
+                                     L"Download offline dictionary", MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON2);
+            // A modeless window can be closed while a modal message pumps messages.
+            w = IsWindow(job->hwnd) ? (LearningWindow*)GetWindowLongPtrW(job->hwnd, GWLP_USERDATA) : nullptr;
+            if (w && w->serial == job->serial) {
+                w->busy = false;
+                if (answer == IDYES)
+                    StartDictionaryJob(w, DictionaryJobKind::Download, job->value, job->downloadBytes);
+                else
+                    Status(w, Tr("Download cancelled. No dictionary data was downloaded."));
+            }
+        }
+    } else if (job->kind == DictionaryJobKind::Lookup) {
         FreeOfflineMeanings(w->meanings);
         for (OfflineMeaning& meaning : job->meanings) {
             VecAppend(w->meanings, meaning);
         }
         VecReset(job->meanings);
-        str::Builder text;
-        for (OfflineMeaning& meaning : w->meanings) {
-            text.Append(fmt("%s\r\n%s\r\n%s\r\n\r\n", meaning.headword, meaning.dictionary, meaning.definition));
+        SendMessageW(Control(w, lcSense), CB_RESETCONTENT, 0, 0);
+        for (int i = 0; i < len(w->meanings); i++) {
+            const auto& meaning = w->meanings[i];
+            AddChoice(w, lcSense, fmt("%d. %s", i + 1, meaning.definition));
         }
+        SendMessageW(Control(w, lcSense), CB_SETCURSEL, 0, 0);
         if (!len(w->meanings)) {
             Text(w, lcDetails,
                  job->error ? job->error
                             : Tr("No offline definition found. Try another spelling or import a dictionary pack."));
         } else {
-            if (len(w->context)) {
-                text.Append(fmt("Context\r\n%s\r\n", w->context));
-            }
-            if (len(w->source)) {
-                text.Append(fmt("Source: %s · page %d", w->source, w->page));
-            }
-            Text(w, lcDetails, ToStrTemp(text));
+            ShowMeanings(w);
         }
+        bool hasRecording = false, hasUk = false;
+        for (const auto& meaning : w->meanings) {
+            hasRecording |= len(meaning.audioUrl) > 0;
+            hasUk |= len(meaning.audioUrlUk) > 0;
+        }
+        EnableWindow(Control(w, lcRecording), hasRecording);
+        EnableWindow(Control(w, lcRecordingUk), hasUk);
+        EnableWindow(Control(w, lcSense), len(w->meanings) > 0);
         EnableWindow(Control(w, lcSave), len(w->meanings) > 0);
         EnableWindow(Control(w, lcLearned), len(w->meanings) > 0);
-        Status(w, len(w->meanings) ? fmt("%d offline definition entries", len(w->meanings))
-                                   : Tr("No result. Lookup never uses the network."));
+        Status(w, len(w->meanings) ? fmt("%d meanings · choose a meaning to save", len(w->meanings))
+                  : job->error     ? job->error
+                                   : Tr("No definition found. Try another spelling or dictionary source."));
     } else if (job->kind == DictionaryJobKind::WarmDeck && job->ok) {
         int added = VocabularyInstallDeck(job->value);
         RefreshDecks(w);
@@ -830,10 +1412,17 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
 static void RunDictionaryJob(DictionaryJob* job) {
     switch (job->kind) {
         case DictionaryJobKind::Lookup:
-            job->ok = LookupOfflineWord(job->value, job->meanings, &job->error);
+            for (int i = 0; i < job->sourceCount; i++) {
+                job->ok = LookupDictionaryWord(job->value, job->sources[i], job->meanings, &job->error);
+                if (job->ok && len(job->meanings)) break;
+            }
+            break;
+        case DictionaryJobKind::DownloadInfo:
+            job->ok = GetDictionaryDownloadSize(job->value, job->downloadBytes, &job->error);
             break;
         case DictionaryJobKind::Download:
-            job->ok = DownloadDictionaryPack(job->value, &job->error);
+            job->ok = DownloadDictionaryPack(job->value, &job->error, MkFunc1(ReportDictionaryProgress, job),
+                                             MkFunc1(DictionaryCancelled, job), job->downloadBytes);
             break;
         case DictionaryJobKind::Import:
             job->ok = InstallDictionaryFile(job->value, &job->error);
@@ -847,12 +1436,13 @@ static void RunDictionaryJob(DictionaryJob* job) {
     }
     uitask::Post(MkFunc0(CompleteDictionaryJob, job), "Complete offline dictionary action");
 }
-static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str value) {
+static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str value, i64 approvedBytes) {
     if (!CanAccessDisk()) {
         Status(w, Tr("Dictionary storage is unavailable in restricted mode."));
         return;
     }
-    if (kind == DictionaryJobKind::Download && !HasPermission(Perm::InternetAccess)) {
+    if ((kind == DictionaryJobKind::Download || kind == DictionaryJobKind::DownloadInfo) &&
+        !HasPermission(Perm::InternetAccess)) {
         Status(w, Tr("Downloads are unavailable in restricted mode. Installed dictionaries still work offline."));
         return;
     }
@@ -870,7 +1460,46 @@ static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str va
     job->ticket = ++w->ticket;
     job->kind = kind;
     job->value = str::Dup(value);
+    job->downloadBytes = approvedBytes;
+    if (kind == DictionaryJobKind::Lookup && Selected(w, lcLookupSource) > 0) {
+        if (!HasPermission(Perm::InternetAccess)) {
+            delete job;
+            Status(
+                w,
+                Tr("Online lookup is unavailable in restricted mode. Choose Offline to use installed dictionaries."));
+            return;
+        }
+        int selected = Selected(w, lcLookupSource);
+        if (selected == 1) {
+            job->sourceCount = 0;
+            bool enabled[4]{};
+            for (int source : w->onlineOrder) {
+                if (source <= 0 || source > 3 || enabled[source]) continue;
+                enabled[source] = true;
+                job->sources[job->sourceCount++] = (DictionarySource)source;
+            }
+        } else {
+            job->sources[0] = (DictionarySource)(selected - 1);
+        }
+        if (!job->sourceCount) {
+            delete job;
+            Status(w, Tr("All online sources are disabled. Choose Sources to enable one, or use Offline."));
+            return;
+        }
+    }
+    if (kind == DictionaryJobKind::Download && FindKaikkiPack(value)) {
+        job->cancel = CreateEventW(nullptr, true, false, nullptr);
+        if (!job->cancel) {
+            delete job;
+            Status(w, Tr("Could not prepare the dictionary download. Try again."));
+            return;
+        }
+        w->cancelDownload = job->cancel;
+        Visible(w, lcCancelDownload, true);
+        EnableWindow(Control(w, lcCancelDownload), true);
+    }
     w->busy = true;
+    EnableWindow(Control(w, lcPack), false);
     w->lookupBusy = kind == DictionaryJobKind::Lookup;
     int actions[] = {lcLookup, lcImportPack, lcDownload, lcRemovePack, lcInstallDeck};
     for (int id : actions) {
@@ -880,10 +1509,15 @@ static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str va
         EnableWindow(Control(w, lcSave), false);
         EnableWindow(Control(w, lcLearned), false);
     }
-    Status(w, kind == DictionaryJobKind::Download
+    Status(w, kind == DictionaryJobKind::DownloadInfo
+                  ? Tr("Checking the current download size… No dictionary data is downloaded yet.")
+              : kind == DictionaryJobKind::Download
                   ? Tr("Downloading and verifying dictionary pack… You can keep reading.")
-              : kind == DictionaryJobKind::Lookup ? Tr("Looking up this word in installed offline dictionaries…")
-                                                  : Tr("Updating offline resources…"));
+              : kind == DictionaryJobKind::Lookup
+                  ? job->sources[0] == DictionarySource::Offline
+                        ? Tr("Looking up this word in installed offline dictionaries…")
+                        : Tr("Looking up this word online… Only this word is sent to the selected provider.")
+                  : Tr("Updating offline resources…"));
     RunAsync(MkFunc0(RunDictionaryJob, job), StrL("OfflineDictionaryAction"));
 }
 static void LookupWord(LearningWindow* w) {
@@ -898,9 +1532,13 @@ static void SaveMeaning(LearningWindow* w, bool learned) {
     if (!len(w->meanings)) {
         return;
     }
-    const OfflineMeaning& meaning = w->meanings[0];
-    VocabularyWord* word = VocabularyAdd(meaning.headword, meaning.definition, meaning.dictionaryId, w->context,
-                                         w->source, w->page, CurrentDeck(w));
+    int selected = std::clamp(Selected(w, lcSense), 0, len(w->meanings) - 1);
+    const OfflineMeaning& meaning = w->meanings[selected];
+    Vec<OfflineMeaning> saved;
+    VecAppend(saved, meaning);
+    Str definition = DictionaryMeaningText(saved);
+    VocabularyWord* word = VocabularyAdd(meaning.headword, definition, meaning.dictionaryId, w->context, w->source,
+                                         w->page, CurrentDeck(w));
     if (word && learned) {
         VocabularySetLearned(word->id, true);
     }
@@ -913,7 +1551,62 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
     if (!w->ready || w->updating) {
         return;
     }
+    if (id == lcSourcesToggle && notification == BN_CLICKED) {
+        w->sourcesVisible = !w->sourcesVisible;
+        for (int setting : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird}) Visible(w, setting, w->sourcesVisible);
+        Text(w, lcSourcesToggle, w->sourcesVisible ? Tr("Hide sources") : Tr("Sources…"));
+        LayoutLearning(w);
+        return;
+    }
+    if ((id == lcOnlineFirst || id == lcOnlineSecond || id == lcOnlineThird) && notification == CBN_SELCHANGE) {
+        int slot = id - lcOnlineFirst;
+        w->onlineOrder[slot] = std::clamp(Selected(w, id), 0, 3);
+        SaveLearningPrefs(w);
+        Status(w, Tr("Online sources run in this order. Disabled sources are skipped; Offline never contacts them."));
+        return;
+    }
+    if (id == lcLookupSource && notification == CBN_SELCHANGE) {
+        Status(w, Selected(w, lcLookupSource) <= 0
+                      ? Tr("Offline lookup uses installed dictionaries. No network request is made.")
+                      : Tr("Online lookup sends only the typed word when you choose Look up. PDF context stays on this "
+                           "device."));
+        return;
+    }
+    if ((id == lcPronounce || id == lcRecording || id == lcRecordingUk || id == lcStopVoice) &&
+        notification == BN_CLICKED) {
+        if (!w->speech) w->speech = new DictionarySpeech(w->hwnd, kSpeechMessage);
+        if (id == lcStopVoice) {
+            w->speech->Stop();
+            return;
+        }
+        Str word = PronunciationWord(w);
+        if (!len(word)) {
+            Status(w, Tr("Type or select a word to hear its pronunciation."));
+            return;
+        }
+        int voice = std::max(Selected(w, lcVoice), 0);
+        if (id == lcPronounce) {
+            w->speech->Speak(word, voice);
+        } else {
+            if (!HasPermission(Perm::InternetAccess)) {
+                Status(w, Tr("Recorded pronunciation needs internet access. Pronounce uses installed voices offline."));
+                return;
+            }
+            Str audio;
+            for (const auto& meaning : w->meanings) {
+                audio = id == lcRecordingUk ? meaning.audioUrlUk : meaning.audioUrl;
+                if (len(audio)) break;
+            }
+            if (!len(audio)) {
+                Status(w, Tr("No recording is supplied for this word. Use Pronounce for an offline voice."));
+                return;
+            }
+            w->speech->PlayRecording(audio, word, voice);
+        }
+        return;
+    }
     if (id == lcGuideStart || id == lcGuidePrev || id == lcGuideNext || id == lcGuideSkip || id == lcGuideAction) {
+        if (notification != BN_CLICKED) return;
         if (id == lcGuideAction) {
             const GuideStep& step = kGuide[w->guideStep];
             LearningWindow* target = w;
@@ -974,6 +1667,7 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
         return;
     }
     if (id == lcPack && notification == CBN_SELCHANGE) {
+        PackDownloadInfo(w);
         int i = Selected(w, lcPack);
         if (i >= 0 && i < len(w->packs)) {
             const auto& p = w->packs[i];
@@ -992,6 +1686,10 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
         if (!w->practice) {
             RefreshLibrary(w);
         }
+        return;
+    }
+    if (id == lcQuery && notification == EN_CHANGE && w->dictionary) {
+        for (int action : {lcSave, lcLearned, lcRecording, lcRecordingUk}) EnableWindow(Control(w, action), false);
         return;
     }
     if (id == lcDeck && notification == CBN_SELCHANGE && !w->dictionary) {
@@ -1126,12 +1824,21 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
             }
             break;
         }
+        case lcCancelDownload:
+            if (w->cancelDownload) {
+                SetEvent(w->cancelDownload);
+                EnableWindow(Control(w, lcCancelDownload), false);
+                Status(w, Tr("Cancelling… Your existing offline dictionary stays available."));
+            }
+            break;
         case lcDownload:
         case lcRemovePack: {
             int i = Selected(w, lcPack);
             if (i >= 0 && i < len(w->packs)) {
-                StartDictionaryJob(w, id == lcDownload ? DictionaryJobKind::Download : DictionaryJobKind::Remove,
-                                   w->packs[i].id);
+                DictionaryJobKind kind = id == lcRemovePack               ? DictionaryJobKind::Remove
+                                         : FindKaikkiPack(w->packs[i].id) ? DictionaryJobKind::DownloadInfo
+                                                                          : DictionaryJobKind::Download;
+                StartDictionaryJob(w, kind, w->packs[i].id);
             }
             break;
         }
@@ -1197,26 +1904,94 @@ struct ChoiceList {
     HWND hwnd = nullptr;
     StrVec strings;
     Vec<int> heights;
-    int selected = -1, scroll = 0, hover = -1;
+    int selected = -1, scroll = 0, hover = -1, wheelRemainder = 0;
+    HFONT font = nullptr;
+    Vec<int> tops;
+    int measuredWidth = -1, measurePasses = 0, labelWidth = 0;
+    bool wrapDirty = true, topsDirty = true, wrapping = false;
 };
-static int ChoiceTop(ChoiceList* list, int index) {
-    int top = 0;
-    for (int i = 0; i < index && i < len(list->heights); i++) {
-        top += list->heights[i];
+static void IndexChoiceRows(ChoiceList* list) {
+    if (!list->topsDirty) return;
+    VecReset(list->tops);
+    int y = 0;
+    for (int height : list->heights) {
+        VecAppend(list->tops, y);
+        y += height;
     }
-    return top;
+    VecAppend(list->tops, y);
+    list->topsDirty = false;
+}
+static int ChoiceTop(ChoiceList* list, int index) {
+    IndexChoiceRows(list);
+    return list->tops[std::clamp(index, 0, len(list->heights))];
+}
+static int ChoiceRowAt(ChoiceList* list, int y) {
+    if (y < 0 || y >= ChoiceTop(list, len(list->heights))) return -1;
+    int first = 0, last = len(list->heights);
+    while (first + 1 < last) {
+        int middle = (first + last) / 2;
+        if (ChoiceTop(list, middle) <= y)
+            first = middle;
+        else
+            last = middle;
+    }
+    return first;
 }
 static void ScrollChoices(ChoiceList* list) {
     RECT rc;
     GetClientRect(list->hwnd, &rc);
     int total = ChoiceTop(list, len(list->heights));
     list->scroll = std::clamp(list->scroll, 0, std::max(0, total - (int)rc.bottom));
-    SCROLLINFO si{sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS};
+    SCROLLINFO si{sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL};
     si.nMax = std::max(0, total - 1);
     si.nPage = rc.bottom;
     si.nPos = list->scroll;
     SetScrollInfo(list->hwnd, SB_VERT, &si, true);
     InvalidateRect(list->hwnd, nullptr, false);
+}
+static void WrapChoices(HWND control) {
+    if (!control) return;
+    auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
+    if (!list || list->wrapping) return;
+    RECT client;
+    GetClientRect(control, &client);
+    if (!list->wrapDirty && list->measuredWidth == client.right) return;
+    int anchor = ChoiceRowAt(list, list->scroll);
+    int within = anchor >= 0 ? list->scroll - ChoiceTop(list, anchor) : 0;
+    list->wrapping = true;
+    defer {
+        list->wrapping = false;
+    };
+    int label = 0;
+    if (GetDlgCtrlID(control) != lcLibrary) {
+        for (int i = 0; i < len(list->strings); i++) label = std::max(label, LabelWidth(control, i));
+    }
+    list->labelWidth = label;
+    HDC dc = GetDC(control);
+    HGDIOBJ old = SelectObject(dc, list->font ? list->font : GetAppFontForDpi(DpiGet())->GetHFont());
+    for (int pass = 0; pass < 2; pass++) {
+        GetClientRect(control, &client);
+        for (int i = 0; i < len(list->strings); i++) {
+            WStr text = ToWStrTemp(list->strings[i]);
+            RECT bounds{0, 0, std::max(1, (int)client.right - label - UiScalePx(24)), 0};
+            DrawTextW(dc, CWStrTemp(text), len(text), &bounds,
+                      DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+            list->heights[i] = std::max((int)bounds.bottom, GetAppFontSizeForDpi(DpiGet())) + UiScalePx(20);
+        }
+        list->measurePasses++;
+        list->topsDirty = true;
+        if (anchor >= 0 && anchor < len(list->heights)) {
+            list->scroll = ChoiceTop(list, anchor) + std::min(within, list->heights[anchor] - 1);
+        }
+        ScrollChoices(list);
+        RECT after;
+        GetClientRect(control, &after);
+        if (client.right == after.right) break;
+    }
+    SelectObject(dc, old);
+    ReleaseDC(control, dc);
+    list->measuredWidth = client.right;
+    list->wrapDirty = false;
 }
 static void ChooseRow(ChoiceList* list, int index, bool notify) {
     if (index < -1 || index >= len(list->strings)) {
@@ -1253,11 +2028,13 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
         case LB_ADDSTRING:
             list->strings.Append(ToUtf8Temp(WStr((WCHAR*)lp)));
+            list->wrapDirty = list->topsDirty = true;
             VecAppend(list->heights, GetAppFontSizeForDpi(DpiGet()) + DpiScale(20));
             return len(list->strings) - 1;
         case LB_RESETCONTENT:
             list->strings.Reset();
             VecReset(list->heights);
+            list->wrapDirty = list->topsDirty = true;
             list->selected = -1;
             list->scroll = 0;
             ScrollChoices(list);
@@ -1268,6 +2045,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             list->strings.RemoveAt((int)wp);
             VecRemoveAt(list->heights, (int)wp);
+            list->wrapDirty = list->topsDirty = true;
             list->selected = -1;
             ScrollChoices(list);
             return len(list->strings);
@@ -1278,15 +2056,8 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (x < 0 || x >= rc.right || y < 0 || y >= rc.bottom) {
                 return MAKELONG(0, 1);
             }
-            y += list->scroll;
-            int top = 0;
-            for (int i = 0; i < len(list->heights); i++) {
-                top += list->heights[i];
-                if (y < top) {
-                    return MAKELONG(i, 0);
-                }
-            }
-            return MAKELONG(0, 1);
+            int row = ChoiceRowAt(list, y + list->scroll);
+            return row >= 0 ? MAKELONG(row, 0) : MAKELONG(0, 1);
         }
         case LB_GETCOUNT:
             return len(list->strings);
@@ -1311,10 +2082,18 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 return LB_ERR;
             }
             list->heights[(int)wp] = std::max(1, (int)lp);
+            list->topsDirty = true;
             ScrollChoices(list);
             return 0;
+        case WM_GETFONT:
+            return (LRESULT)list->font;
         case WM_SETFONT:
+            list->font = (HFONT)wp;
+            list->wrapDirty = true;
+            WrapChoices(hwnd);
+            return 0;
         case WM_SIZE:
+            WrapChoices(hwnd);
             ScrollChoices(list);
             return 0;
         case WM_GETDLGCODE:
@@ -1330,14 +2109,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_MOUSEMOVE: {
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tracking);
-            int y = GET_Y_LPARAM(lp) + list->scroll, top = 0, hover = -1;
-            for (int i = 0; i < len(list->heights); i++) {
-                top += list->heights[i];
-                if (y < top) {
-                    hover = i;
-                    break;
-                }
-            }
+            int hover = ChoiceRowAt(list, GET_Y_LPARAM(lp) + list->scroll);
             if (hover != list->hover) {
                 list->hover = hover;
                 InvalidateRect(hwnd, nullptr, false);
@@ -1350,15 +2122,8 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case WM_LBUTTONDOWN: {
             SetFocus(hwnd);
-            int y = GET_Y_LPARAM(lp) + list->scroll;
-            int top = 0;
-            for (int i = 0; i < len(list->heights); i++) {
-                top += list->heights[i];
-                if (y < top) {
-                    ChooseRow(list, i, true);
-                    break;
-                }
-            }
+            int row = ChoiceRowAt(list, GET_Y_LPARAM(lp) + list->scroll);
+            if (row >= 0) ChooseRow(list, row, true);
             return 0;
         }
         case WM_KEYDOWN: {
@@ -1407,19 +2172,25 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 ChooseRow(list, (int)wp - 'A', true);
             }
             return 0;
-        case WM_MOUSEWHEEL:
-            list->scroll -= GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * DpiScale(96);
+        case WM_MOUSEWHEEL: {
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int before = list->scroll;
+            int movement = WheelDistance(wp, WheelStep(client.bottom), list->wheelRemainder);
+            list->scroll -= movement;
             ScrollChoices(list);
+            if (movement && before == list->scroll) SendMessageW(GetParent(hwnd), msg, wp, lp);
             return 0;
+        }
         case WM_VSCROLL: {
             SCROLLINFO si{sizeof(si), SIF_ALL};
             GetScrollInfo(hwnd, SB_VERT, &si);
             switch (LOWORD(wp)) {
                 case SB_LINEUP:
-                    list->scroll -= DpiScale(32);
+                    list->scroll -= UiScalePx(32);
                     break;
                 case SB_LINEDOWN:
-                    list->scroll += DpiScale(32);
+                    list->scroll += UiScalePx(32);
                     break;
                 case SB_PAGEUP:
                     list->scroll -= si.nPage;
@@ -1444,14 +2215,18 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 1;
         case WM_PAINT: {
             PAINTSTRUCT ps;
-            HDC dc = BeginPaint(hwnd, &ps);
+            HDC target = BeginPaint(hwnd, &ps);
             RECT rc;
             GetClientRect(hwnd, &rc);
+            DoubleBuffer buffer(hwnd, {0, 0, rc.right, rc.bottom});
+            HDC dc = buffer.GetDC();
             HBRUSH bg = CreateSolidBrush(ThemeControlBackgroundColor());
             FillRect(dc, &rc, bg);
             DeleteObject(bg);
-            int y = -list->scroll;
-            for (int i = 0; i < len(list->strings); i++) {
+            int first = ChoiceRowAt(list, std::max(0, list->scroll + (int)ps.rcPaint.top));
+            if (first < 0) first = len(list->strings);
+            int y = ChoiceTop(list, first) - list->scroll;
+            for (int i = first; i < len(list->strings) && y < ps.rcPaint.bottom; i++) {
                 DRAWITEMSTRUCT item{};
                 item.CtlType = ODT_LISTBOX;
                 item.CtlID = GetDlgCtrlID(hwnd);
@@ -1469,6 +2244,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
                 y += list->heights[i];
             }
+            buffer.Flush(target);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -1488,17 +2264,17 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     DeleteObject(brush);
     if (selected || (item->itemState & ODS_HOTLIGHT)) {
         RECT panel = rc;
-        InflateRect(&panel, -DpiScale(4), -DpiScale(3));
+        InflateRect(&panel, -UiScalePx(4), -UiScalePx(3));
         brush = CreateSolidBrush(ThemeHotBackgroundColor());
         HGDIOBJ oldBrush = SelectObject(item->hDC, brush), oldPen = SelectObject(item->hDC, GetStockObject(NULL_PEN));
-        RoundRect(item->hDC, panel.left, panel.top, panel.right, panel.bottom, DpiScale(10), DpiScale(10));
+        RoundRect(item->hDC, panel.left, panel.top, panel.right, panel.bottom, UiScalePx(10), UiScalePx(10));
         SelectObject(item->hDC, oldBrush);
         SelectObject(item->hDC, oldPen);
         DeleteObject(brush);
         if (selected) {
             RECT stripe = panel;
-            stripe.right = stripe.left + DpiScale(3);
-            InflateRect(&stripe, 0, -DpiScale(5));
+            stripe.right = stripe.left + UiScalePx(3);
+            InflateRect(&stripe, 0, -UiScalePx(5));
             brush = CreateSolidBrush(ThemeBrandColor());
             FillRect(item->hDC, &stripe, brush);
             DeleteObject(brush);
@@ -1509,16 +2285,12 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     }
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, ThemeWindowTextColor());
-    HGDIOBJ old = SelectObject(item->hDC, GetAppFontForDpi(DpiGet())->GetHFont());
-    InflateRect(&rc, -DpiScale(10), -DpiScale(10));
+    HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(item->hDC, font ? font : GetAppFontForDpi(DpiGet())->GetHFont());
+    InflateRect(&rc, -UiScalePx(10), -UiScalePx(10));
     RECT label = rc;
-    int count = (int)SendMessageW(item->hwndItem, LB_GETCOUNT, 0, 0);
-    int labelWidth = 0;
-    if (item->CtlID != lcLibrary) {
-        for (int i = 0; i < count; i++) {
-            labelWidth = std::max(labelWidth, LabelWidth(item->hwndItem, i));
-        }
-    }
+    auto* list = (ChoiceList*)GetWindowLongPtrW(item->hwndItem, GWLP_USERDATA);
+    int labelWidth = item->CtlID == lcLibrary || !list ? 0 : list->labelWidth;
     label.right = label.left + labelWidth;
     WStr letter = ToWStrTemp(ChoiceLabel(item->itemID));
     if (labelWidth) {
@@ -1526,34 +2298,59 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     }
     rc.left += labelWidth;
     WStr text = LbGetTextTemp(item->hwndItem, item->itemID);
+    if (item->CtlID == lcLibrary && len(text) >= 3 && text.s[len(text) - 1] == L'✓') {
+        text = WStr(text.s, len(text) - 3);
+        int size = LearningIconSize();
+        RECT check{rc.right - size, rc.top, rc.right, rc.top + size};
+        DrawGreenCheck(item->hDC, check, selected ? ThemeHotBackgroundColor() : ThemeControlBackgroundColor());
+        rc.right -= size + UiScalePx(8);
+    }
     DrawTextW(item->hDC, CWStrTemp(text), len(text), &rc, DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
     if (item->itemState & ODS_FOCUS) {
         RECT focus = item->rcItem;
-        InflateRect(&focus, -DpiScale(2), -DpiScale(2));
+        InflateRect(&focus, -UiScalePx(2), -UiScalePx(2));
         DrawFocusRect(item->hDC, &focus);
     }
     SelectObject(item->hDC, old);
 }
 static void FitPackDropdown(LearningWindow* w) {
-    HWND combo = Control(w, lcPack);
-    if (!combo) return;
-    HDC dc = GetDC(combo);
-    HGDIOBJ font = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
-    int width = 0;
-    for (const auto& pack : w->packs) {
-        WStr text = ToWStrTemp(pack.installed ? pack.title : fmt("%s · %s", pack.title, Tr("not installed")));
-        SIZE size{};
-        GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &size);
-        width = std::max(width, (int)size.cx + LearningIconSize() + DpiScale(40));
+    for (int id : {lcPack, lcDeck}) {
+        HWND combo = Control(w, id);
+        if (!combo) continue;
+        HDC dc = GetDC(combo);
+        HGDIOBJ font = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
+        int width = 0;
+        int count = (int)SendMessageW(combo, CB_GETCOUNT, 0, 0);
+        for (int i = 0; i < count; i++) {
+            int length = (int)SendMessageW(combo, CB_GETLBTEXTLEN, i, 0);
+            WCHAR* text = AllocArray<WCHAR>(GetTempArena(), std::max(0, length) + 1);
+            SendMessageW(combo, CB_GETLBTEXT, i, (LPARAM)text);
+            SIZE size{};
+            GetTextExtentPoint32W(dc, text, std::max(length, 0), &size);
+            width = std::max(width, (int)size.cx + LearningIconSize() + UiScalePx(40));
+        }
+        SelectObject(dc, font);
+        ReleaseDC(combo, dc);
+        MONITORINFO monitor{sizeof(monitor)};
+        if (GetMonitorInfoW(MonitorFromWindow(w->hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
+            width = std::min(width, (int)(monitor.rcWork.right - monitor.rcWork.left) - UiScalePx(32));
+        SendMessageW(combo, CB_SETDROPPEDWIDTH, std::max(width, UiScalePx(240)), 0);
+        int height = std::max(LearningIconSize(), GetAppFontSizeForDpi(DpiGet())) + UiScalePx(16);
+        SendMessageW(combo, CB_SETITEMHEIGHT, 0, height);
+        SendMessageW(combo, CB_SETITEMHEIGHT, (WPARAM)-1, height);
     }
-    SelectObject(dc, font);
-    ReleaseDC(combo, dc);
-    MONITORINFO monitor{sizeof(monitor)};
-    if (GetMonitorInfoW(MonitorFromWindow(w->hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
-        width = std::min(width, (int)(monitor.rcWork.right - monitor.rcWork.left) - DpiScale(32));
-    SendMessageW(combo, CB_SETDROPPEDWIDTH, std::max(width, DpiScale(240)), 0);
-    SendMessageW(combo, CB_SETITEMHEIGHT, 0, GetAppFontSizeForDpi(DpiGet()) + DpiScale(16));
-    SendMessageW(combo, CB_SETITEMHEIGHT, (WPARAM)-1, GetAppFontSizeForDpi(DpiGet()) + DpiScale(16));
+}
+static void DrawGreenCheck(HDC dc, RECT rc, Color background) {
+    int size = std::min((int)(rc.right - rc.left), (int)(rc.bottom - rc.top));
+    bool dark = GetRValue(background) + GetGValue(background) + GetBValue(background) < 384;
+    Color green = dark ? RGB(93, 230, 145) : RGB(17, 120, 58);
+    HPEN pen = CreatePen(PS_SOLID, std::max(2, size / 10), green);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    MoveToEx(dc, rc.left + size / 6, rc.top + size / 2, nullptr);
+    LineTo(dc, rc.left + size * 5 / 12, rc.top + size * 3 / 4);
+    LineTo(dc, rc.left + size * 5 / 6, rc.top + size / 4);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
 }
 static void DrawPackChoice(LearningWindow* w, DRAWITEMSTRUCT* item) {
     RECT rc = item->rcItem;
@@ -1562,29 +2359,35 @@ static void DrawPackChoice(LearningWindow* w, DRAWITEMSTRUCT* item) {
     HBRUSH brush = CreateSolidBrush(background);
     FillRect(item->hDC, &rc, brush);
     DeleteObject(brush);
-    if (item->itemID >= (UINT)len(w->packs)) return;
-    const OfflineDictPack& pack = w->packs[item->itemID];
+    bool packChoice = item->CtlID == lcPack;
+    if (item->itemID >= (UINT)(packChoice ? len(w->packs) : len(w->deckIds))) return;
+    bool installed = packChoice ? w->packs[item->itemID].installed : w->deckInstalled[item->itemID];
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, (item->itemState & ODS_DISABLED) ? ThemeWindowTextDisabledColor() : ThemeWindowTextColor());
     HGDIOBJ font = SelectObject(item->hDC, GetAppFontForDpi(DpiGet())->GetHFont());
     InflateRect(&rc, -DpiScale(8), 0);
-    if (pack.installed) {
+    if (installed) {
         int size = LearningIconSize();
         int top = rc.top + ((rc.bottom - rc.top) - size) / 2;
-        bool dark = GetRValue(background) + GetGValue(background) + GetBValue(background) < 384;
-        Color green = ThemeUsesHighContrastColors() ? ThemeWindowTextColor()
-                      : dark                        ? RGB(93, 230, 145)
-                                                    : RGB(17, 120, 58);
-        HPEN pen = CreatePen(PS_SOLID, std::max(2, size / 10), green);
-        HGDIOBJ oldPen = SelectObject(item->hDC, pen);
-        MoveToEx(item->hDC, rc.left + size / 6, top + size / 2, nullptr);
-        LineTo(item->hDC, rc.left + size * 5 / 12, top + size * 3 / 4);
-        LineTo(item->hDC, rc.left + size * 5 / 6, top + size / 4);
-        SelectObject(item->hDC, oldPen);
-        DeleteObject(pen);
+        RECT check{rc.left, top, rc.left + size, top + size};
+        DrawGreenCheck(item->hDC, check, background);
         rc.left += size + DpiScale(8);
     }
-    WStr title = ToWStrTemp(pack.installed ? pack.title : fmt("%s · %s", pack.title, Tr("not installed")));
+    Str caption;
+    if (packChoice) {
+        const auto& pack = w->packs[item->itemID];
+        caption = pack.installed ? pack.title : fmt("%s · %s", pack.title, Tr("not installed"));
+    } else {
+        int count = (int)SendMessageW(item->hwndItem, CB_GETLBTEXTLEN, item->itemID, 0);
+        WCHAR* value = AllocArray<WCHAR>(GetTempArena(), std::max(0, count) + 1);
+        SendMessageW(item->hwndItem, CB_GETLBTEXT, item->itemID, (LPARAM)value);
+        caption = ToUtf8Temp(WStr(value, std::max(count, 0)));
+        if (installed) {
+            Str suffix = fmt(" · %s", Tr("installed"));
+            if (str::EndsWith(caption, suffix)) caption = Str(caption.s, len(caption) - len(suffix));
+        }
+    }
+    WStr title = ToWStrTemp(caption);
     DrawTextW(item->hDC, CWStrTemp(title), len(title), &rc, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     if (item->itemState & ODS_FOCUS) DrawFocusRect(item->hDC, &item->rcItem);
     SelectObject(item->hDC, font);
@@ -1688,6 +2491,78 @@ static void DrawLearningButton(DRAWITEMSTRUCT* item) {
         DrawFocusRect(item->hDC, &focus);
     }
     SelectObject(item->hDC, oldFont);
+}
+static LRESULT CALLBACK LearningSplitProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* w = (LearningWindow*)data;
+    if (msg == WM_SETCURSOR) {
+        SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+        return TRUE;
+    }
+    if (msg == WM_LBUTTONDOWN) {
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        MapWindowPoints(hwnd, w->hwnd, &point, 1);
+        w->splitPointerY = point.y + w->scrollY;
+        w->splitStartShare = w->promptShare;
+        RECT prompt;
+        GetWindowRect(Control(w, lcDetails), &prompt);
+        w->splitPromptHeight = prompt.bottom - prompt.top;
+        w->splitting = true;
+        SetFocus(hwnd);
+        SetCapture(hwnd);
+        return 0;
+    }
+    if (msg == WM_MOUSEMOVE && w->splitting) {
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        MapWindowPoints(hwnd, w->hwnd, &point, 1);
+        int delta = point.y + w->scrollY - w->splitPointerY;
+        int share = delta ? MulDiv(w->splitPromptHeight + delta, 100, std::max(w->splitHeight, 1)) : w->splitStartShare;
+        share = std::clamp(share, 10, 80);
+        if (share != w->promptShare) {
+            w->promptShare = share;
+            LayoutLearning(w);
+        }
+        return 0;
+    }
+    if (msg == WM_LBUTTONUP || msg == WM_CAPTURECHANGED) {
+        if (w->splitting) {
+            w->splitting = false;
+            if (GetCapture() == hwnd) ReleaseCapture();
+            SaveLearningPrefs(w);
+        }
+        return 0;
+    }
+    if (msg == WM_GETDLGCODE) return DLGC_WANTARROWS;
+    if (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_DOWN || wp == VK_HOME)) {
+        w->promptShare = wp == VK_HOME ? 30 : std::clamp(w->promptShare + (wp == VK_DOWN ? 5 : -5), 10, 80);
+        LayoutLearning(w);
+        SaveLearningPrefs(w);
+        return 0;
+    }
+    if (msg == WM_CONTEXTMENU) {
+        SetFocus(hwnd);
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        if (point.x == -1 && point.y == -1) {
+            RECT bounds;
+            GetWindowRect(hwnd, &bounds);
+            point = {(bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2};
+        }
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, 1, CWStrTemp(Tr("More word space")));
+        AppendMenuW(menu, MF_STRING, 2, CWStrTemp(Tr("More answer space")));
+        AppendMenuW(menu, MF_STRING, 3, CWStrTemp(Tr("Reset panels")));
+        int action =
+            TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, w->hwnd, nullptr);
+        DestroyMenu(menu);
+        if (action) {
+            w->promptShare = action == 3 ? 30 : std::clamp(w->promptShare + (action == 1 ? 5 : -5), 10, 80);
+            LayoutLearning(w);
+            SaveLearningPrefs(w);
+        }
+        return 0;
+    }
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) InvalidateRect(hwnd, nullptr, false);
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, LearningSplitProc, id);
+    return DefSubclassProc(hwnd, msg, wp, lp);
 }
 static LRESULT CALLBACK LearningButtonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     auto* w = (LearningWindow*)data;
@@ -1855,12 +2730,17 @@ static void RefreshLearningStyle(LearningWindow* w) {
             SendMessageW(child, WM_SETFONT,
                          (WPARAM)(child == Control(w, lcTitle) ? w->titleFont : GetAppFontForDpi(DpiGet())->GetHFont()),
                          true);
+            WCHAR klass[32]{};
+            GetClassNameW(child, klass, dimof(klass));
+            if (_wcsicmp(klass, L"EDIT") == 0) EditSetDefaultMargins(child);
             InvalidateRect(child, nullptr, true);
         }
     }
+    ZeroMemory(w->boundsValid, sizeof(w->boundsValid));
     FitPackDropdown(w);
-    LayoutLearning(w);
-    InvalidateRect(w->hwnd, nullptr, true);
+    FormatDetails(w);
+    LayoutLearning(w, true);
+    RedrawWindow(w->hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     DpiScope dpi(hwnd);
@@ -1874,8 +2754,19 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
     switch (msg) {
+        case kSpeechMessage: {
+            if (!w->speech) return 0;
+            RefreshVoices(w);
+            Str message;
+            auto state = w->speech->GetStatus(&message);
+            if (len(message)) Status(w, message);
+            str::Free(message);
+            EnableWindow(Control(w, lcStopVoice),
+                         state == DictionarySpeechStatus::Loading || state == DictionarySpeechStatus::Speaking);
+            return 0;
+        }
         case WM_SIZE:
-            LayoutLearning(w);
+            LayoutLearning(w, true);
             return 0;
         case WM_VSCROLL: {
             SCROLLINFO si{sizeof(si), SIF_ALL};
@@ -1904,14 +2795,16 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                     offset = si.nMax;
                     break;
             }
-            w->scrollY = offset;
-            LayoutLearning(w);
+            ScrollLearning(w, offset);
             return 0;
         }
-        case WM_MOUSEWHEEL:
-            w->scrollY -= GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * DpiScale(96);
-            LayoutLearning(w);
+        case WM_MOUSEWHEEL: {
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int movement = WheelDistance(wp, WheelStep(client.bottom), w->wheelRemainder);
+            ScrollLearning(w, w->scrollY - movement);
             return 0;
+        }
         case WM_GETMINMAXINFO: {
             auto* info = (MINMAXINFO*)lp;
             info->ptMinTrackSize = {DpiScale(540), DpiScale(440)};
@@ -1936,20 +2829,48 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 return 0;
             }
             break;
+        case WM_NOTIFY: {
+            auto* notice = (NMHDR*)lp;
+            if (notice->hwndFrom != Control(w, lcDetails) || notice->code != EN_LINK) break;
+            auto* link = (ENLINK*)lp;
+            if (link->msg != WM_LBUTTONUP) break;
+            for (const auto& run : w->detailRuns) {
+                if (run.style != DetailStyle::WordLink || link->chrg.cpMin < run.start ||
+                    link->chrg.cpMin >= run.start + run.length)
+                    continue;
+                Str word = str::DupTemp(run.word);
+                if (w->dictionary) {
+                    Text(w, lcQuery, word);
+                    LookupWord(w);
+                } else
+                    ShowDictionaryDialog(w->owner, word);
+                return 0;
+            }
+            int length = link->chrg.cpMax - link->chrg.cpMin;
+            if (length <= 0 || length > 2048) return 0;
+            WCHAR* url = AllocArray<WCHAR>(GetTempArena(), length + 1);
+            TEXTRANGEW range{link->chrg, url};
+            SendMessageW(Control(w, lcDetails), EM_GETTEXTRANGE, 0, (LPARAM)&range);
+            Str value = ToUtf8Temp(WStr(url, length));
+            if (str::StartsWithI(value, StrL("https://"))) SumatraLaunchBrowser(value);
+            return 0;
+        }
         case WM_COMMAND: {
             WCHAR klass[32]{};
             if (lp) {
                 GetClassNameW((HWND)lp, klass, dimof(klass));
             }
             int notice = HIWORD(wp);
-            if ((wcscmp(klass, L"EDIT") == 0 && notice == EN_SETFOCUS) ||
-                (wcscmp(klass, L"BUTTON") == 0 && notice == BN_SETFOCUS) ||
-                (wcscmp(klass, L"COMBOBOX") == 0 && notice == CBN_SETFOCUS) ||
-                ((wcscmp(klass, L"LISTBOX") == 0 || wcscmp(klass, kChoiceListClass) == 0) && notice == LBN_SETFOCUS)) {
+            if ((_wcsicmp(klass, L"EDIT") == 0 && notice == EN_SETFOCUS) ||
+                (_wcsicmp(klass, L"BUTTON") == 0 && notice == BN_SETFOCUS) ||
+                (_wcsicmp(klass, L"COMBOBOX") == 0 && notice == CBN_SETFOCUS) ||
+                ((_wcsicmp(klass, L"LISTBOX") == 0 || _wcsicmp(klass, kChoiceListClass) == 0) &&
+                 notice == LBN_SETFOCUS)) {
                 InvalidateRect(hwnd, nullptr, false);
                 RevealFocusedControl(w, (HWND)lp);
                 return 0;
             }
+            if (_wcsicmp(klass, L"EDIT") == 0 && notice == EN_CHANGE) FitLearningInput(w, LOWORD(wp));
             LearningAction(w, LOWORD(wp), HIWORD(wp));
             return 0;
         }
@@ -1973,7 +2894,25 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
             break;
         case WM_DRAWITEM:
-            if (((DRAWITEMSTRUCT*)lp)->CtlType == ODT_COMBOBOX && ((DRAWITEMSTRUCT*)lp)->CtlID == lcPack) {
+            if (((DRAWITEMSTRUCT*)lp)->CtlID == lcSplit) {
+                auto* item = (DRAWITEMSTRUCT*)lp;
+                FillRect(item->hDC, &item->rcItem, w->background);
+                RECT rc = item->rcItem;
+                int x = (rc.left + rc.right) / 2, y = (rc.top + rc.bottom) / 2;
+                HPEN pen = CreatePen(PS_SOLID, UiScalePx(2),
+                                     GetFocus() == item->hwndItem ? ThemeBrandColor() : ThemeWindowDarkerTextColor());
+                HGDIOBJ old = SelectObject(item->hDC, pen);
+                MoveToEx(item->hDC, x - UiScalePx(32), y - UiScalePx(2), nullptr);
+                LineTo(item->hDC, x + UiScalePx(32), y - UiScalePx(2));
+                MoveToEx(item->hDC, x - UiScalePx(32), y + UiScalePx(2), nullptr);
+                LineTo(item->hDC, x + UiScalePx(32), y + UiScalePx(2));
+                SelectObject(item->hDC, old);
+                DeleteObject(pen);
+                if (GetFocus() == item->hwndItem) DrawFocusRect(item->hDC, &rc);
+                return TRUE;
+            }
+            if (((DRAWITEMSTRUCT*)lp)->CtlType == ODT_COMBOBOX &&
+                (((DRAWITEMSTRUCT*)lp)->CtlID == lcPack || ((DRAWITEMSTRUCT*)lp)->CtlID == lcDeck)) {
                 DrawPackChoice(w, (DRAWITEMSTRUCT*)lp);
                 return TRUE;
             }
@@ -2005,20 +2944,19 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
         case WM_PAINT: {
             PAINTSTRUCT ps;
-            HDC dc = BeginPaint(hwnd, &ps);
+            HDC target = BeginPaint(hwnd, &ps);
             RECT client;
             GetClientRect(hwnd, &client);
+            DoubleBuffer buffer(hwnd, {0, 0, client.right, client.bottom});
+            HDC dc = buffer.GetDC();
             FillRect(dc, &client, w->background);
             DrawLearningFrames(w, dc);
+            buffer.Flush(target);
             EndPaint(hwnd, &ps);
             return 0;
         }
-        case WM_ERASEBKGND: {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            FillRect((HDC)wp, &rc, w->background);
+        case WM_ERASEBKGND:
             return 1;
-        }
         case WM_CLOSE:
             DestroyWindow(hwnd);
             return 0;
@@ -2053,21 +2991,38 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text, DWORD style = 0) {
-    if (id == lcPack) style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
-    if (wcscmp(klass, L"EDIT") == 0 || wcscmp(klass, kChoiceListClass) == 0) style &= ~WS_BORDER;
+    if (id == lcDetails) {
+        static HMODULE richEdit = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (richEdit) klass = MSFTEDIT_CLASS;
+    }
+    if (id == lcPack || id == lcDeck) style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
+    if (_wcsicmp(klass, L"EDIT") == 0 || _wcsicmp(klass, MSFTEDIT_CLASS) == 0 || _wcsicmp(klass, kChoiceListClass) == 0)
+        style &= ~WS_BORDER;
     HWND child = CreateWindowExW(0, klass, CWStrTemp(text),
-                                 WS_CHILD | WS_VISIBLE | (wcscmp(klass, L"STATIC") ? WS_TABSTOP : 0) | style, 0, 0, 1,
+                                 WS_CHILD | WS_VISIBLE | (_wcsicmp(klass, L"STATIC") ? WS_TABSTOP : 0) | style, 0, 0, 1,
                                  1, w->hwnd, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
     w->controls[id] = child;
-    if (wcscmp(klass, L"EDIT") == 0)
+    if (IsRichDetails(child)) {
+        SendMessageW(child, EM_SETEVENTMASK, 0, ENM_LINK);
+        SendMessageW(child, EM_AUTOURLDETECT, TRUE, 0);
+        SendMessageW(child, EM_SETBKGNDCOLOR, 0, ThemeControlBackgroundColor());
+    }
+    if (_wcsicmp(klass, L"EDIT") == 0)
         SendMessageW(child, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(DpiScale(10), DpiScale(10)));
     SendMessageW(child, WM_SETFONT, (WPARAM)GetAppFontForDpi(DpiGet())->GetHFont(), false);
+    if (_wcsicmp(klass, L"EDIT") == 0) EditSetDefaultMargins(child);
     return child;
 }
 
 static void MakeButton(LearningWindow* w, int id, Str text) {
     HWND child = MakeControl(w, id, L"BUTTON", text, BS_OWNERDRAW | BS_NOTIFY);
     SetWindowSubclass(child, LearningButtonProc, 1, (DWORD_PTR)w);
+}
+static HWND MakeLearningSplit(LearningWindow* w) {
+    HWND split =
+        MakeControl(w, lcSplit, L"STATIC", Tr("Resize word and answer panels"), SS_OWNERDRAW | SS_NOTIFY | WS_TABSTOP);
+    SetWindowSubclass(split, LearningSplitProc, 1, (DWORD_PTR)w);
+    return split;
 }
 static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
     for (LearningWindow* w : gLearningWindows) {
@@ -2094,6 +3049,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
     w->dictionary = dictionary;
     w->guideStep = gGuideProgress[dictionary ? 0 : 1];
     w->serial = ++gLearningSerial;
+    LoadLearningPrefs(w);
     w->background = CreateSolidBrush(ThemeMainWindowBackgroundColor());
     w->fieldBackground = CreateSolidBrush(ThemeControlBackgroundColor());
     DpiSetFromHwnd(owner->hwndFrame);
@@ -2101,7 +3057,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
     GetWindowRect(owner->hwndFrame, &parent);
     VecAppend(gLearningWindows, w);
     HWND hwnd = CreateWindowExW(
-        WS_EX_CONTROLPARENT, kLearningClass, dictionary ? L"Offline dictionary" : L"Vocabulary learning",
+        WS_EX_CONTROLPARENT, kLearningClass, dictionary ? L"Dictionary" : L"Vocabulary learning",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VSCROLL, parent.left + DpiScale(36), parent.top + DpiScale(36),
         DpiScale(860), DpiScale(720), owner->hwndFrame, nullptr, GetModuleHandleW(nullptr), w);
     if (!hwnd) {
@@ -2111,10 +3067,9 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
         return nullptr;
     }
     SetLearningIcons(w);
-    MakeControl(
-        w, lcTitle, L"STATIC",
-        dictionary ? Tr("Offline dictionary · meanings worth keeping") : Tr("Learning hub · make new words familiar"),
-        SS_OWNERDRAW | SS_NOPREFIX);
+    MakeControl(w, lcTitle, L"STATIC",
+                dictionary ? Tr("Dictionary · meanings worth keeping") : Tr("Learning hub · make new words familiar"),
+                SS_OWNERDRAW | SS_NOPREFIX);
     MakeButton(w, lcGuideStart, Tr("Help / Start guide"));
     MakeControl(w, lcGuideText, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX);
     MakeButton(w, lcGuidePrev, Tr("Back"));
@@ -2132,11 +3087,46 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
                 dictionary ? Tr("Lookup is entirely offline. Downloads only start when requested.") : Str{},
                 SS_NOPREFIX);
     MakeButton(w, lcLearned, Tr("Mark learned"));
+    MakeButton(w, lcPronounce, Tr("Pronounce"));
+    MakeButton(w, lcStopVoice, Tr("Stop"));
+    MakeControl(w, lcVoice, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
+    AddChoice(w, lcVoice, Tr("System default voice"));
+    SendMessageW(Control(w, lcVoice), CB_SETCURSEL, 0, 0);
+    EnableWindow(Control(w, lcStopVoice), false);
+    w->speech = new DictionarySpeech(hwnd, kSpeechMessage);
     if (dictionary) {
+        MakeControl(w, lcLookupSource, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
+        for (Str source :
+             {Tr("Offline · installed dictionaries"), Tr("Online · chosen source order"),
+              Tr("Online · Wiktionary (Kaikki)"), Tr("Online · Wiktionary REST"), Tr("Online · Free Dictionary API")})
+            AddChoice(w, lcLookupSource, source);
+        SendMessageW(Control(w, lcLookupSource), CB_SETCURSEL, 0, 0);
+        MakeButton(w, lcSourcesToggle, Tr("Sources…"));
+        int position = 0;
+        for (int setting : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird}) {
+            MakeControl(w, setting, L"COMBOBOX", {}, CBS_DROPDOWNLIST);
+            for (Str source :
+                 {Tr("Disabled"), StrL("Wiktionary (Kaikki)"), StrL("Wiktionary REST"), StrL("Free Dictionary API")})
+                AddChoice(w, setting, fmt("%d. %s", position + 1, source));
+            SendMessageW(Control(w, setting), CB_SETCURSEL, w->onlineOrder[position++], 0);
+            Visible(w, setting, false);
+        }
+        MakeControl(w, lcSense, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
+        AddChoice(w, lcSense, Tr("Meaning to save"));
+        SendMessageW(Control(w, lcSense), CB_SETCURSEL, 0, 0);
+        EnableWindow(Control(w, lcSense), false);
+        MakeButton(w, lcRecording, Tr("US recording"));
+        MakeButton(w, lcRecordingUk, Tr("UK recording"));
+        EnableWindow(Control(w, lcRecording), false);
+        EnableWindow(Control(w, lcRecordingUk), false);
         MakeControl(w, lcPack, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
         MakeButton(w, lcImportPack, Tr("Import…"));
         MakeButton(w, lcDownload, Tr("Download"));
         MakeButton(w, lcRemovePack, Tr("Remove"));
+        MakeControl(w, lcPackInfo, L"STATIC", {}, SS_NOPREFIX);
+        MakeButton(w, lcCancelDownload, Tr("Cancel download"));
+        Visible(w, lcCancelDownload, false);
+        Visible(w, lcPackInfo, false);
         MakeButton(w, lcSave, Tr("Save word"));
         MakeButton(w, lcOpenVocabulary, Tr("Open learning hub"));
         RefreshPacks(w);
@@ -2155,10 +3145,9 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary) {
         MakeButton(w, lcPractice, Tr("Practice"));
         MakeControl(w, lcLibrary, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
         MakeControl(w, lcAnswer, L"EDIT", {}, ES_AUTOHSCROLL | WS_BORDER);
-        MakeControl(w, lcChoices, L"LISTBOX", {},
-                    LBS_NOTIFY | LBS_HASSTRINGS | LBS_OWNERDRAWVARIABLE | WS_VSCROLL | WS_BORDER);
-        MakeControl(w, lcPairs, L"LISTBOX", {},
-                    LBS_NOTIFY | LBS_HASSTRINGS | LBS_OWNERDRAWVARIABLE | WS_VSCROLL | WS_BORDER);
+        MakeControl(w, lcChoices, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
+        MakeControl(w, lcPairs, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
+        MakeLearningSplit(w);
         MakeButton(w, lcCheck, Tr("Check answer"));
         MakeButton(w, lcReveal, Tr("Show answer"));
         MakeButton(w, lcBack, Tr("Back to library"));
@@ -2242,6 +3231,12 @@ void CloseVocabularyDialogs(MainWindow* owner) {
 }
 
 #if IS_DEBUG
+static LRESULT CALLBACK CountChoiceMeasure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    if (msg == LB_SETITEMHEIGHT || msg == EM_SETRECT || msg == EM_SETRECTNP) {
+        (*(int*)data)++;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
 void VocabularyDialog_UnitTests() {
     Settings* savedSettings = gSettings;
     Settings* fixture = NewSettings({});
@@ -2250,10 +3245,27 @@ void VocabularyDialog_UnitTests() {
         return;
     }
     gSettings = fixture;
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
+    bool savedNoSettings = gDontSaveSettings;
+    gDontSaveSettings = true;
     defer {
         gSettings = savedSettings;
+        if (savedSettings) SetCurrentThemeFromSettings();
+        gDontSaveSettings = savedNoSettings;
         DeleteSettings(fixture);
     };
+    utassert(str::Eq(DictionarySize(3335559018LL), StrL("3.34 GB")));
+    utassert(str::Eq(DictionarySize(4719269), StrL("4.72 MB")));
+    const KaikkiPack* simplePack = FindKaikkiPack(StrL("kaikki-simple-english"));
+    utassert(simplePack != nullptr);
+    if (simplePack) {
+        Str confirmation = KaikkiDownloadConfirmation(*simplePack, 4719269);
+        utassert(str::Contains(confirmation, StrL("4719269 bytes")));
+        utassert(str::Contains(confirmation, StrL("compressed")));
+        utassert(str::Contains(confirmation, simplePack->sourceUrl));
+        utassert(str::Contains(confirmation, StrL("37.90 MB")));
+    }
     utassert(dimof(kGuide) == kGuideSteps);
     utassert(kGuide[0].dictionary && kGuide[0].control == lcQuery);
     utassert(!kGuide[kGuideSteps - 1].dictionary && kGuide[kGuideSteps - 1].control == lcExport);
@@ -2274,7 +3286,7 @@ void VocabularyDialog_UnitTests() {
     klass.lpfnWndProc = ChoiceWndProc;
     klass.lpszClassName = kChoiceListClass;
     RegisterClassExW(&klass);
-    HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 500, 500, nullptr, nullptr,
+    HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_POPUP | WS_VSCROLL, 0, 0, 500, 500, nullptr, nullptr,
                                   GetModuleHandleW(nullptr), nullptr);
     utassert(parent != nullptr);
     if (!parent) {
@@ -2300,6 +3312,33 @@ void VocabularyDialog_UnitTests() {
     auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
     int narrowHeight = list->heights[0];
     utassert(narrowHeight > 255);
+    int measured = list->measurePasses;
+    int repeatedMeasures = 0;
+    SetWindowSubclass(control, CountChoiceMeasure, 1, (DWORD_PTR)&repeatedMeasures);
+    for (int i = 0; i < 50; i++) {
+        WrapChoices(control);
+    }
+    RemoveWindowSubclass(control, CountChoiceMeasure, 1);
+    utassert(repeatedMeasures == 0);
+    utassert(list->measurePasses == measured);
+    MoveWindow(control, 0, 0, 150, 160, false);
+    utassert(list->measurePasses == measured);
+    utassert(ChoiceRowAt(list, -1) == -1);
+    utassert(ChoiceRowAt(list, ChoiceTop(list, 1)) == 1);
+    utassert(ChoiceRowAt(list, ChoiceTop(list, len(list->heights))) == -1);
+    HFONT large = CreateFontW(36, 0, 0, 0, FW_NORMAL, false, false, false, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    utassert(large != nullptr);
+    SendMessageW(control, WM_SETFONT, (WPARAM)large, false);
+    utassert(list->measurePasses > measured);
+    utassert(list->heights[0] > narrowHeight);
+    SendMessageW(control, WM_SETFONT, (WPARAM)GetAppFont()->GetHFont(), false);
+    DeleteObject(large);
+    int remainder = 0, moved = 0;
+    for (int i = 0; i < WHEEL_DELTA; i++) moved += WheelDistance(MAKEWPARAM(0, 1), 96, remainder);
+    utassert(moved == 96 && remainder == 0);
+    utassert(WheelDistance(MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 96, remainder) == -96);
+
     utassert(str::Eq(ToUtf8Temp(LbGetTextTemp(control, 0)), raw));
     MoveWindow(control, 0, 0, 450, 120, false);
     WrapChoices(control);
@@ -2319,5 +3358,187 @@ void VocabularyDialog_UnitTests() {
     utassert(SendMessageW(control, LB_GETCURSEL, 0, 0) == -1);
     SendMessageW(control, LB_RESETCONTENT, 0, 0);
     utassert(SendMessageW(control, LB_GETCOUNT, 0, 0) == 0);
+    LearningWindow window;
+    window.hwnd = parent;
+    window.dictionary = true;
+    MakeControl(&window, lcTitle, L"STATIC", StrL("Offline dictionary"));
+    MakeControl(&window, lcQuery, L"EDIT", {}, ES_AUTOHSCROLL);
+    MakeControl(&window, lcLookup, L"BUTTON", StrL("Look up"));
+    MakeControl(&window, lcDetails, L"EDIT", {}, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL);
+    MakeControl(&window, lcStatus, L"STATIC", StrL("Offline lookup"));
+    str::Builder lines;
+    for (int i = 0; i < 100; i++) lines.Append(StrL("A readable dictionary definition.\r\n"));
+    Text(&window, lcDetails, ToStrTemp(lines));
+    window.ready = true;
+    LayoutLearning(&window);
+    HWND details = Control(&window, lcDetails);
+    RECT shortInput, longInput, action;
+    GetWindowRect(Control(&window, lcQuery), &shortInput);
+    Text(&window, lcQuery, StrL("pneumonoultramicroscopicsilicovolcanoconiosis"));
+    FitLearningInput(&window, lcQuery);
+    GetWindowRect(Control(&window, lcQuery), &longInput);
+    GetWindowRect(Control(&window, lcLookup), &action);
+    utassert(longInput.right - longInput.left > shortInput.right - shortInput.left);
+    utassert(longInput.top == shortInput.top && action.left >= longInput.right);
+    Text(&window, lcQuery, StrL("word"));
+    FitLearningInput(&window, lcQuery);
+    GetWindowRect(Control(&window, lcQuery), &longInput);
+    utassert(longInput.right - longInput.left == shortInput.right - shortInput.left);
+
+    SendMessageW(details, EM_LINESCROLL, 0, 20);
+    int firstLine = (int)SendMessageW(details, EM_GETFIRSTVISIBLELINE, 0, 0);
+    utassert(firstLine > 0);
+    int contentHeight = window.contentHeight;
+    int editFormats = 0;
+    SetWindowSubclass(details, CountChoiceMeasure, 1, (DWORD_PTR)&editFormats);
+    for (int i = 0; i < 50; i++) ScrollLearning(&window, i);
+    LayoutLearning(&window);
+    RemoveWindowSubclass(details, CountChoiceMeasure, 1);
+    utassert(editFormats == 0);
+    utassert((int)SendMessageW(details, EM_GETFIRSTVISIBLELINE, 0, 0) == firstLine);
+    utassert(window.contentHeight == contentHeight);
+    RECT before, after;
+    GetClientRect(parent, &before);
+    MoveWindow(parent, 0, 0, 500, 2000, false);
+    LayoutLearning(&window, true);
+    MoveWindow(parent, 0, 0, 500, 500, false);
+    LayoutLearning(&window, true);
+    GetClientRect(parent, &after);
+    utassert(before.right == after.right);
+    utassert(window.scrollY >= 0 && window.scrollY <= std::max(0, window.contentHeight - (int)after.bottom));
+
+    MakeButton(&window, lcGuideStart, StrL("Help / Start guide"));
+    MakeControl(&window, lcGuideText, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX);
+    MakeButton(&window, lcGuidePrev, StrL("Back"));
+    MakeButton(&window, lcGuideNext, StrL("Next"));
+    MakeButton(&window, lcGuideSkip, StrL("Skip"));
+    MakeButton(&window, lcGuideAction, StrL("Go to lookup"));
+    LearningAction(&window, lcGuideStart, BN_CLICKED);
+    utassert(window.guideVisible);
+    LearningAction(&window, lcGuideStart, BN_KILLFOCUS);
+    utassert(window.guideVisible);
+    LearningAction(&window, lcGuideNext, BN_CLICKED);
+    utassert(window.guideVisible && window.guideStep == 1);
+    LearningAction(&window, lcGuideNext, BN_KILLFOCUS);
+    utassert(window.guideStep == 1);
+    window.guideVisible = false;
+
+    MoveWindow(parent, 0, 0, 1400, 1000, false);
+    Text(&window, lcQuery, StrL("word"));
+    UpdateGuide(&window);
+    RECT help, query, lookup;
+    GetWindowRect(Control(&window, lcGuideStart), &help);
+    GetWindowRect(Control(&window, lcQuery), &query);
+    GetWindowRect(Control(&window, lcLookup), &lookup);
+    utassert(help.top == query.top && query.top == lookup.top);
+    utassert(help.right < query.left && query.right < lookup.left);
+    MakeControl(&window, lcDeck, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
+    AddChoice(&window, lcDeck, StrL("All vocabulary"));
+    SendMessageW(Control(&window, lcDeck), CB_SETCURSEL, 0, 0);
+    MakeButton(&window, lcSave, StrL("Save word"));
+    MakeButton(&window, lcLearned, StrL("Mark learned"));
+    MakeButton(&window, lcOpenVocabulary, StrL("Open learning hub"));
+    LayoutLearning(&window);
+    RECT footer[4]{};
+    int footerIds[] = {lcDeck, lcSave, lcLearned, lcOpenVocabulary};
+    for (int i = 0; i < dimof(footerIds); i++) GetWindowRect(Control(&window, footerIds[i]), &footer[i]);
+    for (int i = 1; i < dimof(footerIds); i++) {
+        utassert(footer[i].top == footer[0].top);
+        utassert(footer[i].left > footer[i - 1].right);
+    }
+    utassert(footer[0].right - footer[0].left < 1400 / 3);
+    MoveWindow(parent, 0, 0, 500, 500, false);
+
+    OfflineMeaning first{}, second{};
+    first.headword = str::Dup(StrL("omnipotent"));
+    first.dictionary = str::Dup(StrL("Test dictionary"));
+    first.dictionaryId = str::Dup(StrL("test"));
+    first.partOfSpeech = str::Dup(StrL("adjective"));
+    first.definition = str::Dup(StrL("Having unlimited power, force or authority."));
+    first.example = str::Dup(StrL("An omnipotent ruler."));
+    second.headword = str::Dup(first.headword);
+    second.dictionary = str::Dup(first.dictionary);
+    second.dictionaryId = str::Dup(first.dictionaryId);
+    second.partOfSpeech = str::Dup(first.partOfSpeech);
+    second.definition = str::Dup(StrL("Capable of developing into any type of cell."));
+    VecAppend(window.meanings, first);
+    VecAppend(window.meanings, second);
+    ShowMeanings(&window);
+    Str displayed = RichText(Read(&window, lcDetails));
+    utassert(str::Contains(displayed, StrL("1. Having unlimited power, force or authority.\r")));
+    utassert(str::Contains(displayed, StrL("2. Capable of developing into any type of cell.\r")));
+    utassert(str::Contains(displayed, StrL("Example: An omnipotent ruler.\r")));
+    utassert(IsRichDetails(details));
+    for (const auto& run : window.detailRuns) {
+        CHARRANGE range{run.start, run.start + run.length};
+        SendMessageW(details, EM_EXSETSEL, 0, (LPARAM)&range);
+        CHARFORMAT2W format{};
+        format.cbSize = sizeof(format);
+        SendMessageW(details, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
+        if (run.style == DetailStyle::Heading || run.style == DetailStyle::Section)
+            utassert((format.dwEffects & CFE_BOLD) != 0);
+        if (run.style == DetailStyle::Example) utassert((format.dwEffects & CFE_ITALIC) != 0);
+    }
+
+    utassert((GetWindowLongPtrW(Control(&window, lcDeck), GWL_STYLE) & CBS_OWNERDRAWFIXED) != 0);
+    MakeControl(&window, lcChoices, kChoiceListClass, {}, WS_VSCROLL);
+    window.dictionary = false;
+    window.practice = true;
+    for (int id : {lcSave, lcLearned, lcOpenVocabulary}) Visible(&window, id, false);
+    HWND splitter = MakeLearningSplit(&window);
+    LayoutLearning(&window);
+    RECT shortChoices, tallChoices;
+    GetWindowRect(Control(&window, lcChoices), &shortChoices);
+    MoveWindow(parent, 0, 0, 500, 1500, false);
+    LayoutLearning(&window);
+    GetWindowRect(Control(&window, lcChoices), &tallChoices);
+    utassert(tallChoices.bottom - tallChoices.top > shortChoices.bottom - shortChoices.top);
+    RECT splitRect;
+    GetWindowRect(splitter, &splitRect);
+    POINT splitCenter{(splitRect.left + splitRect.right) / 2, (splitRect.top + splitRect.bottom) / 2};
+    utassert(SendMessageW(splitter, WM_NCHITTEST, 0, MAKELPARAM(splitCenter.x, splitCenter.y)) == HTCLIENT);
+    int beforeDrag = window.promptShare;
+    POINT local{10, (splitRect.bottom - splitRect.top) / 2};
+    SendMessageW(splitter, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(local.x, local.y));
+    SendMessageW(splitter, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(local.x, local.y));
+    utassert(window.promptShare == beforeDrag);
+    SendMessageW(splitter, WM_LBUTTONUP, 0, MAKELPARAM(local.x, local.y));
+    SendMessageW(splitter, WM_KEYDOWN, VK_DOWN, 0);
+    utassert(window.promptShare == beforeDrag + 5);
+    SendMessageW(splitter, WM_KEYDOWN, VK_HOME, 0);
+    utassert(window.promptShare == 30);
+    SendMessageW(Control(&window, lcChoices), LB_ADDSTRING, 0, (LPARAM)L"Selected answer survives dragging");
+    SendMessageW(Control(&window, lcChoices), LB_SETCURSEL, 0, 0);
+    GetWindowRect(splitter, &splitRect);
+    local = {10, (splitRect.bottom - splitRect.top) / 2};
+    SendMessageW(splitter, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(local.x, local.y));
+    SendMessageW(splitter, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(local.x, local.y + 100));
+    utassert(window.promptShare > 30);
+    POINT returnPoint{10, window.splitPointerY - window.scrollY};
+    MapWindowPoints(parent, splitter, &returnPoint, 1);
+    SendMessageW(splitter, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(returnPoint.x, returnPoint.y));
+    utassert(window.promptShare == 30);
+    SendMessageW(splitter, WM_LBUTTONUP, 0, 0);
+    utassert(!window.splitting);
+    utassert(SendMessageW(Control(&window, lcChoices), LB_GETCURSEL, 0, 0) == 0);
+    SendMessageW(splitter, WM_KEYDOWN, VK_HOME, 0);
+    SendMessageW(Control(&window, lcChoices), LB_RESETCONTENT, 0, 0);
+    window.promptShare = 60;
+    LayoutLearning(&window);
+    GetWindowRect(Control(&window, lcChoices), &shortChoices);
+    utassert(shortChoices.bottom - shortChoices.top < tallChoices.bottom - tallChoices.top);
+    SendMessageW(Control(&window, lcChoices), LB_ADDSTRING, 0, (LPARAM)L"First choice");
+    SendMessageW(Control(&window, lcChoices), LB_SETCURSEL, 0, 0);
+    window.promptShare = 30;
+    LayoutLearning(&window);
+    utassert(SendMessageW(Control(&window, lcChoices), LB_GETCURSEL, 0, 0) == 0);
+    for (int id : {lcGuideStart, lcGuideText, lcGuidePrev, lcGuideNext, lcGuideSkip, lcGuideAction, lcDeck, lcChoices})
+        DestroyWindow(Control(&window, id));
+    for (int id : {lcSplit, lcSave, lcLearned, lcOpenVocabulary}) DestroyWindow(Control(&window, id));
+    DestroyWindow(Control(&window, lcTitle));
+    DestroyWindow(Control(&window, lcQuery));
+    DestroyWindow(Control(&window, lcLookup));
+    DestroyWindow(details);
+    DestroyWindow(Control(&window, lcStatus));
 }
 #endif

@@ -49,6 +49,23 @@ constexpr int kFindBarPinCmdId = (int)CmdLast + 52;
 constexpr int kFindBarOptionsCmdId = (int)CmdLast + 53;
 constexpr UINT_PTR kFindBarCollapseTimer = 0x201;
 
+static int FindIconSize(int dpi) {
+    return ToolbarIconSize(dpi);
+}
+
+void ApplyFindEditScale(DropDown* edit, int dpi) {
+    if (!edit || !edit->hwnd) return;
+    int start = 0, end = 0;
+    CbEditGetSelection(edit, start, end);
+    PlatformFont* font = GetAppFontForDpi(dpi);
+    edit->SetFont(font);
+    int lineHeight = PlatformFontLineHeight(font);
+    int fieldHeight = std::max(lineHeight, FindIconSize(dpi)) + UiScalePxForDpi(dpi, 2);
+    CbSetItemHeight(edit->hwnd, -1, fieldHeight);
+    CbSetItemHeight(edit->hwnd, 0, lineHeight + UiScalePxForDpi(dpi, 6));
+    CbEditSelectText(edit, start, end);
+}
+
 struct FindFieldFit {
     int editDx = 0;
     bool compact = false;
@@ -70,6 +87,60 @@ void FindBarLayout_UnitTests() {
     utassert(tight.compact && tight.editDx == 10);
     auto scaled = FitFindField(500, 400, 175, 200);
     utassert(scaled.compact && scaled.editDx == 325);
+
+    Settings* savedSettings = gSettings;
+    Settings* fixture = NewSettings({});
+    utassert(fixture);
+    if (!fixture) return;
+    gSettings = fixture;
+    for (int iconSize : {16, 28, 40}) {
+        gSettings->toolbarSize = iconSize;
+        for (int scale : {100, 150}) {
+            gSettings->interfaceScale = scale;
+            for (int dpi : {96, 144}) {
+                utassert(FindIconSize(dpi) == RoundUp(UiScalePxForDpi(dpi, iconSize), 4));
+            }
+        }
+    }
+    gSettings->toolbarSize = 16;
+    gSettings->interfaceScale = 100;
+    HWND host = CreateWindowExW(0, L"STATIC", nullptr, WS_POPUP, 0, 0, 500, 500, nullptr, nullptr,
+                                GetModuleHandleW(nullptr), nullptr);
+    utassert(host);
+    if (host) {
+        auto* edit = new DropDown();
+        DropDown::CreateArgs args;
+        args.parent = host;
+        args.font = GetAppFontForDpi(96);
+        args.isEditable = true;
+        utassert(edit->Create(args));
+        edit->SetText(StrL("extraordinary"));
+        CbEditSelectText(edit, 3, 7);
+        ApplyFindEditScale(edit, 96);
+        int normal = (int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
+        gSettings->toolbarSize = 40;
+        ApplyFindEditScale(edit, 96);
+        int large = (int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
+        utassert(large >= 40 && large > normal);
+        utassert(HwndWindowRect(edit->hwnd).dy >= large);
+        gSettings->interfaceScale = 150;
+        ApplyFindEditScale(edit, 144);
+        int scaledHeight = (int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
+        utassert(scaledHeight >= FindIconSize(144) && scaledHeight > large);
+        utassert((HFONT)SendMessageW(CbEditHwnd(edit), WM_GETFONT, 0, 0) == GetAppFontForDpi(144)->GetHFont());
+        int start = 0, end = 0;
+        CbEditGetSelection(edit, start, end);
+        utassert(start == 3 && end == 7);
+        utassert(str::Eq(edit->GetTextTemp(), StrL("extraordinary")));
+        gSettings->toolbarSize = 16;
+        gSettings->interfaceScale = 100;
+        ApplyFindEditScale(edit, 96);
+        utassert((int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0) == normal);
+        delete edit;
+        DestroyWindow(host);
+    }
+    gSettings = savedSettings;
+    DeleteSettings(fixture);
 }
 #endif
 
@@ -258,9 +329,9 @@ void FindBarWnd::UpdateButtonIcons(int dpi) {
     static const char* icons[7] = {gIconSearchPrev,     gIconSearchNext, gIconMatchCase,       gIconMatchWholeWord,
                                    gIconArrowsDiagonal, gIconClose,      kEnhancedIconSettings};
     if (dpi <= 0) {
-        dpi = GetDpi();
+        dpi = layoutDpi;
     }
-    int isz = RoundUp(UiScalePxForDpi(dpi, 16), 4);
+    int isz = FindIconSize(dpi);
     for (int i = 0; i < dimof(btns); i++) {
         if (btns[i]) {
             btns[i]->pixmap = GetCachedPixmapForSvg(Str(icons[i]), isz, isz);
@@ -280,7 +351,7 @@ void FindBarWnd::CreateButtons() {
     static const int cmds[7] = {
         CmdFindPrev,      CmdFindNext,        CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
         kFindBarPinCmdId, kFindBarCloseCmdId, kFindBarOptionsCmdId};
-    int pad = UiScalePx(4);
+    int pad = UiScalePxForDpi(layoutDpi, 4);
     for (int i = 0; i < dimof(btns); i++) {
         auto* b = new VirtIconButton();
         b->id = cmds[i];
@@ -288,7 +359,7 @@ void FindBarWnd::CreateButtons() {
         b->SetTooltip(FindBarButtonTooltip(cmds[i]));
         b->onClick = MkFunc1(FindBarButtonClicked, this);
         b->SetFlag(vwfFocusable, true);
-        b->cornerRadius = UiScalePx(6);
+        b->cornerRadius = UiScalePxForDpi(layoutDpi, 6);
         b->SetColor(kColIconBtnBgHover, ThemeHotBackgroundColor());
         b->SetColor(kColIconBtnBgSelected, ThemeHotBackgroundColor());
         btns[i] = b;
@@ -298,6 +369,7 @@ void FindBarWnd::CreateButtons() {
 
 bool FindBarWnd::Create(MainWindow* mainWin) {
     win = mainWin;
+    layoutDpi = win->frameDpi > 0 ? win->frameDpi : DpiGetForHwnd(win->hwndFrame);
     // Layout() sizes the HWND to content; don't let WM_SIZE DoLayout first
     autoLayout = false;
 
@@ -313,6 +385,8 @@ bool FindBarWnd::Create(MainWindow* mainWin) {
         // not above other apps.
         args.exStyle = WS_EX_TOOLWINDOW;
         args.isRtl = IsUIRtl();
+        Rect frame = HwndWindowRect(win->hwndFrame);
+        args.pos = {frame.x, frame.y, 1, 1};
         CreateCustom(args);
     }
     if (!hwnd) {
@@ -327,12 +401,13 @@ bool FindBarWnd::Create(MainWindow* mainWin) {
     {
         DropDown::CreateArgs args;
         args.parent = hwnd;
-        args.font = GetAppFont();
+        args.font = GetAppFontForDpi(layoutDpi);
         args.isRtl = IsUIRtl();
         args.isEditable = true;
         edit = new DropDown();
         edit->SetColors(colTxt, colBg);
         edit->Create(args);
+        ApplyFindEditScale(edit, layoutDpi);
         CbSetCueBanner(edit, Tr("Find"));
         edit->onTextChanged = MkMethod0<FindBarWnd, &FindBarWnd::OnTextChanged>(this);
         edit->onCloseUp = MkMethod0<FindBarWnd, &FindBarWnd::OnHistoryCommitted>(this);
@@ -347,7 +422,7 @@ bool FindBarWnd::Create(MainWindow* mainWin) {
     // ellipsis: single line, vertically centered, so it lines up with the
     // (taller, bordered) edit box's text instead of sitting at the top
     status = NewVirtText({
-        .font = GetAppFont(),
+        .font = GetAppFontForDpi(layoutDpi),
         .isRtl = IsUIRtl(),
         .ellipsis = true,
     });
@@ -372,11 +447,11 @@ constexpr int kFindBarMinEditDx = 80;
 constexpr int kFindBarResizeGripDx = 6;
 
 void FindBarWnd::BuildLayout() {
-    int p = UiScalePx(kFindBarPadding);
-    int gap = UiScalePx(kFindBarGap);
+    int p = UiScalePxForDpi(layoutDpi, kFindBarPadding);
+    int gap = UiScalePxForDpi(layoutDpi, kFindBarGap);
     // cap preferred width at the min so HBox flex, not the typed text, sets the
     // edit's size (a long query would otherwise blow out the bar)
-    int minEditDx = UiScalePx(kFindBarMinEditDx);
+    int minEditDx = UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
     edit->idealDx = minEditDx;
     edit->maxDx = minEditDx;
 
@@ -395,14 +470,14 @@ void FindBarWnd::BuildLayout() {
     for (int i : {2, 3, 4}) btns[i]->SetVisibility(Visibility::Collapse);
     padLayout = new Padding(row, Insets{p, p, p, p});
     layout = padLayout;
-    layoutDpi = DpiGet();
 }
 
 int FindBarWnd::MinBarDx() const {
     if (!layout) {
         return 0;
     }
-    int client = layout->MinIntrinsicWidth(0) - edit->MinIntrinsicWidth(0) + UiScalePx(kFindBarMinEditDx);
+    int client =
+        layout->MinIntrinsicWidth(0) - edit->MinIntrinsicWidth(0) + UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
     Rect wr = HwndWindowRect(hwnd);
     Rect cr = HwndClientRect(hwnd);
     return client + (wr.dx - cr.dx);
@@ -417,7 +492,7 @@ void FindBarWnd::Layout(int forceBarDx) {
     status->SetVisibility(Visibility::Visible);
     statusBox->SetVisibility(Visibility::Visible);
     gapAfterStatus->SetVisibility(Visibility::Visible);
-    edit->idealDx = edit->maxDx = UiScalePx(kFindBarMinEditDx);
+    edit->idealDx = edit->maxDx = UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
     if (forceBarDx > 0) {
         Rect wr = HwndWindowRect(hwnd);
         Rect cr = HwndClientRect(hwnd);
@@ -439,7 +514,7 @@ void FindBarWnd::Layout(int forceBarDx) {
         DoLayout(HwndClientRect(hwnd).Size());
         inLayout = false;
     } else {
-        int extra = UiScalePx(kFindBarDefaultEditDx - kFindBarMinEditDx);
+        int extra = UiScalePxForDpi(layoutDpi, kFindBarDefaultEditDx - kFindBarMinEditDx);
         int minDx = layout->MinIntrinsicWidth(0) + extra;
         inLayout = true;
         LayoutAndSizeToContent(layout, minDx, 0, hwnd);
@@ -540,7 +615,7 @@ void FindBarWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
 void FindBarWnd::OnNcHitTest(WindowBase::NcHitTestEvent* ev) {
     if (!ToolbarFindScreenRect(win).IsEmpty()) return;
     Rect wr = HwndWindowRect(hwnd);
-    if (ev->screenPos.x < wr.x + UiScalePx(kFindBarResizeGripDx)) {
+    if (ev->screenPos.x < wr.x + UiScalePxForDpi(layoutDpi, kFindBarResizeGripDx)) {
         ev->result = HTLEFT;
         ev->didHandle = true;
     }
@@ -558,7 +633,7 @@ void FindBarWnd::UpdateDpi(int dpi) {
     }
     int prevDpi = layoutDpi > 0 ? layoutDpi : 96;
     PlatformFont* appFont = GetAppFontForDpi(dpi);
-    edit->SetFont(appFont);
+    ApplyFindEditScale(edit, dpi);
     if (status) {
         status->font = appFont;
     }
@@ -583,6 +658,7 @@ void FindBarWnd::UpdateDpi(int dpi) {
     for (VirtIconButton* b : btns) {
         if (b) {
             b->padding = Insets{buttonPad, buttonPad, buttonPad, buttonPad};
+            b->cornerRadius = UiScalePxForDpi(dpi, 6);
         }
     }
     int newBarDx = barDx > 0 ? MulDiv(barDx, dpi, prevDpi) : 0;
@@ -835,7 +911,7 @@ static void PositionFindBar(FindBarWnd* bar) {
     // which pushed the bar a few pixels too far right (#5762).
     Rect frClient = HwndMapLtrClientRectToScreen(win->hwndFrame, HwndClientRect(win->hwndFrame));
     Rect work = PlatformWindowWorkArea(win->hwndFrame);
-    int available = std::max(1, std::min(frClient.dx, work.dx) - UiScalePx(12));
+    int available = std::max(1, std::min(frClient.dx, work.dx) - UiScalePxForDpi(bar->layoutDpi, 12));
     if (bar->barDx > available) bar->Layout(available);
     int cx = frClient.x + frClient.dx - bar->barDx;
     int cy;
@@ -868,7 +944,7 @@ static void ShowCompactBar(MainWindow* win) {
     // reflect the current match-case / whole-word state on the toggle buttons
     FindBarSetMatchCaseChecked(win, win->findMatchCase);
     FindBarSetMatchWholeWordChecked(win, win->findMatchWholeWord);
-    ToolbarSetFindExpanded(win, true, bar->MinBarDx(), UiScalePx(360));
+    ToolbarSetFindExpanded(win, true, bar->MinBarDx(), UiScalePxForDpi(bar->layoutDpi, 360));
     PositionFindBar(bar);
     ShowWindow(bar->hwnd, SW_SHOW);
     win->findEdit->SetFocus();
@@ -1083,7 +1159,7 @@ void FindBarReposition(MainWindow* win) {
         HideFindBar(win);
         return;
     }
-    ToolbarSetFindExpanded(win, true, win->findBar->MinBarDx(), UiScalePx(360));
+    ToolbarSetFindExpanded(win, true, win->findBar->MinBarDx(), UiScalePxForDpi(win->findBar->layoutDpi, 360));
     PositionFindBar(win->findBar);
 }
 
