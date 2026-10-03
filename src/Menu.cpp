@@ -1337,6 +1337,10 @@ static MenuDef menuDefContext[] = {
         CmdToggleBookmarks,
     },
     {
+        TrN("Edit PDF bookmarks..."),
+        CmdEditBookmarks,
+    },
+    {
         TrN("Sh&ow Toolbar"),
         CmdToggleToolbar,
     },

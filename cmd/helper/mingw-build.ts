@@ -293,6 +293,7 @@ const sumatraFiles: FileGroup[] = [
       "CustomZoomDialog.*",
       "PageGridDialog.*",
       "SignDocumentDialog.*",
+      "CpdfBookmarks.*",
       "EbookSettingsDialog.*",
       "GetPasswordDialog.*",
       "GoToPageDialog.*",

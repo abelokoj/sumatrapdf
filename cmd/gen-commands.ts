@@ -360,6 +360,7 @@ const commandsRaw = [
     "CmdDictionaryLookup", "Dictionary: Define Selected Word",
     "CmdVocabularyHome", "Vocabulary: Learn and Practice",
     "CmdExportStudyNotes", "Export Highlights and Notes...",
+    "CmdEditBookmarks", "Edit PDF Bookmarks...",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them

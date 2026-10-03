@@ -100,6 +100,7 @@
 #include "DocumentProperties.h"
 #include "TabGroupsManage.h"
 #include "TableOfContents.h"
+#include "CpdfBookmarks.h"
 #include "Tabs.h"
 #include "Toolbar.h"
 #include "SvgIcons.h"
@@ -12713,6 +12714,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdSignDocument:
             ShowSignDocumentDialog(win);
+            break;
+
+        case CmdEditBookmarks:
+            ShowCpdfBookmarks(win);
             break;
 
         case CmdToggleMenuBar: {

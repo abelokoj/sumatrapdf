@@ -3,6 +3,8 @@
 
 #include "base/Base.h"
 #include "base/Win.h"
+#include "base/File.h"
+
 #include "gui/Dpi.h"
 
 #include "gui/UIModels.h"
@@ -26,7 +28,151 @@
 #include "AppTools.h"
 #include "Translations.h"
 #include "DarkMode.h"
+
+#if IS_DEBUG
+#include "EngineBase.h"
+#include "RenderCache.h"
+#include "base/tests/UtAssert.h"
+#endif
 #include "SumatraDialogs.h"
+
+static constexpr int kSettingsMaxWidth = 900;
+static constexpr int kSettingsMinWidth = 560;
+
+enum class SettingsView {
+    Visible,
+    Hidden
+};
+
+struct SettingsLabel : VirtText {
+    Str display;
+    bool wrapped = false;
+
+    SettingsLabel(const VirtTextArgs& args) : VirtText(args.s, args.font) {
+        prefix = args.prefix;
+        mnemonic = prefix ? MnemonicCharInStr(s) : 0;
+        isRtl = args.isRtl;
+        padding = args.padding;
+        str::Builder text;
+        for (int i = 0; i < len(s); i++) {
+            if (prefix && s.s[i] == '&') {
+                if (i + 1 < len(s) && s.s[i + 1] == '&')
+                    i++;
+                else
+                    continue;
+            }
+            text.AppendChar(s.s[i]);
+        }
+        display = str::Dup(ToStrTemp(text));
+    }
+    ~SettingsLabel() override { str::Free(display); }
+
+    Size Layout(Constraints bc) override {
+        int padX = padding.left + padding.right;
+        int width = bc.HasBoundedWidth() ? std::max(1, bc.max.dx - padX) : -1;
+        wrapped = width > 0 && PlatformFontMeasureText(font, display).dx > width;
+        Size size = PlatformFontMeasureText(font, display, width);
+        return bc.Constrain({size.dx + padX, size.dy + padding.top + padding.bottom});
+    }
+    int MinIntrinsicHeight(int width) override { return Layout(ExpandHeight(width)).dy; }
+    void Paint(VirtPaintCtx& ctx) override {
+        if (!wrapped) {
+            VirtText::Paint(ctx);
+            return;
+        }
+        ctx.gfx->DrawText(display, ctx.content, gfxTextWrap | (isRtl ? gfxTextRtl : 0), font, ThemeWindowTextColor());
+    }
+};
+
+static VirtText* NewSettingsLabel(const VirtTextArgs& args) {
+    return new SettingsLabel(args);
+}
+
+struct SettingsForm : Table {
+    Vec<Size> labelSizes;
+    Vec<Size> valueSizes;
+    int labelWidth = 0;
+    int contentHeight = 0;
+    bool stacked = false;
+    bool rtl = false;
+
+    Size Layout(Constraints bc) override {
+        Size natural = Table::Layout(ExpandInf());
+        int width = bc.HasBoundedWidth() ? bc.max.dx : natural.dx;
+        labelWidth = Table::ColWidth(0);
+        stacked = width < natural.dx;
+        VecClear(labelSizes);
+        VecClear(valueSizes);
+        contentHeight = 0;
+        for (int row = 0; row < rows; row++) {
+            int labelDx = stacked ? width : labelWidth;
+            int valueDx = stacked ? width : std::max(1, width - labelWidth - colGap);
+            Size label = GetCell(row, 0)->Layout(ExpandHeight(labelDx));
+            Size value = GetCell(row, 1)->Layout(ExpandHeight(valueDx));
+            VecAppend(labelSizes, label);
+            VecAppend(valueSizes, value);
+            contentHeight += stacked ? label.dy + rowGap + value.dy : std::max(label.dy, value.dy);
+            if (row + 1 < rows) contentHeight += rowGap;
+        }
+        return bc.Constrain({width, contentHeight});
+    }
+    int MinIntrinsicHeight(int width) override { return Layout(ExpandHeight(width)).dy; }
+    void SetBounds(Rect bounds) override {
+        lastBounds = bounds;
+        int y = bounds.y;
+        for (int row = 0; row < rows; row++) {
+            Size label = labelSizes[row], value = valueSizes[row];
+            if (stacked) {
+                GetCell(row, 0)->SetBounds({bounds.x, y, bounds.dx, label.dy});
+                y += label.dy + rowGap;
+                GetCell(row, 1)->SetBounds({bounds.x, y, bounds.dx, value.dy});
+                y += value.dy + rowGap;
+                continue;
+            }
+            int height = std::max(label.dy, value.dy);
+            int valueWidth = std::max(1, bounds.dx - labelWidth - colGap);
+            int labelX = rtl ? bounds.x + valueWidth + colGap : bounds.x;
+            int valueX = rtl ? bounds.x : bounds.x + labelWidth + colGap;
+            GetCell(row, 0)->SetBounds({labelX, y + (height - label.dy) / 2, labelWidth, label.dy});
+            GetCell(row, 1)->SetBounds({valueX, y + (height - value.dy) / 2, valueWidth, value.dy});
+            y += height + rowGap;
+        }
+    }
+};
+
+struct SettingsCheckbox : Checkbox {
+    Size Layout(Constraints bc) override {
+        Size size = GetIdealSize();
+        int padX = insets.left + insets.right;
+        int padY = insets.top + insets.bottom;
+        if (bc.HasBoundedWidth() && size.dx > bc.max.dx - padX) {
+            int glyph = DpiGetSystemMetrics(SM_CXMENUCHECK) + UiScalePx(8);
+            Size text = PlatformFontMeasureText(font, GetTextTemp(), std::max(1, bc.max.dx - padX - glyph));
+            size.dy = std::max(size.dy, text.dy + DpiScale(4));
+        }
+        childSize = bc.Inset(padX, padY).Constrain(size);
+        return {childSize.dx + padX, childSize.dy + padY};
+    }
+};
+
+struct SettingsViewport : ScrollBox {
+    explicit SettingsViewport(ILayout* child) : ScrollBox(child) {}
+    void ClipControls(ILayout* node) {
+        if (auto* control = node->AsControl()) {
+            Rect bounds = ChildPosWithinParent(control->hwnd);
+            Rect clip = bounds.Intersect(lastBounds);
+            clip.x -= bounds.x;
+            clip.y -= bounds.y;
+            HRGN region = CreateRectRgn(clip.x, clip.y, clip.x + clip.dx, clip.y + clip.dy);
+            if (!SetWindowRgn(control->hwnd, region, FALSE)) DeleteObject(region);
+        }
+        for (int i = 0; i < node->LayoutChildCount(); i++) ClipControls(node->LayoutChildAt(i));
+    }
+    void SetBounds(Rect bounds) override {
+        ScrollBox::SetBounds(bounds);
+        ClipControls(child);
+    }
+};
 
 // Section headers, labels and OK/Cancel are VirtCtrl; layout/zoom/command
 // combos and the checkboxes are HWNDs. Same WindowBase layout as Inverse Search.
@@ -34,7 +180,8 @@ struct SettingsWnd : WindowBase {
     ~SettingsWnd() override = default;
 
     MainWindow* win = nullptr;
-    ScrollBox* scroll = nullptr;
+    SettingsViewport* scroll = nullptr;
+    Vec<SettingsForm*> forms;
     Vec<float> zoomLevels;
     float startZoom = 0;
     bool showInverseSearch = false;
@@ -81,7 +228,7 @@ struct SettingsWnd : WindowBase {
     VirtButton* btnCancel = nullptr;
     VirtButton* btnOk = nullptr;
 
-    bool Create(MainWindow* win);
+    bool Create(MainWindow* win, SettingsView view = SettingsView::Visible);
     void FillLayout();
     void FillZoom();
     void FillInverse();
@@ -419,13 +566,36 @@ static Checkbox* MakeCheckbox(HWND parent, PlatformFont* font, Str text, bool is
     if (checked) {
         args.initialState = Checkbox::State::Checked;
     }
-    auto* c = new Checkbox();
+    auto* c = new SettingsCheckbox();
     c->SetInsetsPt(topPt, 0, 0, 0);
     c->Create(args);
+    SetWindowLongPtrW(c->hwnd, GWL_STYLE, GetWindowLongPtrW(c->hwnd, GWL_STYLE) | BS_MULTILINE);
     return c;
 }
 
-bool SettingsWnd::Create(MainWindow* mainWin) {
+static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, SettingsFocusProc, id);
+    if (msg == WM_SETFOCUS) {
+        auto* wnd = (SettingsWnd*)data;
+        auto* scroll = wnd->scroll;
+        Rect bounds = ChildPosWithinParent(hwnd);
+        Rect view = scroll->lastBounds;
+        int delta = bounds.y < view.y ? bounds.y - view.y : std::max(0, bounds.y + bounds.dy - view.y - view.dy);
+        if (delta && scroll->ScrollBy(delta)) scroll->ClipControls(scroll->child);
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
+    if (auto* control = node->AsControl()) SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+    for (int i = 0; i < node->LayoutChildCount(); i++) SettingsFocusStops(wnd, node->LayoutChildAt(i));
+}
+
+static void OnSettingsMessage(WindowBase::WndProcEvent* ev);
+
+bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
+    bool visible = view == SettingsView::Visible;
+    onWndProc = MkFunc1Void<WindowBase::WndProcEvent*>(OnSettingsMessage);
     win = mainWin;
     showInverseSearch = gSettings && gSettings->enableTeXEnhancements && CanAccessDisk();
 
@@ -441,17 +611,21 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     if (!hwnd) {
         return false;
     }
+    DpiScope dpi(hwnd);
+    SetFont(GetAppFont());
     bool isRtl = IsUIRtl();
 
     auto* vbox = new VBox();
     vbox->alignMain = MainAxisAlign::MainStart;
     vbox->alignCross = CrossAxisAlign::Stretch;
+    vbox->gap = UiScalePx(4);
+    PlatformFont* headingFont = GetBoldPlatformFont(font);
 
     //[ ACCESSKEY_GROUP Settings Dialog
     {
-        auto* c = NewVirtText({
+        auto* c = NewSettingsLabel({
             .s = Tr("View"),
-            .font = font,
+            .font = headingFont,
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(0), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
@@ -462,7 +636,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     {
         // Default Layout / Default Zoom in a 2x2 table so the labels share a
         // column and the two drop-downs line up at the same left edge
-        auto* labLayout = NewVirtText({
+        auto* labLayout = NewSettingsLabel({
             .s = Tr("Default &Layout:"),
             .font = font,
             .isRtl = isRtl,
@@ -471,7 +645,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         labelLayout = labLayout;
         dropLayout = MakeDropDown(hwnd, GetFont(), isRtl, false);
 
-        auto* labZoom = NewVirtText({
+        auto* labZoom = NewSettingsLabel({
             .s = Tr("Default &Zoom:"),
             .font = font,
             .isRtl = isRtl,
@@ -480,10 +654,12 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         labelZoom = labZoom;
         dropZoom = MakeDropDown(hwnd, GetFont(), isRtl, true);
 
-        auto* table = new Table();
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
         table->SetSize(2, 2);
-        table->colGap = UiScalePx(8);
-        table->rowGap = UiScalePx(4);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
         auto& lc = table->SetCell(0, 0, labLayout);
         lc.alignV = CrossAxisAlign::CrossCenter;
         auto& ld = table->SetCell(0, 1, dropLayout);
@@ -500,16 +676,18 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     }
 
     {
-        vbox->AddChild(NewVirtText({
+        vbox->AddChild(NewSettingsLabel({
             .s = Tr("Appearance"),
-            .font = font,
+            .font = headingFont,
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         }));
-        auto* table = new Table();
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
         table->SetSize(9, 2);
-        table->colGap = UiScalePx(8);
-        table->rowGap = UiScalePx(4);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
         const Str names[] = {
             Tr("Overall interface scale (%):"), Tr("Interface font:"),         Tr("&Interface text size:"),
             Tr("&Sidebar text size:"),          Tr("Home &thumbnail size:"),   Tr("UI icon size (px):"),
@@ -518,7 +696,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
                                  &dropTreeSize,       &dropThumbnailSize, &dropToolbarSize,
                                  &dropRecentCount,    &dropMinTabWidth,   &dropHoverDelay};
         for (int row = 0; row < dimofi(names); row++) {
-            auto* label = NewVirtText({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
+            auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
             auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, row == 0 || row >= 5);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
@@ -549,7 +727,7 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
                           std::max(0, gSettings->citationHoverDelay));
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
         vbox->AddChild(table);
-        vbox->AddChild(NewVirtText({
+        vbox->AddChild(NewSettingsLabel({
             .s = Tr("Overall scale changes the interface, not document zoom. Individual font and icon sizes remain "
                     "available."),
             .font = font,
@@ -559,10 +737,10 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     }
 
     {
-        vbox->AddChild(NewVirtText({.s = Tr("Data storage"),
-                                    .font = font,
-                                    .isRtl = isRtl,
-                                    .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Data storage"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
         dataLocation = new VirtRichText();
         dataLocation->font = font;
         dataLocation->AddPlainText(fmt("%s %s", Tr("Current folder:"), GetAppDataDirTemp()));
@@ -578,12 +756,17 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(details);
         auto* choose = NewThemedButton(hwnd, Tr("Choose data folder..."), font, false);
         choose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ChooseDataFolder>(this);
-        auto* reset = NewThemedButton(hwnd, Tr("Restore default data folder"), font, false);
+        auto* reset = NewThemedButton(hwnd, Tr("Use default folder"), font, false);
         reset->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::RestoreDataFolder>(this);
         choose->SetIsEnabled(!IsDataFolderOverridden() && !gForTesting);
         reset->SetIsEnabled(!IsDataFolderOverridden() && !gForTesting);
-        vbox->AddChild(choose);
-        vbox->AddChild(reset);
+        auto* folderActions = new Wrap();
+        folderActions->rtl = isRtl;
+        folderActions->colGap = UiScalePx(8);
+        folderActions->rowGap = UiScalePx(4);
+        folderActions->AddChild(choose);
+        folderActions->AddChild(reset);
+        vbox->AddChild(folderActions);
         if (IsDataFolderOverridden() || gForTesting) {
             auto* explanation = new VirtRichText();
             explanation->font = font;
@@ -595,18 +778,20 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     }
 
     {
-        vbox->AddChild(NewVirtText({.s = Tr("Pen"),
-                                    .font = font,
-                                    .isRtl = isRtl,
-                                    .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
-        auto* table = new Table();
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Pen"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
         table->SetSize(3, 2);
-        table->colGap = UiScalePx(8);
-        table->rowGap = UiScalePx(4);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
         const Str names[] = {Tr("Minimum width (pt):"), Tr("Maximum width (pt):"), Tr("Width adjustment step (pt):")};
         DropDown** controls[] = {&dropPenMin, &dropPenMax, &dropPenStep};
         for (int row = 0; row < 3; row++) {
-            auto* label = NewVirtText({.s = names[row], .font = font, .isRtl = isRtl});
+            auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl});
             auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, true);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
@@ -638,9 +823,9 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     vbox->AddChild(chkRememberState);
 
     {
-        auto* c = NewVirtText({
+        auto* c = NewSettingsLabel({
             .s = Tr("Advanced"),
-            .font = font,
+            .font = headingFont,
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
@@ -667,16 +852,16 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     vbox->AddChild(chkRememberOpened);
 
     if (showInverseSearch) {
-        auto* hdr = NewVirtText({
+        auto* hdr = NewSettingsLabel({
             .s = Tr("Set inverse search command line"),
-            .font = font,
+            .font = headingFont,
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)},
         });
         labelInverse = hdr;
         vbox->AddChild(hdr);
 
-        auto* lab = NewVirtText({
+        auto* lab = NewSettingsLabel({
             .s = Tr("Enter the command line to invoke when you double-click on the PDF document:"),
             .font = font,
             .isRtl = isRtl,
@@ -691,6 +876,12 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
     }
     //] ACCESSKEY_GROUP Settings Dialog
 
+    auto* root = new VBox();
+    root->alignCross = CrossAxisAlign::Stretch;
+    root->gap = UiScalePx(12);
+    scroll = new SettingsViewport(vbox);
+    scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
+    root->AddChild(scroll, 1);
     {
         auto* hbox = new HBox();
         hbox->alignMain = MainAxisAlign::MainEnd;
@@ -704,29 +895,27 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
         btnOk = NewThemedButton(hwnd, Tr("OK"), font, true);
         btnOk->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::OnOk>(this);
         hbox->AddChild(new Padding(btnOk, pad));
-        vbox->AddChild(hbox);
+        root->AddChild(hbox);
     }
 
-    scroll = new ScrollBox(vbox);
-    scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
-    auto* padding = new Padding(scroll, DpiScaledInsets(4, 8));
-    layout = padding;
-
-    int dx = UiScalePx(480);
-    LayoutAndSizeToContent(layout, dx, 0, hwnd);
+    int pad = UiScalePx(16);
+    layout = new Padding(root, Insets{pad, pad, pad, pad});
+    int naturalWidth = 0;
+    for (auto* form : forms) naturalWidth = std::max(naturalWidth, form->MinIntrinsicWidth(0));
+    int width = limitValue(naturalWidth + pad * 2, DpiScale(kSettingsMinWidth), DpiScale(kSettingsMaxWidth));
     Rect workArea = PlatformWindowWorkArea(win ? win->hwndFrame : hwnd);
-    Size client = HwndClientRect(hwnd).Size();
-    if (!workArea.IsEmpty()) {
-        client.dx = std::min(client.dx, std::max(1, workArea.dx - UiScalePx(32)));
-        client.dy = std::min(client.dy, std::max(1, workArea.dy - UiScalePx(32)));
-        ResizeHwndToClientArea(hwnd, client.dx, client.dy, false);
-    }
+    if (!workArea.IsEmpty()) width = std::min(width, std::max(1, workArea.dx - DpiScale(48)));
+    Size desired = layout->Layout(ExpandHeight(width));
+    int maxHeight = DpiScale(760);
+    if (!workArea.IsEmpty()) maxHeight = std::min(maxHeight, std::max(1, workArea.dy - DpiScale(80)));
+    ResizeHwndToClientArea(hwnd, width, std::min(desired.dy, maxHeight), false);
     DoLayout(HwndClientRect(hwnd).Size());
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
     UpdateTheme();
 
-    SetIsVisible(true);
-    if (dropLayout) {
+    SettingsFocusStops(this, scroll->child);
+    SetIsVisible(visible);
+    if (visible && dropLayout) {
         HwndSetFocus(dropLayout->hwnd);
     }
     return true;
@@ -735,6 +924,12 @@ bool SettingsWnd::Create(MainWindow* mainWin) {
 static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     auto* window = (SettingsWnd*)ev->w;
     if (!window || !window->scroll) {
+        return;
+    }
+    if (ev->msg == WM_PRINTCLIENT && ev->wparam && window->vroot) {
+        PaintVirtTree(window->vroot, (HDC)ev->wparam, HwndClientRect(window->hwnd), ThemeWindowBackgroundColor());
+        ev->result = 0;
+        ev->didHandle = true;
         return;
     }
     if (ev->msg == WM_VSCROLL && ev->lparam == 0) {
@@ -746,6 +941,7 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     } else {
         return;
     }
+    window->scroll->ClipControls(window->scroll->child);
     ev->result = 0;
     ev->didHandle = true;
 }
@@ -775,3 +971,158 @@ void ShowSettingsDialog(MainWindow* win) {
     }
     gSettingsWnd = wnd;
 }
+
+#if IS_DEBUG
+
+struct SettingsPrintCtx {
+    HDC dc;
+    HWND hwnd;
+    Rect viewport;
+};
+
+static BOOL CALLBACK PrintSettingsChild(HWND hwnd, LPARAM data) {
+    if (!(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VISIBLE)) return TRUE;
+    auto* args = (SettingsPrintCtx*)data;
+    if (GetParent(hwnd) != args->hwnd) return TRUE;
+    HDC dc = args->dc;
+    Rect bounds = ChildPosWithinParent(hwnd);
+    int saved = SaveDC(dc);
+    SetViewportOrgEx(dc, bounds.x, bounds.y, nullptr);
+    IntersectClipRect(dc, 0, 0, bounds.dx, bounds.dy);
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    if (GetWindowRgn(hwnd, region) != ERROR) {
+        Rect expected = bounds.Intersect(args->viewport);
+        RECT regionBounds{};
+        GetRgnBox(region, &regionBounds);
+        utassert(regionBounds.right - regionBounds.left == expected.dx);
+        utassert(regionBounds.bottom - regionBounds.top == expected.dy);
+        OffsetRgn(region, bounds.x, bounds.y);
+        ExtSelectClipRgn(dc, region, RGN_AND);
+    }
+    DeleteObject(region);
+    SendMessageW(hwnd, WM_PRINT, (WPARAM)dc, PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND | PRF_CHILDREN);
+    RestoreDC(dc, saved);
+    return TRUE;
+}
+
+static void CaptureSettings(SettingsWnd* wnd, Str path) {
+    Size size = HwndClientRect(wnd->hwnd).Size();
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), size.dx, -size.dy, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    utassert(bitmap && pixels);
+    if (!bitmap || !pixels) {
+        DeleteDC(dc);
+        return;
+    }
+    HGDIOBJ old = SelectObject(dc, bitmap);
+    SendMessageW(wnd->hwnd, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT);
+    SettingsPrintCtx args{dc, wnd->hwnd, wnd->scroll->lastBounds};
+    EnumChildWindows(wnd->hwnd, PrintSettingsChild, (LPARAM)&args);
+    GdiFlush();
+    BITMAPFILEHEADER header{};
+    header.bfType = 0x4d42;
+    header.bfOffBits = sizeof(header) + sizeof(info.bmiHeader);
+    header.bfSize = header.bfOffBits + size.dx * size.dy * 4;
+    str::Builder bytes;
+    bytes.Append(Str((const char*)&header, sizeof(header)));
+    bytes.Append(Str((const char*)&info.bmiHeader, sizeof(info.bmiHeader)));
+    bytes.Append(Str((const char*)pixels, size.dx * size.dy * 4));
+    utassert(file::WriteFile(path, ToStrTemp(bytes)));
+    SelectObject(dc, old);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+}
+
+static void SettingsSnapshots() {
+    WCHAR folder[1024]{};
+    DWORD length = GetEnvironmentVariableW(L"SUMATRA_SETTINGS_SNAPSHOTS", folder, dimof(folder));
+    if (!length || length >= dimof(folder)) return;
+    Str output = ToUtf8Temp(folder);
+    utassert(dir::CreateAll(output));
+    RenderCache* previousCache = gRenderCache;
+    if (!previousCache) gRenderCache = new RenderCache();
+    int originalTheme = ThemeGetCurrentIndex();
+    defer {
+        SetThemeByIndex(originalTheme);
+        if (!previousCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    for (int variant = 0; variant < 3; variant++) {
+        gSettings->uIFontSize = variant == 2 ? 28 : 0;
+        gSettings->interfaceScale = variant == 2 ? 150 : 100;
+        str::ReplaceWithCopy(&gSettings->theme, variant == 0 ? StrL("Sumatra Light") : StrL("Modern Green Dark"));
+        SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+        auto* wnd = new SettingsWnd();
+        wnd->SetFont(GetAppFont());
+        utassert(wnd->Create(nullptr, SettingsView::Hidden));
+        if (variant == 2) {
+            ResizeHwndToClientArea(wnd->hwnd, DpiScale(640), DpiScale(760), false);
+            wnd->DoLayout();
+        }
+        utassert(!IsWindowVisible(wnd->hwnd));
+        CaptureSettings(wnd, path::JoinTemp(output, fmt("settings-%d.bmp", variant)));
+        wnd->scroll->ScrollTo(INT_MAX);
+        wnd->scroll->ClipControls(wnd->scroll->child);
+        CaptureSettings(wnd, path::JoinTemp(output, fmt("settings-%d-bottom.bmp", variant)));
+        DestroyWindow(wnd->hwnd);
+        delete wnd;
+    }
+}
+
+bool SettingsDialog_UnitTestsSizing() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    RefreshUiFonts();
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+        if (gSettings) SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+    };
+    utassert(gSettings);
+    auto* wnd = new SettingsWnd();
+    wnd->SetFont(GetAppFont());
+    utassert(wnd->Create(nullptr, SettingsView::Hidden));
+    Rect work = PlatformWindowWorkArea(wnd->hwnd);
+    int maxWidth = std::min(DpiScale(900), std::max(1, work.dx - DpiScale(32)));
+    utassert(HwndClientRect(wnd->hwnd).dx <= maxWidth);
+    utassert(!IsWindowVisible(wnd->hwnd));
+    Rect footer = wnd->btnOk->lastBounds;
+    utassert(footer.y >= wnd->scroll->lastBounds.y + wnd->scroll->lastBounds.dy);
+    wnd->scroll->ScrollTo(INT_MAX);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    utassert(wnd->btnOk->lastBounds == footer);
+    wnd->scroll->ScrollTo(0);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    SendMessageW(wnd->chkRememberOpened->hwnd, WM_SETFOCUS, 0, 0);
+    Rect focused = ChildPosWithinParent(wnd->chkRememberOpened->hwnd);
+    Rect view = wnd->scroll->lastBounds;
+    utassert(focused.y >= view.y && focused.y + focused.dy <= view.y + view.dy);
+    ResizeHwndToClientArea(wnd->hwnd, DpiScale(360), DpiScale(500), false);
+    wnd->DoLayout();
+    bool stacked = false;
+    for (auto* form : wnd->forms) {
+        stacked |= form->stacked;
+        for (int row = 0; row < form->rows; row++) {
+            Rect label = form->GetCell(row, 0)->lastBounds;
+            Rect value = form->GetCell(row, 1)->lastBounds;
+            if (form->stacked)
+                utassert(label.y + label.dy <= value.y);
+            else
+                utassert(label.x + label.dx <= value.x);
+            utassert(value.x + value.dx <= form->lastBounds.x + form->lastBounds.dx);
+        }
+    }
+    utassert(stacked);
+    DestroyWindow(wnd->hwnd);
+    delete wnd;
+    SettingsSnapshots();
+    return true;
+}
+#endif

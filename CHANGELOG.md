@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added optional cpdf-backed PDF bookmark editing with title, page, hierarchy and order controls, preserving existing destinations and styles. First use offers a size-labelled, verified download or a local executable; saving creates a separate PDF copy.
+- Compacted the home header with the green logo beside a bold title, measured action buttons and reduced vertical spacing above recent documents.
+- Narrowed Settings to fit its form, added clear section headings and wrapping help text, and kept OK/Cancel visible while scrolling. Large text and narrow windows use stacked fields.
+
 - Compacted Dictionary and Learning hub with shared labels, measured control sizing and themed selectors. Dictionary and deck management expand when needed; search remains beside Help / Start guide.
 - Focused practice on the word, answers, pronunciation and progress, hid setup controls during sessions, emphasized Check answer/Next word and kept Back to library available before revealing flashcards.
 - Added session undo for the last 20 removed vocabulary entries, restoring definitions, PDF context, deck memberships and review history. Failed remove or undo saves retain the previous data. Deck deletion explains that saved words and review history remain available.

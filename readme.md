@@ -97,6 +97,9 @@ Run the installer to install the application, or run the standalone portable EXE
 
 - Green application logo across the reader, home page, dialogs, installer and PDF file associations.
 - Pretty-style welcome page, document search, Resume last and recent-document cards.
+- Compact home header with the green logo beside the bold app name and more space for recent files.
+- Content-sized Settings with wrapping fields and help text, and an OK/Cancel footer that stays visible while scrolling.
+- [Edit PDF bookmarks](docs/cpdf-bookmarks.md) with an optional cpdf download, or use your own executable. Change titles, pages, hierarchy and order, then save a separate PDF copy. The tool is not bundled; the download prompt shows its size and license.
 - Rounded toolbar groups, expandable controls, twelve Pretty theme presets and right-side day, night and document-inversion actions.
 - Rounded Lucide core icons and bundled **Manrope, Pretendard Std and Public Sans**, alongside System font selection.
 - Main Appearance controls for interface and sidebar text, icon size, thumbnail size, recent-document count and minimum tab width; scrolling tab overflow.

@@ -17,6 +17,7 @@
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
 #include "gui/VirtHost.h"
+#include "gui/win/TabsCtrl.h"
 
 #include "Settings.h"
 #include "DocController.h"
@@ -40,6 +41,10 @@
 #include "PagePosition.h"
 #include "HomePage.h"
 #include "Vocabulary.h"
+#if IS_DEBUG
+#include "EngineBase.h"
+#include "RenderCache.h"
+#endif
 
 // how the shared tip code (TipText.cpp) opens a url link
 static void OpenTipUrl(Str url) {
@@ -326,8 +331,14 @@ static Kind kindSumatraLogo = "sumatraLogo";
 // the About table
 struct SumatraLogo : VirtCtrl {
     PlatformFont* font = nullptr; // not owned
+    bool homeIdentity = false;
+    int maxWidth = 0;
+    Pixmap* badge = nullptr;
 
     SumatraLogo();
+    ~SumatraLogo() override;
+    int BadgeSize();
+    bool WrapTitle();
     Size GetIdealSize() override;
     void Paint(VirtPaintCtx&) override;
 };
@@ -337,15 +348,72 @@ SumatraLogo::SumatraLogo() {
     flags |= vwfNoHitTest;
 }
 
+SumatraLogo::~SumatraLogo() {
+    delete badge;
+}
+
+int SumatraLogo::BadgeSize() {
+    return homeIdentity ? Clamp(PlatformFontLineHeight(font), UiScalePx(32), UiScalePx(64)) : 0;
+}
+
+bool SumatraLogo::WrapTitle() {
+    return homeIdentity && maxWidth > 0 &&
+           PlatformFontMeasureText(font, StrL(kAppDisplayName)).dx + BadgeSize() + UiScalePx(12 + kInnerPadding * 2) >
+               maxWidth;
+}
+
 Size SumatraLogo::GetIdealSize() {
     Size sz = PlatformFontMeasureText(font, StrL(kAppDisplayName));
-    HWND hwnd = GetHwnd();
+    if (WrapTitle()) {
+        sz.dx = std::max(PlatformFontMeasureText(font, StrL("SumatraPDF")).dx,
+                         PlatformFontMeasureText(font, StrL("Enhanced")).dx);
+        sz.dy = PlatformFontLineHeight(font) * 2;
+    }
+    if (homeIdentity) {
+        sz.dx += BadgeSize() + UiScalePx(12);
+        sz.dy = std::max(sz.dy, BadgeSize());
+    }
     sz.dy += UiScalePx(kAboutBoxMarginDy * 2);
     sz.dx += 2 * UiScalePx(kInnerPadding);
     return sz;
 }
 
 void SumatraLogo::Paint(VirtPaintCtx& ctx) {
+    if (homeIdentity) {
+        Rect content = ctx.bounds;
+        content.SubLR(UiScalePx(kInnerPadding), UiScalePx(kInnerPadding));
+        content.SubTB(UiScalePx(kAboutBoxMarginDy), UiScalePx(kAboutBoxMarginDy));
+        int iconSize = BadgeSize();
+        if (!badge || badge->width != iconSize) {
+            delete badge;
+            HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON,
+                                           iconSize, iconSize, 0);
+            badge = icon ? PixmapFromHICON(icon) : nullptr;
+            if (icon) DestroyIcon(icon);
+        }
+        if (badge) ctx.gfx->DrawPixmap(badge, {content.x, content.y + (content.dy - iconSize) / 2, iconSize, iconSize});
+        content.x += iconSize + UiScalePx(12);
+        content.dx -= iconSize + UiScalePx(12);
+        bool wrap = WrapTitle();
+        Str name = wrap ? StrL("SumatraPDF") : StrL("SumatraPDF ");
+        Size nameSize = PlatformFontMeasureText(font, name);
+        Rect suffix = content;
+        if (wrap) {
+            content.dy = PlatformFontLineHeight(font);
+            suffix.y += content.dy;
+            suffix.dy = content.dy;
+        } else {
+            content.dx = nameSize.dx;
+            suffix.x += nameSize.dx;
+            suffix.dx -= nameSize.dx;
+        }
+        Color bg = ThemeMainWindowBackgroundColor();
+        Color green = IsLightColor(bg) ? MkRgb(25, 128, 78) : MkRgb(66, 218, 133);
+        Color accent = ThemeUsesHighContrastColors() ? ThemeWindowTextColor() : EnsureContrast(green, bg);
+        ctx.gfx->DrawText(name, content, gfxTextVCenter, font, ThemeWindowTextColor());
+        ctx.gfx->DrawText(StrL("Enhanced"), suffix, gfxTextVCenter, font, accent);
+        return;
+    }
     Size txtSize = PlatformFontMeasureText(font, StrL(kAppDisplayName));
     Rect r = ctx.bounds;
     Rect text{r.x + ((r.dx - txtSize.dx) / 2), r.y + ((r.dy - txtSize.dy) / 2), txtSize.dx, txtSize.dy};
@@ -1268,11 +1336,38 @@ static int HomeThumbDy() {
 
 static int HomeTitleSize(Rect rc) {
     if (rc.dx < UiScalePx(650) || rc.dy < UiScalePx(520)) return 28;
-    return rc.dy >= UiScalePx(760) ? kSumatraTxtFontSize : 36;
+    return 36;
 }
 
 static PlatformFont* HomePageFont(int size) {
     return GetUserGuiFont(GetAppFontFamily(), UiFontSizePx(size));
+}
+
+static void SetHomeTitleFont(HomeChromeCtrl* chrome, Rect rc) {
+    auto* logo = chrome->logo;
+    logo->maxWidth = std::max(1, rc.dx - UiScalePx(48));
+    int pixels = UiFontSizePx(chrome->features->expanded ? 28 : HomeTitleSize(rc));
+    logo->font = GetUserGuiFontEx(GetAppFontFamily(), pixels, true, false);
+    for (int i = 0; i < 3; i++) {
+        Str fittedTitle = gSettings->uIFontSize > 0 ? StrL(kAppDisplayName) : StrL("SumatraPDF");
+        int required =
+            PlatformFontMeasureText(logo->font, fittedTitle).dx + logo->BadgeSize() + UiScalePx(12 + kInnerPadding * 2);
+        if (required <= logo->maxWidth || pixels <= 1) break;
+        pixels = std::max(1, MulDiv(pixels, logo->maxWidth - UiScalePx(8), required));
+        logo->font = GetUserGuiFontEx(GetAppFontFamily(), pixels, true, false);
+    }
+}
+
+static Rect HomeSubtitleBox(Rect rc, Rect logo, bool expanded) {
+    if (expanded || rc.dy < UiScalePx(520)) return {};
+    int width = std::max(1, std::min(UiScalePx(650), rc.dx - UiScalePx(48)));
+    Size size = PlatformFontMeasureText(HomePageFont(14), Tr("Search, open, or resume your reading."), width);
+    return {rc.x + (rc.dx - width) / 2, logo.Bottom() + UiScalePx(8), width, size.dy + UiScalePx(4)};
+}
+
+static int HomeResumeWidth(Rect rc, int openWidth) {
+    int width = PlatformFontMeasureText(HomePageFont(17), Tr("Resume last")).dx + UiScalePx(32);
+    return rc.dx >= UiScalePx(500) && rc.dx - UiScalePx(48) >= openWidth + width + UiScalePx(16) ? width : 0;
 }
 
 static int HomeTextLineDy() {
@@ -1337,8 +1432,8 @@ static HomeLearningRow MeasureLearningRow(int width, HomeChromeCtrl* chrome) {
                    UiScalePx(32);
     int learningMin = UiScalePx(240);
     int learningDy =
-        PlatformFontLineHeight(HomePageFont(16)) + PlatformFontLineHeight(HomePageFont(13)) + UiScalePx(25);
-    int rowDy = std::max(std::max(UiScalePx(72), learningDy),
+        PlatformFontLineHeight(HomePageFont(16)) + PlatformFontLineHeight(HomePageFont(13)) + UiScalePx(20);
+    int rowDy = std::max(std::max(UiScalePx(60), learningDy),
                          std::max(toggle->MinIntrinsicHeight(toggleDx), dictionary->MinIntrinsicHeight(dictionaryDx)));
     if (width >= learningMin + dictionaryDx + toggleDx + gap * 2) {
         int learningDx = width - dictionaryDx - toggleDx - gap * 2;
@@ -1348,7 +1443,7 @@ static HomeLearningRow MeasureLearningRow(int width, HomeChromeCtrl* chrome) {
         row.height = rowDy;
         return row;
     }
-    row.learning = {0, 0, width, std::max(UiScalePx(72), learningDy)};
+    row.learning = {0, 0, width, std::max(UiScalePx(60), learningDy)};
     int y = row.learning.Bottom() + gap;
     int half = std::max(1, (width - gap) / 2);
     bool stack = half < PlatformFontMeasureText(toggle->font, Tr("Enhanced")).dx + UiScalePx(32);
@@ -2056,24 +2151,21 @@ static void LayoutHomePage(HomePageLayout& l) {
     l.freqRead = hdr;
 
     int searchThumbsGap = UiScalePx(kSearchThumbnailsGapY);
-    int borderDy = std::max(UiScalePx(rc.dy >= UiScalePx(520) ? 64 : 48),
-                            PlatformFontLineHeight(HomePageFont(18)) + UiScalePx(24));
+    int borderDy = std::max(UiScalePx(48), PlatformFontLineHeight(HomePageFont(18)) + UiScalePx(24));
 
     // [command palette] SumatraPDF [keyboard shortcuts], centered like the old
     // title. The HBox in logoRow sizes the three virt controls.
-    chrome->logo->font =
-        GetUserGuiFont(GetAppFontFamily(), UiFontSizePx(chrome->features->expanded ? 28 : HomeTitleSize(l.rc)));
+    SetHomeTitleFont(chrome, rc);
     Size logoRowSize = chrome->logoRow->GetIdealSize();
-    bool spacious = !chrome->features->expanded && rc.dy >= UiScalePx(760);
-    bool hero = !chrome->features->expanded && rc.dy >= UiScalePx(520);
-    int logoY = UiScalePx(spacious ? 168 : hero ? 104 : 8);
+    int logoY = rc.y + UiScalePx(16);
     int logoX = rc.x + ((rc.dx - logoRowSize.dx) / 2);
     if (logoX < UiScalePx(kInnerPadding)) {
         logoX = UiScalePx(kInnerPadding);
     }
     l.rcLogo = {logoX, logoY, logoRowSize.dx, logoRowSize.dy};
 
-    int hdrY = logoY + logoRowSize.dy + UiScalePx(spacious ? 102 : hero ? 76 : 12);
+    Rect subtitle = HomeSubtitleBox(rc, l.rcLogo, chrome->features->expanded);
+    int hdrY = (subtitle.IsEmpty() ? l.rcLogo.Bottom() : subtitle.Bottom()) + UiScalePx(12);
     int iconGap = UiScalePx(4);
     int rowDy = std::max(rcIconView.dy, borderDy);
     // every row item (link, search box, view icons) is centered on the row's
@@ -2093,6 +2185,8 @@ static void LayoutHomePage(HomePageLayout& l) {
     openDoc->isRtl = isRtl;
     openDoc->withUnderline = false;
     Size txtSize = openDoc->GetIdealSize(true);
+    txtSize.dx = std::min(txtSize.dx, std::max(1, rc.dx - UiScalePx(84) - rcIconOpen.dx));
+    openDoc->ellipsis = true;
     int openGroupDx = rcIconOpen.dx + UiScalePx(8) + txtSize.dx;
 
     rcIconOpen.x = thumbsStartX;
@@ -2111,19 +2205,29 @@ static void LayoutHomePage(HomePageLayout& l) {
     int borderX = rc.x + ((rc.dx - borderDx) / 2);
     l.rcSearchBorder = {borderX, hdrY + ((rowDy - borderDy) / 2), borderDx, borderDy};
 
-    int actionY = hdrY + rowDy + UiScalePx(24);
-    int resumeDx = rc.dx >= UiScalePx(500) ? UiScalePx(182) : 0;
-    int actionX = rc.x + ((rc.dx - openGroupDx - resumeDx - (resumeDx ? UiScalePx(48) : 0)) / 2);
+    int actionY = hdrY + rowDy + UiScalePx(16);
+    int actionDy = std::max(rcIconOpen.dy, txtSize.dy) + UiScalePx(20);
+    int resumeDx = HomeResumeWidth(rc, openGroupDx + UiScalePx(20));
+    int actionX =
+        rc.x + ((rc.dx - openGroupDx - UiScalePx(20) - resumeDx - (resumeDx ? UiScalePx(16) : 0)) / 2) + UiScalePx(10);
     rcIconOpen.x = actionX;
-    rcIconOpen.y = actionY;
-    rcOpenDoc = {actionX + rcIconOpen.dx + UiScalePx(8), actionY + ((rcIconOpen.dy - txtSize.dy) / 2), txtSize.dx,
+    rcIconOpen.y = actionY + (actionDy - rcIconOpen.dy) / 2;
+    rcOpenDoc = {actionX + rcIconOpen.dx + UiScalePx(8), actionY + ((actionDy - txtSize.dy) / 2), txtSize.dx,
                  txtSize.dy};
     chrome->features->UpdateFonts();
     chrome->dictionary->font = chrome->features->toggle->font;
     int learningWidth = std::max(1, std::min(UiScalePx(900), rc.dx - UiScalePx(48)));
     HomeLearningRow learningRow = MeasureLearningRow(learningWidth, chrome);
-    int sectionY = actionY + rcIconOpen.dy + learningRow.height + UiScalePx(64);
-    hdr->SetBounds({thumbsStartX, sectionY, std::max(1, thumbsContentWidth - viewIconsDx - UiScalePx(148)),
+    int sectionY = actionY + actionDy + learningRow.height + UiScalePx(32);
+    int sectionX = std::min(thumbsStartX, UiScalePx(24));
+    int sectionWidth = std::max(1, rc.dx - sectionX * 2);
+    int sizeControlsDx = !HomePageIsListView() && sectionWidth >= hdr->GetIdealSize().dx + viewIconsDx + UiScalePx(160)
+                             ? UiScalePx(148)
+                             : 0;
+    l.rcIconThumbnailView.x = rc.x + sectionX + sectionWidth - viewIconsDx;
+    l.rcIconListView.x = l.rcIconThumbnailView.Right() + iconGap;
+    hdr->ellipsis = true;
+    hdr->SetBounds({rc.x + sectionX, sectionY, std::max(1, sectionWidth - viewIconsDx - sizeControlsDx - UiScalePx(8)),
                     std::max(UiScalePx(28), PlatformFontLineHeight(hdr->font))});
     l.rcIconThumbnailView.y = sectionY;
     l.rcIconListView.y = sectionY;
@@ -2136,6 +2240,9 @@ static void LayoutHomePage(HomePageLayout& l) {
         mirrorX(rcIconOpen);
         mirrorX(rcOpenDoc);
         mirrorX(l.rcSearchBorder);
+        Rect header = hdr->lastBounds;
+        mirrorX(header);
+        hdr->SetBounds(header);
     }
     l.rcIconOpen = rcIconOpen;
     openDoc->SetBounds(rcOpenDoc);
@@ -2152,6 +2259,10 @@ static void LayoutHomePage(HomePageLayout& l) {
     if (tip) {
         int tipPadding = UiScalePx(8);
         tipHeight = tip->MinIntrinsicHeight(thumbsContentWidth) + (2 * tipPadding);
+        if (headerBottomY + tipHeight + HomeThumbDy() + HomeTextLineDy() * 2 + UiScalePx(32) > rc.dy) {
+            tip = nullptr;
+            tipHeight = 0;
+        }
     }
 
     // --- Step 3: middle area for thumbnails/list ---
@@ -2326,6 +2437,54 @@ static void LayoutHomePage(HomePageLayout& l) {
         l.rcTipText = {tipStartX, tipStartY, thumbsContentWidth, tip->MinIntrinsicHeight(thumbsContentWidth)};
     }
 }
+
+#if IS_DEBUG
+static bool HomeSurfaceCaptures();
+
+bool HomePage_UnitTestsCompactHeader() {
+    Settings* saved = gSettings;
+    Vec<FileState*>* savedHistory = FileHistoryStates();
+    int savedDpiX = dpiX;
+    int savedDpiY = dpiY;
+    gSettings = NewSettings({});
+    FileHistorySetStates(gSettings->fileStates);
+    if (!ThemeGetCount()) CreateThemeCommands();
+    DpiSet(96, 96);
+    bool ok = true;
+    {
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        win.hwndCanvas = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 1100, 800, nullptr, nullptr,
+                                         GetModuleHandle(nullptr), nullptr);
+        ok &= win.hwndCanvas && !IsWindowVisible(win.hwndCanvas);
+        for (Size size : {Size{1100, 800}, Size{760, 600}, Size{420, 700}}) {
+            HomePageLayout layout;
+            layout.win = &win;
+            layout.rc = {0, 0, size.dx, size.dy};
+            LayoutHomePage(layout);
+            auto* logo = HomeChrome(&win)->logo;
+            ok &= logo->font->GetStyle() == PlatformFontStyle::Bold;
+            ok &= layout.rcLogo.x >= 0 && layout.rcLogo.Right() <= size.dx;
+            ok &= layout.rcLogo.y <= UiScalePx(24);
+            ok &= layout.rcSearchBorder.y >= layout.rcLogo.Bottom();
+            ok &= layout.freqRead->lastBounds.Right() + UiScalePx(8) <= layout.rcIconThumbnailView.x;
+            ok &= layout.freqRead->lastBounds.y <= UiScalePx(size.dx > 500 ? 350 : 500);
+        }
+        HWND canvas = win.hwndCanvas;
+        HomePageDestroyChrome(&win);
+        win.hwndCanvas = nullptr;
+        DestroyWindow(canvas);
+    }
+    ok &= HomeSurfaceCaptures();
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    FileHistorySetStates(savedHistory);
+    dpiX = savedDpiX;
+    dpiY = savedDpiY;
+    RefreshUiFonts();
+    return ok;
+}
+#endif
 
 static void GetFileStateIcon(FileState* fs) {
     if (fs->himl) {
@@ -2797,16 +2956,14 @@ void HomeLearningCtrl::Paint(VirtPaintCtx& ctx) {
                          HasFlag(vwfHovered) ? ThemeHotBackgroundColor() : ThemeControlBackgroundColor(),
                          ThemeEdgeColor());
     int pad = UiScalePx(16);
-    Rect title{r.x + pad, r.y + UiScalePx(9), r.dx - pad * 2,
-               std::max(UiScalePx(23), PlatformFontLineHeight(HomePageFont(16)))};
+    Rect title{r.x + pad, r.y + UiScalePx(8), r.dx - pad * 2, PlatformFontLineHeight(HomePageFont(16))};
     gfx->DrawText(Tr("Learning hub"), title, gfxTextVCenter | gfxTextSingleLine | gfxTextEllipsis, HomePageFont(16),
                   ThemeBrandColor());
     int dueCount = VocabularyDueCount({});
     VocabularyWord* word = VocabularyWordOfDay();
     TempStr detail = word ? fmt("%s: %s · %d %s", Tr("Word of the day"), word->word, dueCount, Tr("due for review"))
                           : fmt("%s · %d %s", Tr("Save words while reading"), dueCount, Tr("due for review"));
-    Rect stats{title.x, title.Bottom() + UiScalePx(4), title.dx,
-               std::max(UiScalePx(24), PlatformFontLineHeight(HomePageFont(13)))};
+    Rect stats{title.x, title.Bottom() + UiScalePx(4), title.dx, PlatformFontLineHeight(HomePageFont(13))};
     gfx->DrawText(detail, stats, gfxTextVCenter | gfxTextSingleLine | gfxTextEllipsis, HomePageFont(13),
                   ThemeWindowTextColor());
 }
@@ -3074,6 +3231,9 @@ static void CreateHomeFeatures(MainWindow* win, HomeChromeCtrl* chrome) {
         {gIconStudyExport,
          "**Enhanced: study exports and annotation fonts.** Export highlights and notes to Markdown, text, Typst, "
          "HTML, Word, JSON or CSV. Free Text supports bundled and installed fonts with PDF embedding."},
+        {gIconFileOpen,
+         "**Enhanced: PDF bookmark editing.** Edit titles, pages and hierarchy with an optional cpdf tool downloaded "
+         "on demand. Save a separate PDF copy; cpdf is not bundled."},
         {gIconFileOpen,
          "**Retained from upstream SumatraPDF.** Fast document reading, bookmarks, search, printing, multiple document "
          "formats and PDF annotations. These foundations remain part of the reader."},
@@ -3506,6 +3666,7 @@ static HomeChromeCtrl* EnsureHomeChrome(MainWindow* win) {
     chrome->paletteBtn->SetTooltip(AppendCmdAccel(Tr("Command Palette"), CmdCommandPalette));
     chrome->paletteBtn->onClick = MkFunc1(HomePaletteClicked, win);
     chrome->logo = new SumatraLogo();
+    chrome->logo->homeIdentity = true;
     chrome->logo->SetFlag(vwfNoHitTest, false);
     chrome->logo->onMouseEnter = MkFunc0(OnHomeLogoEnter, win);
     chrome->logo->onMouseLeave = MkFunc0(OnHomeLogoLeave, win);
@@ -3699,15 +3860,16 @@ static void HomePageSyncChrome(HomePageLayout& l) {
 
     // font also set here so the cached-layout path (ApplyHomeLayoutCache)
     // repaints the logo without a full relayout
-    chrome->logo->font =
-        GetUserGuiFont(GetAppFontFamily(), UiFontSizePx(chrome->features->expanded ? 28 : HomeTitleSize(l.rc)));
+    SetHomeTitleFont(chrome, l.rc);
     int iconSz = UiScalePx(16);
     chrome->paletteBtn->pixmap = GetCachedPixmapForSvg(Str(gIconCommandPalette), iconSz, iconSz, ThemeWindowTextColor(),
                                                        ThemeControlBackgroundColor());
     chrome->logoRow->SetBounds(l.rcLogo);
     Rect sizeAnchor = l.rcIconThumbnailView;
     int sizeX = IsUIRtl() ? l.rcIconListView.Right() + UiScalePx(12) : sizeAnchor.x - UiScalePx(140);
-    Visibility sizeVisibility = HomePageIsListView() ? Visibility::Collapse : Visibility::Visible;
+    bool fitsSizeControls = IsUIRtl() ? sizeX + UiScalePx(120) <= l.freqRead->lastBounds.x - UiScalePx(8)
+                                      : sizeX >= l.freqRead->lastBounds.Right() + UiScalePx(8);
+    Visibility sizeVisibility = HomePageIsListView() || !fitsSizeControls ? Visibility::Collapse : Visibility::Visible;
     chrome->smallerBtn->visibility = sizeVisibility;
     chrome->largerBtn->visibility = sizeVisibility;
     chrome->sizeLabel->visibility = sizeVisibility;
@@ -3730,7 +3892,7 @@ static void HomePageSyncChrome(HomePageLayout& l) {
 
     // one click target covering the icon and the link text
     Rect rcOpen = l.rcIconOpen.Union(l.openDoc->lastBounds);
-    rcOpen.Inflate(10, 10);
+    rcOpen.Inflate(UiScalePx(10), UiScalePx(10));
     HomeOpenDocCtrl* od = chrome->openDoc;
     od->pixmap = GetCachedPixmapForSvg(Str(gIconFileOpen), l.rcIconOpen.dx, l.rcIconOpen.dy, ThemeBrandTextColor(),
                                        ThemeBrandColor());
@@ -3741,10 +3903,11 @@ static void HomePageSyncChrome(HomePageLayout& l) {
     resume->SetColor(kColBtnBg, ThemeControlBackgroundColor());
     resume->SetColor(kColBtnBgHover, ThemeHotBackgroundColor());
     resume->SetColor(kColBtnBorder, ThemeEdgeColor());
-    bool showResume = l.rc.dx >= UiScalePx(500);
+    int resumeDx = HomeResumeWidth(l.rc, rcOpen.dx);
+    bool showResume = resumeDx > 0;
     resume->visibility = showResume ? Visibility::Visible : Visibility::Collapse;
-    int resumeX = IsUIRtl() ? rcOpen.x - UiScalePx(198) : rcOpen.Right() + UiScalePx(16);
-    resume->SetBounds({resumeX, rcOpen.y, UiScalePx(182), rcOpen.dy});
+    int resumeX = IsUIRtl() ? rcOpen.x - resumeDx - UiScalePx(16) : rcOpen.Right() + UiScalePx(16);
+    resume->SetBounds({resumeX, rcOpen.y, resumeDx, rcOpen.dy});
     Vec<FileState*> recent;
     FileHistoryGetRecentlyOpenedOrder(recent);
     resume->SetIsEnabled(len(recent) > 0);
@@ -3752,7 +3915,7 @@ static void HomePageSyncChrome(HomePageLayout& l) {
     int learningDx = std::max(1, std::min(UiScalePx(900), l.rc.dx - UiScalePx(48)));
     int learningX = l.rc.x + (l.rc.dx - learningDx) / 2;
     HomeLearningRow learningRow = MeasureLearningRow(learningDx, chrome);
-    int learningY = l.rcIconThumbnailView.y - learningRow.height - UiScalePx(24);
+    int learningY = l.rcIconThumbnailView.y - learningRow.height - UiScalePx(16);
     auto positionAction = [&](Rect r) {
         if (IsUIRtl()) r.x = learningDx - r.x - r.dx;
         r.x += learningX;
@@ -3776,8 +3939,6 @@ static void DrawHomePageLayout(HomePageLayout& l) {
     auto* win = l.win;
 
     gfx->FillRect(l.rc, ThemeMainWindowBackgroundColor());
-    bool spacious = l.rc.dy >= UiScalePx(760);
-    int centerX = l.rc.x + (l.rc.dx / 2);
     if (!ThemeUsesHighContrastColors()) {
         int radius = std::max(l.rc.dx / 2, UiScalePx(400));
         for (int step = 80; step > 0; step--) {
@@ -3786,25 +3947,11 @@ static void DrawHomePageLayout(HomePageLayout& l) {
             gfx->FillEllipse({l.rc.x + l.rc.dx * 3 / 4 - d / 2, l.rc.dy - d / 2, d, d}, ThemeBrandColor(), 1);
         }
     }
-    if (l.rc.dy >= UiScalePx(520) && !HomeChrome(win)->features->expanded) {
-        int badgeSize = UiScalePx(spacious ? 112 : 72);
-        Rect badge{centerX - badgeSize / 2, UiScalePx(spacious ? 28 : 16), badgeSize, badgeSize};
-        HICON icon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, badge.dx,
-                                       badge.dx, 0);
-        Pixmap* logo = icon ? PixmapFromHICON(icon) : nullptr;
-        if (logo) {
-            gfx->DrawPixmap(logo, badge);
-        }
-        delete logo;
-        if (icon) {
-            DestroyIcon(icon);
-        }
-        int subtitleDx = std::min(UiScalePx(550), l.rc.dx - UiScalePx(48));
-        Rect subtitle{centerX - subtitleDx / 2, l.rcLogo.Bottom() + UiScalePx(8), subtitleDx,
-                      UiScalePx(spacious ? 64 : 48)};
-        gfx->DrawText(
-            Tr("Your digital library, more elegant than ever. Search, open, or resume your reading instantly."),
-            subtitle, gfxTextCenter, HomePageFont(spacious ? 18 : 16), ThemeWindowTextDisabledColor());
+    Rect subtitle = HomeSubtitleBox(l.rc, l.rcLogo, HomeChrome(win)->features->expanded);
+    if (!subtitle.IsEmpty()) {
+        gfx->DrawText(Tr("Search, open, or resume your reading."), subtitle, gfxTextCenter | gfxTextWrap,
+                      HomePageFont(14),
+                      EnsureContrast(ThemeWindowTextDisabledColor(), ThemeMainWindowBackgroundColor()));
     }
     Rect section = HomeLayout(win).rcFreqRead;
     int clockSz = UiScalePx(22);
@@ -3852,6 +3999,114 @@ static void DrawHomePageLayout(HomePageLayout& l) {
         }
     }
 }
+
+#if IS_DEBUG
+static bool CaptureHomeSurface(MainWindow* win, Str path) {
+    if (IsWindowVisible(win->hwndCanvas)) return false;
+    Rect client = HwndClientRect(win->hwndCanvas);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), client.dx, -client.dy, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    if (!bitmap || !pixels) {
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        return false;
+    }
+    HGDIOBJ old = SelectObject(dc, bitmap);
+    HomePageLayout layout;
+    layout.win = win;
+    layout.rc = client;
+    LayoutHomePage(layout);
+    SaveHomeLayoutCache(layout, {}, 0);
+    HomePageSyncChrome(layout);
+    win->homeSearch->SetIsVisible(true);
+    PlaceHomeSearchEdit(win, layout.rcSearchBorder);
+    {
+        Gfx* gfx = GfxCreate(dc);
+        layout.gfx = gfx;
+        DrawHomePageLayout(layout);
+        delete gfx;
+    }
+    HWND edit = win->homeSearch->hwnd;
+    RECT bounds;
+    GetWindowRect(edit, &bounds);
+    MapWindowPoints(nullptr, win->hwndCanvas, (POINT*)&bounds, 2);
+    if (bounds.left < layout.rcSearchBorder.x || bounds.top < layout.rcSearchBorder.y ||
+        bounds.right > layout.rcSearchBorder.Right() || bounds.bottom > layout.rcSearchBorder.Bottom() ||
+        bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        return false;
+    int saved = SaveDC(dc);
+    SetViewportOrgEx(dc, bounds.left, bounds.top, nullptr);
+    IntersectClipRect(dc, 0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top);
+    SendMessageW(edit, WM_PRINT, (WPARAM)dc, PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND);
+    RestoreDC(dc, saved);
+    GdiFlush();
+    BITMAPFILEHEADER header{};
+    header.bfType = 0x4d42;
+    header.bfOffBits = sizeof(header) + sizeof(info.bmiHeader);
+    header.bfSize = header.bfOffBits + client.dx * client.dy * 4;
+    str::Builder bytes;
+    bytes.Append(Str((const char*)&header, sizeof(header)));
+    bytes.Append(Str((const char*)&info.bmiHeader, sizeof(info.bmiHeader)));
+    bytes.Append(Str((const char*)pixels, client.dx * client.dy * 4));
+    bool ok = file::WriteFile(path, ToStrTemp(bytes));
+    SelectObject(dc, old);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return ok;
+}
+
+static bool HomeSurfaceCaptures() {
+    WCHAR folder[1024]{};
+    DWORD length = GetEnvironmentVariableW(L"SUMATRA_HOME_SNAPSHOTS", folder, dimof(folder));
+    if (!length || length >= dimof(folder)) return true;
+    Str output = ToUtf8Temp(folder);
+    if (!dir::CreateAll(output)) return false;
+    RenderCache* originalCache = gRenderCache;
+    if (!originalCache) gRenderCache = new RenderCache();
+    int originalTheme = ThemeGetCurrentIndex();
+    int originalFont = gSettings->uIFontSize;
+    int originalScale = gSettings->interfaceScale;
+    defer {
+        gSettings->uIFontSize = originalFont;
+        gSettings->interfaceScale = originalScale;
+        SetThemeByIndex(originalTheme);
+        RefreshUiFonts();
+        if (!originalCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    for (Str name : {StrL("Lecture notes.pdf"), StrL("Research methods.pdf"), StrL("Reading list.pdf")}) {
+        auto* state = NewFileState(path::JoinTemp(output, name));
+        str::ReplaceWithCopy(&state->pageNo, StrL("3"));
+        FileHistoryAppend(state);
+    }
+    bool ok = true;
+    for (int variant = 0; variant < 4; variant++) {
+        gSettings->uIFontSize = variant == 3 ? 28 : 0;
+        gSettings->interfaceScale = variant == 3 ? 150 : 100;
+        SetTheme(variant == 1 ? StrL("Modern Green Dark") : StrL("Sumatra Light"));
+        RefreshUiFonts();
+        int width = variant == 2 ? 420 : variant == 3 ? 960 : 1100;
+        int height = variant == 2 ? 700 : variant == 3 ? 1000 : 800;
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        win.hwndCanvas = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, width, height, nullptr, nullptr,
+                                         GetModuleHandle(nullptr), nullptr);
+        EnsureHomeSearchCreated(&win);
+        ok &= win.hwndCanvas && CaptureHomeSurface(&win, path::JoinTemp(output, fmt("home-%d.bmp", variant)));
+        HWND canvas = win.hwndCanvas;
+        HomePageDestroySearch(&win);
+        HomePageDestroyChrome(&win);
+        win.hwndCanvas = nullptr;
+        DestroyWindow(canvas);
+    }
+    return ok;
+}
+#endif
 
 static bool HomePageShouldShow(MainWindow* win) {
     if (!win || !win->IsCurrentTabAbout()) {
@@ -3927,10 +4182,10 @@ void HomePageRelayout(MainWindow* win) {
         SaveHomeLayoutCache(l, filterText, win->homePageScrollY);
     }
     HomePageSyncChrome(l);
-    PlaceHomeSearchEdit(win, l.rcSearchBorder);
     if (win->homeSearch) {
         win->homeSearch->SetIsVisible(true);
     }
+    PlaceHomeSearchEdit(win, l.rcSearchBorder);
     UpdateHomeSearchCueBanner(win);
     UpdateHomeOverlayScrollbar(win);
 }

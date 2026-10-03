@@ -358,6 +358,7 @@ static SeqStrings gCommandNames =
     "CmdDictionaryLookup\0"
     "CmdVocabularyHome\0"
     "CmdExportStudyNotes\0"
+    "CmdEditBookmarks\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -705,6 +706,7 @@ static i32 gCommandIds[] = {
     CmdDictionaryLookup,
     CmdVocabularyHome,
     CmdExportStudyNotes,
+    CmdEditBookmarks,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1052,6 +1054,7 @@ SeqStrings gCommandDescriptions =
     "Dictionary: Define Selected Word\0"
     "Vocabulary: Learn and Practice\0"
     "Export Highlights and Notes...\0"
+    "Edit PDF Bookmarks...\0"
     "\0";
 
 SeqStrings gCommandAltDescs =

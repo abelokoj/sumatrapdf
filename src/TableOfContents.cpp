@@ -35,6 +35,7 @@
 #include "Theme.h"
 #include "FilterHighlightDraw.h"
 #include "TableOfContents.h"
+#include "CpdfBookmarks.h"
 
 static void LayoutTocContainer(MainWindow* win);
 
@@ -934,6 +935,8 @@ static void TocCollapseSameLevel(TreeView* tv, TreeItem ti) {
 
 // clang-format off
 static MenuDef menuDefContextToc[] = {
+    { TrN("Edit PDF bookmarks..."), CmdEditBookmarks },
+    { StrL(kMenuSeparator), 0 },
     {
         TrN("Expand All"),
         CmdExpandAll,
@@ -1017,6 +1020,7 @@ static void TocContextMenu(ContextMenuEvent* ev) {
 
     WindowTab* tab = win->CurrentTab();
     HMENU popup = BuildMenuFromDef(menuDefContextToc, CreatePopupMenu(), nullptr);
+    if (!CanEditPdfBookmarks(win)) MenuRemove(popup, CmdEditBookmarks);
 
     Str path;
     Str fileName;
@@ -1095,6 +1099,9 @@ static void TocContextMenu(ContextMenuEvent* ev) {
     FreeMenuOwnerDrawInfoData(popup);
     DestroyMenu(popup);
     switch (cmd) {
+        case CmdEditBookmarks:
+            ShowCpdfBookmarks(win);
+            break;
         case CmdExpandAll:
             win->tocTreeView->ExpandAll();
             break;

@@ -353,8 +353,9 @@ enum {
     CmdDictionaryLookup = 547,
     CmdVocabularyHome = 548,
     CmdExportStudyNotes = 549,
+    CmdEditBookmarks = 550,
 
-    CmdLast = 549,
+    CmdLast = 550,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering
