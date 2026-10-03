@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Compacted Dictionary and Learning hub with shared labels, measured control sizing and themed selectors. Dictionary and deck management expand when needed; search remains beside Help / Start guide.
+- Focused practice on the word, answers, pronunciation and progress, hid setup controls during sessions, emphasized Check answer/Next word and kept Back to library available before revealing flashcards.
+- Added session undo for the last 20 removed vocabulary entries, restoring definitions, PDF context, deck memberships and review history. Failed remove or undo saves retain the previous data. Deck deletion explains that saved words and review history remain available.
+- Added Activity, Review method and Voice labels, SM-2/Leitner help, and an explanation of Mark learned. Empty input widths now account for their cues.
+- Made home captions, list rows and thumbnail spacing follow the selected font. Existing annotation toolbars and hover panels refresh after font, interface scale or monitor DPI changes, including while hidden.
+- Applied interface scaling to learning and annotation control spacing and icons, keeping PDF annotation dimensions independent.
+
 - Made the word and answer divider directly draggable, removed the three panel-size buttons, and retained arrow-key, Home and context-menu resizing.
 - Placed the vocabulary selector, Save word, Mark learned and Open learning hub in one compact dictionary footer row, with wrapping when space is limited.
 

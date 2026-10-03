@@ -56,6 +56,7 @@
 #include "AIChatPanel.h"
 #include "MarkdownModel.h"
 #include "VocabularyDialog.h"
+#include "AnnotEditToolbar.h"
 #include "KeyboardHelp.h"
 #include "NavFilesInFolder.h"
 #include "SimpleBrowserWindow.h"
@@ -265,6 +266,12 @@ void RefreshUiFonts() {
             if (markdown && !markdown->isHtml) {
                 markdown->UpdateTheme();
             }
+        }
+        {
+            DpiScope scope(win->hwndFrame);
+            DpiSet(dpi, dpi);
+            RefreshAnnotEditToolbar(win);
+            RefreshAnnotationHoverOverlay(win);
         }
         HomePageOnDpiChanged(win, dpi);
     }

@@ -24,6 +24,9 @@ extern "C" {
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
 #include "gui/VirtHost.h"
+#if IS_DEBUG
+#include "gui/win/TabsCtrl.h"
+#endif
 
 #include "Settings.h"
 #include "Annotation.h"
@@ -122,6 +125,8 @@ struct AnnotEditToolbar {
     Annotation* annot = nullptr;
     VirtHost* host = nullptr;
     PlatformFont* font = nullptr;
+    int dpi = 0;
+    float uiScale = 0;
     Size size;
     Rect lastPlaced;
     Rect lastAnnotBounds;
@@ -135,6 +140,30 @@ struct AnnotEditToolbar {
     bool contentsEditClosing = false;
     Edit* contentsEdit = nullptr;
 };
+
+static int ToolbarDpi(MainWindow* win) {
+    return win->frameDpi > 0 ? win->frameDpi : DpiGetForHwnd(win->hwndFrame);
+}
+
+static bool RefreshToolbarFont(AnnotEditToolbar* tb) {
+    int dpi = ToolbarDpi(tb->win);
+    PlatformFont* font = GetScaledPlatformFont(GetAppFontForDpi(dpi), kToolbarFontPct);
+    float scale = GetUiScale();
+    bool changed = tb->font != font || tb->dpi != dpi || tb->uiScale != scale;
+    tb->font = font;
+    tb->dpi = dpi;
+    tb->uiScale = scale;
+    if (changed) {
+        tb->lastPlaced = {};
+        tb->host->SetFont(font);
+    }
+    if (changed && tb->contentsEdit) {
+        tb->contentsEdit->SetFont(font);
+        tb->contentsEdit->textPadding = UiScalePxForDpi(dpi, 3);
+        tb->contentsEdit->ApplyTextPadding();
+    }
+    return changed;
+}
 
 // Native multiline edit hosted in the VirtHost; its HWND is positioned from
 // the layout slot so the card can keep the floating rounded-rect look.
@@ -576,7 +605,7 @@ static void CollectItems(Annotation* annot, Vec<AnnotEditItem>& out) {
 
 static void PaintChecker(Gfx* gfx, Rect r) {
     gfx->FillRect(r, MkRgb(240, 240, 240));
-    int s = std::max(DpiScale(3), 2);
+    int s = std::max(UiScalePx(3), 2);
     Color dark = MkRgb(200, 200, 200);
     for (int y = 0; y < r.dy; y += s) {
         for (int x = 0; x < r.dx; x += s) {
@@ -590,7 +619,7 @@ static void PaintChecker(Gfx* gfx, Rect r) {
 }
 
 static void PaintSwatch(Gfx* gfx, Rect r, PdfColor col, Color border) {
-    int inset = DpiScale(4);
+    int inset = UiScalePx(4);
     Rect sw = r;
     sw.Inflate(-inset, -inset);
     if (sw.dx < 4 || sw.dy < 4) {
@@ -605,20 +634,20 @@ static void PaintSwatch(Gfx* gfx, Rect r, PdfColor col, Color border) {
         PaintChecker(gfx, sw);
         gfx->FillRects(&sw, 1, PdfToWinColor(col), alpha);
     } else {
-        gfx->FillRoundedRect(sw, DpiScale(3), PdfToWinColor(col), border);
+        gfx->FillRoundedRect(sw, UiScalePx(3), PdfToWinColor(col), border);
     }
     gfx->DrawRect(sw, border, 1);
 }
 
 static void PaintAlignment(Gfx* gfx, Rect r, int quadding, Color col) {
-    int pad = DpiScale(6);
+    int pad = UiScalePx(6);
     Rect inner = r;
     inner.Inflate(-pad, -pad);
     if (inner.dx < 6 || inner.dy < 8) {
         inner = r;
         inner.Inflate(-2, -2);
     }
-    int lineH = std::max(DpiScale(2), 1);
+    int lineH = std::max(UiScalePx(2), 1);
     int gap = std::max((inner.dy - (3 * lineH)) / 2, 1);
     int blockDy = (3 * lineH) + (2 * gap);
     int y = inner.y + ((inner.dy - blockDy) / 2);
@@ -638,7 +667,7 @@ static void PaintAlignment(Gfx* gfx, Rect r, int quadding, Color col) {
 }
 
 static void PaintSvgChip(Gfx* gfx, Rect r, const char* svg, Color fg, Color bg) {
-    int pad = DpiScale(3);
+    int pad = UiScalePx(3);
     int sz = std::min(r.dx, r.dy) - (2 * pad);
     if (sz < 8) {
         sz = std::min(r.dx, r.dy);
@@ -719,12 +748,12 @@ static void PaintLineEndingMark(Gfx* gfx, Point tip, Point along, Color col, int
 }
 
 static void PaintLineEnding(Gfx* gfx, Rect r, int style, bool isStart, Color col) {
-    int pad = DpiScale(5);
+    int pad = UiScalePx(5);
     int y = r.y + (r.dy / 2);
     Point left{r.x + pad, y};
     Point right{r.x + r.dx - pad, y};
     gfx->DrawLineAA(left, right, col, 1.5f);
-    int size = DpiScale(8);
+    int size = UiScalePx(8);
     if (isStart) {
         PaintLineEndingMark(gfx, left, {-size, 0}, col, style, size);
     } else {
@@ -1017,7 +1046,7 @@ static Pixmap* GetCachedMupdfAnnotIcon(Str name, Color fg, int dx, int dy) {
 }
 
 static void PaintMupdfAnnotIcon(Gfx* gfx, Rect r, Str name, Color fg, PlatformFont* font) {
-    int pad = DpiScale(3);
+    int pad = UiScalePx(3);
     int sz = std::min(r.dx, r.dy) - (2 * pad);
     if (sz < 8) {
         sz = std::min(r.dx, r.dy);
@@ -1040,7 +1069,7 @@ static void PaintIconGlyph(Gfx* gfx, Rect r, Str name, Color col, PlatformFont* 
     if (len(name) == 0) {
         return;
     }
-    int pad = DpiScale(4);
+    int pad = UiScalePx(4);
     Rect inner = r;
     inner.Inflate(-pad, -pad);
     Str label = name;
@@ -1089,7 +1118,7 @@ static TempStr ChipLabelTemp(const AnnotEditItem& item) {
 
 void AnnotEditChip::Paint(VirtPaintCtx& ctx) {
     if (IsEnabled() && HasFlag(vwfHovered) && hoverBg != kColorUnset) {
-        ctx.gfx->FillRoundedRect(ctx.bounds, DpiScale(kButtonRadius), hoverBg);
+        ctx.gfx->FillRoundedRect(ctx.bounds, UiScalePx(kButtonRadius), hoverBg);
     }
     Color textCol = BarTextColor();
     Color border = BarMutedTextColor();
@@ -1107,7 +1136,7 @@ void AnnotEditChip::Paint(VirtPaintCtx& ctx) {
         case AnnotEditKind::Italic:
         case AnnotEditKind::Underline:
             if (item.number != 0) {
-                ctx.gfx->FillRoundedRect(r, DpiScale(kButtonRadius), BarActiveBg());
+                ctx.gfx->FillRoundedRect(r, UiScalePx(kButtonRadius), BarActiveBg());
             }
             PaintStyleToggle(ctx.gfx, r, item.kind, textCol, tb ? tb->font : nullptr);
             break;
@@ -1307,7 +1336,7 @@ static int PopupPickGlyphs(MainWindow* win, Point screen, const StrVec& names, i
         return -1;
     }
     Vec<HBITMAP> bmps;
-    int sw = DpiScale(18);
+    int sw = UiScalePx(18);
     Color fg = GetSysColor(COLOR_MENUTEXT);
     Color bg = GetSysColor(COLOR_MENU);
     for (int i = 0; i < len(names); i++) {
@@ -1735,7 +1764,7 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
 }
 
 static void PaintToolbarBg(AnnotEditToolbar*, VirtHostPaintEvent* ev) {
-    ev->gfx->FillRoundedRect(ev->clientRect, DpiScale(kCornerRadius), BarBg(), BarBorderColor());
+    ev->gfx->FillRoundedRect(ev->clientRect, UiScalePx(kCornerRadius), BarBg(), BarBorderColor());
 }
 
 static Size ChipSizeFor(const AnnotEditItem& item, PlatformFont* font, int rowDy, int padX) {
@@ -1765,11 +1794,11 @@ static Size ChipSizeFor(const AnnotEditItem& item, PlatformFont* font, int rowDy
 }
 
 static void LayoutToolbar(AnnotEditToolbar* tb, const Vec<AnnotEditItem>& items) {
-    int padX = DpiScale(kBtnPadX);
-    int padY = DpiScale(kBtnPadY);
-    int margin = DpiScale(kMargin);
-    int gap = DpiScale(kBtnGap);
-    int textDy = PlatformFontMeasureText(tb->font, StrL("Mg")).dy;
+    int padX = UiScalePx(kBtnPadX);
+    int padY = UiScalePx(kBtnPadY);
+    int margin = UiScalePx(kMargin);
+    int gap = UiScalePx(kBtnGap);
+    int textDy = PlatformFontLineHeight(tb->font);
     int rowDy = textDy + (2 * padY);
     Color hoverBg = BarHoverBg(BarBg());
 
@@ -1870,7 +1899,7 @@ void SetAnnotEditToolbarClickPos(Annotation* annot, PointF pagePt) {
 static bool PositionToolbar(AnnotEditToolbar* tb, const Rect& annot) {
     MainWindow* win = tb->win;
     Rect canvas = HwndClientRect(win->hwndCanvas);
-    int gap = DpiScale(6);
+    int gap = UiScalePx(6);
     int w = tb->size.dx;
     int h = tb->size.dy;
 
@@ -1902,7 +1931,8 @@ static bool PositionToolbar(AnnotEditToolbar* tb, const Rect& annot) {
     SetWindowPos(tb->host->native, ToolbarZ(tb), placed.x, placed.y, placed.dx, placed.dy,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     if (sizeChanged) {
-        tb->host->ClipToRoundedRect(kCornerRadius, {w, h});
+        int radius = std::max(1, (int)lroundf(kCornerRadius * GetUiScale()));
+        tb->host->ClipToRoundedRect(radius, {w, h});
     }
     return true;
 }
@@ -2149,11 +2179,10 @@ void ButtonWithKbd::Paint(VirtPaintCtx& ctx) {
     kbdLabel->PaintStandalone(ctx.gfx);
 }
 
-static ButtonWithKbd* NewButtonWithKbd(HWND hwndForDpi, Str label, Str shortcut, PlatformFont* font, bool isDefault) {
-    DpiSetFromHwnd(hwndForDpi);
+static ButtonWithKbd* NewButtonWithKbd(Str label, Str shortcut, PlatformFont* font, bool isDefault) {
     auto* b = new ButtonWithKbd(font);
     b->SetIsDefault(isDefault);
-    b->textPadding = DpiScaledInsets(2, 10);
+    b->textPadding = Insets{UiScalePx(2), UiScalePx(10), UiScalePx(2), UiScalePx(10)};
     auto* rich = new VirtRichText();
     rich->font = font;
     ParseTipInto(rich, fmt("%s (Kbd/%s)", label, shortcut));
@@ -2162,11 +2191,11 @@ static ButtonWithKbd* NewButtonWithKbd(HWND hwndForDpi, Str label, Str shortcut,
 }
 
 static void LayoutContentsEditor(AnnotEditToolbar* tb) {
-    int margin = DpiScale(kMargin);
-    int gap = DpiScale(kBtnGap);
+    int margin = UiScalePx(kMargin);
+    int gap = UiScalePx(kBtnGap);
     Rect canvas = HwndClientRect(tb->win->hwndCanvas);
-    int wantDx = std::max(tb->lastAnnotBounds.dx, DpiScale(320));
-    wantDx = std::min(wantDx, std::max(canvas.dx - DpiScale(24), DpiScale(200)));
+    int wantDx = std::max(tb->lastAnnotBounds.dx, UiScalePx(320));
+    wantDx = std::min(wantDx, std::max(canvas.dx - UiScalePx(24), UiScalePx(200)));
 
     tb->contentsEdit->idealDx = wantDx;
     auto* slot = new ContentsEditSlot();
@@ -2177,9 +2206,9 @@ static void LayoutContentsEditor(AnnotEditToolbar* tb) {
     buttons->alignMain = MainAxisAlign::MainStart;
     buttons->alignCross = CrossAxisAlign::CrossCenter;
     buttons->gap = gap;
-    auto* btnAccept = NewButtonWithKbd(tb->host->native, Tr("Accept"), StrL("Ctrl + Enter"), tb->font, true);
+    auto* btnAccept = NewButtonWithKbd(Tr("Accept"), StrL("Ctrl + Enter"), tb->font, true);
     btnAccept->onClick = MkFunc1(OnAcceptContentsClick, tb);
-    auto* btnCancel = NewButtonWithKbd(tb->host->native, Tr("Cancel"), StrL("Esc"), tb->font, false);
+    auto* btnCancel = NewButtonWithKbd(Tr("Cancel"), StrL("Esc"), tb->font, false);
     btnCancel->onClick = MkFunc1(OnCancelContentsClick, tb);
     buttons->AddChild(btnAccept);
     buttons->AddChild(btnCancel);
@@ -2188,7 +2217,7 @@ static void LayoutContentsEditor(AnnotEditToolbar* tb) {
     vbox->alignMain = MainAxisAlign::MainStart;
     vbox->alignCross = CrossAxisAlign::Stretch;
     vbox->gap = gap;
-    int rowPad = DpiScale(kContentsButtonsRowPad);
+    int rowPad = UiScalePx(kContentsButtonsRowPad);
     vbox->AddChild(slot);
     vbox->AddChild(new Padding(buttons, Insets{rowPad, 0, rowPad, 0}));
 
@@ -2254,6 +2283,9 @@ static void StartContentsEdit(AnnotEditToolbar* tb) {
     if (!tb || !tb->host || !annot || tb->editingContents) {
         return;
     }
+    DpiScope dpiScope(tb->win->hwndFrame);
+    DpiSet(ToolbarDpi(tb->win), ToolbarDpi(tb->win));
+    RefreshToolbarFont(tb);
     if (!CanEditFreeTextFont(tb->win->hwndFrame, annot)) return;
     Edit::CreateArgs args;
     args.parent = tb->host->native;
@@ -2271,6 +2303,8 @@ static void StartContentsEdit(AnnotEditToolbar* tb) {
         delete edit;
         return;
     }
+    edit->textPadding = UiScalePx(3);
+    edit->ApplyTextPadding();
     TempStr s = str::DupTemp(Contents(annot));
     str::NormalizeNewlinesToLFInPlace(s);
     s = str::LFToCRLFTemp(s);
@@ -2292,6 +2326,7 @@ static void StartContentsEdit(AnnotEditToolbar* tb) {
 
 static AnnotEditToolbar* GetOrCreateToolbar(MainWindow* win) {
     if (win->annotEditToolbar) {
+        RefreshToolbarFont(win->annotEditToolbar);
         return win->annotEditToolbar;
     }
     auto* tb = new AnnotEditToolbar();
@@ -2315,7 +2350,7 @@ static AnnotEditToolbar* GetOrCreateToolbar(MainWindow* win) {
     SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CLIPCHILDREN);
     tb->host->onPaintBackground = MkFunc1(PaintToolbarBg, tb);
     tb->host->onNativeMsg = MkFunc1(OnHostNativeMsg, tb);
-    tb->font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
+    RefreshToolbarFont(tb);
     tb->onWindowMoved = MkFunc1Void(RepositionAnnotEditToolbar);
     win->RegisterOnWindowMoved(&tb->onWindowMoved);
     win->annotEditToolbar = tb;
@@ -2752,9 +2787,12 @@ void UpdateAnnotEditToolbar(MainWindow* win) {
     if (!win) {
         return;
     }
+    DpiScope dpiScope(win->hwndFrame);
+    DpiSet(ToolbarDpi(win), ToolbarDpi(win));
     WindowTab* tab = win->CurrentTab();
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     AnnotEditToolbar* tb = win->annotEditToolbar;
+    bool fontChanged = tb && RefreshToolbarFont(tb);
     if (tb && tb->editingContents) {
         if (!win->pdfAnnotationsToolbarEnabled || !AnnotationIsLive(annot) || annot != tb->annot) {
             RestoreCanvasFocus(tb);
@@ -2766,6 +2804,10 @@ void UpdateAnnotEditToolbar(MainWindow* win) {
                 return;
             }
             tb->lastAnnotBounds = bounds;
+            if (fontChanged) {
+                LayoutContentsEditor(tb);
+                tb->host->Invalidate(false);
+            }
             PositionToolbar(tb, bounds);
             return;
         }
@@ -2799,6 +2841,9 @@ void UpdateAnnotEditToolbar(MainWindow* win) {
 
 void RepositionAnnotEditToolbar(MainWindow* win) {
     AnnotEditToolbar* tb = win ? win->annotEditToolbar : nullptr;
+    if (tb && tb->host && RefreshToolbarFont(tb)) {
+        RefreshAnnotEditToolbar(win);
+    }
     if (!tb || !tb->host || !tb->host->IsVisible()) {
         // layout can hide the row while pageOnScreen is empty; show it again
         // once the selected annot has canvas bounds (issue #6111)
@@ -2815,16 +2860,68 @@ void RepositionAnnotEditToolbar(MainWindow* win) {
         return;
     }
     tb->lastAnnotBounds = bounds;
+    DpiScope dpiScope(win->hwndFrame);
+    DpiSet(ToolbarDpi(win), ToolbarDpi(win));
     PositionToolbar(tb, bounds);
 }
 
 void RefreshAnnotEditToolbar(MainWindow* win) {
     AnnotEditToolbar* tb = win ? win->annotEditToolbar : nullptr;
-    if (!tb || !tb->host || !tb->host->IsVisible()) {
+    if (!tb || !tb->host) {
         return;
+    }
+    DpiScope dpiScope(win->hwndFrame);
+    DpiSet(ToolbarDpi(win), ToolbarDpi(win));
+    RefreshToolbarFont(tb);
+    if (!tb->host->IsVisible()) {
+        return;
+    }
+    if (tb->editingContents && tb->contentsEdit) {
+        Color bg = BarIsDark() ? ThemeWindowControlBackgroundColor() : MkRgb(255, 255, 255);
+        tb->contentsEdit->SetColors(BarTextColor(), bg);
+        LayoutContentsEditor(tb);
+        tb->host->Invalidate(false);
     }
     UpdateAnnotEditToolbar(win);
 }
+
+#if IS_DEBUG
+bool AnnotEditToolbar_UnitTestsFontRefresh() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    VirtHost host;
+    AnnotEditToolbar tb;
+    tb.win = &win;
+    tb.host = &host;
+    tb.font = GetUserGuiFont(StrL("Segoe UI"), 10);
+    win.annotEditToolbar = &tb;
+    bool ok = true;
+    for (Str family : {StrL("Segoe UI"), StrL("Consolas")}) {
+        str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
+        for (int fontSize : {0, 14, 32}) {
+            gSettings->uIFontSize = fontSize;
+            for (int scale : {100, 150}) {
+                gSettings->interfaceScale = scale;
+                RefreshUiFonts();
+                for (int dpi : {96, 144, 192}) {
+                    win.frameDpi = dpi;
+                    RefreshAnnotEditToolbar(&win);
+                    PlatformFont* expected = GetScaledPlatformFont(GetAppFontForDpi(dpi), kToolbarFontPct);
+                    ok &= tb.font == expected;
+                    ok &= !host.IsVisible();
+                }
+            }
+        }
+    }
+    win.annotEditToolbar = nullptr;
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    RefreshUiFonts();
+    return ok;
+}
+#endif
 
 void DeleteAnnotEditToolbar(MainWindow* win) {
     AnnotEditToolbar* tb = win ? win->annotEditToolbar : nullptr;
@@ -3022,7 +3119,7 @@ void DrawAnnotationListRow(Gfx* gfx, PlatformFont* font, Rect rc, Annotation* an
     }
     gfx->FillRect(rc, colBg);
 
-    int pad = DpiScale(6);
+    int pad = UiScalePx(6);
     Rect rcText = rc;
     rcText.x += pad;
     rcText.dx -= 2 * pad;
@@ -3031,7 +3128,7 @@ void DrawAnnotationListRow(Gfx* gfx, PlatformFont* font, Rect rc, Annotation* an
     }
 
     TempStr pageStr = fmt("%d", annot->pageNo);
-    int pageGap = DpiScale(10);
+    int pageGap = UiScalePx(10);
     int pageColDx = gfx->MeasureText(pageStr, font).dx;
     Rect rcPage = rcText;
     rcPage.x = std::max(rcText.x, rcText.x + rcText.dx - pageColDx);
@@ -3050,7 +3147,7 @@ void DrawAnnotationListRow(Gfx* gfx, PlatformFont* font, Rect rc, Annotation* an
     if (contents && rcType.dx > 0) {
         TempStr oneLine = str::NormalizeWSTemp(contents);
         if (oneLine) {
-            int typeContentsGap = DpiScale(8);
+            int typeContentsGap = UiScalePx(8);
             Rect rcContents = rcText;
             rcContents.x = rcType.x + rcType.dx + typeContentsGap;
             rcContents.dx = rcPage.x - pageGap - rcContents.x;
@@ -3115,6 +3212,8 @@ struct AnnotationHoverOverlay {
     Annotation* annot = nullptr;
     VirtHost* host = nullptr;
     PlatformFont* font = nullptr;
+    int dpi = 0;
+    float uiScale = 0;
     Size size;
     Rect lastPlaced;
     Rect anchorRect;
@@ -3127,6 +3226,17 @@ struct AnnotationHoverOverlay {
     bool hasMouseAnchor = false;
     PointF mouseAnchor;
 };
+
+static bool RefreshHoverFont(AnnotationHoverOverlay* overlay) {
+    int dpi = ToolbarDpi(overlay->win);
+    PlatformFont* font = GetAppFontForDpi(dpi);
+    float scale = GetUiScale();
+    bool changed = overlay->font != font || overlay->dpi != dpi || overlay->uiScale != scale;
+    overlay->font = font;
+    overlay->dpi = dpi;
+    overlay->uiScale = scale;
+    return changed;
+}
 
 static TempStr AnnotationColorNameTemp(PdfColor color) {
     TempStr known = GetKnownColorNameTemp(color);
@@ -3248,7 +3358,7 @@ static Color AnnotationHoverText() {
 }
 
 static void PaintAnnotationHoverOverlay(AnnotationHoverOverlay*, VirtHostPaintEvent* ev) {
-    int radius = DpiScale(6);
+    int radius = UiScalePx(6);
     ev->gfx->FillRoundedRect(ev->clientRect, radius, AnnotationHoverBg(), ThemeEdgeColor());
 }
 
@@ -3267,7 +3377,7 @@ static AnnotationHoverOverlay* GetOrCreateAnnotationHoverOverlay(MainWindow* win
     }
     auto* overlay = new AnnotationHoverOverlay();
     overlay->win = win;
-    overlay->font = GetAppFontForDpi(DpiGetForHwnd(win->hwndCanvas));
+    RefreshHoverFont(overlay);
 
     VirtHost::CreateArgs args;
     args.parent = win->hwndFrame;
@@ -3303,8 +3413,8 @@ static void BuildAnnotationHoverOverlay(AnnotationHoverOverlay* overlay, Annotat
 
     auto* table = new Table();
     table->SetSize(len(rows.labels), 2);
-    table->colGap = DpiScale(12);
-    table->rowGap = DpiScale(3);
+    table->colGap = UiScalePx(12);
+    table->rowGap = UiScalePx(3);
     for (int row = 0; row < len(rows.labels); row++) {
         auto* label = NewVirtText({
             .s = rows.labels[row],
@@ -3326,11 +3436,12 @@ static void BuildAnnotationHoverOverlay(AnnotationHoverOverlay* overlay, Annotat
     auto* column = new VBox();
     column->alignCross = CrossAxisAlign::Stretch;
     column->AddChild(title);
-    column->AddChild(new Spacer(0, DpiScale(5)));
+    column->AddChild(new Spacer(0, UiScalePx(5)));
     column->AddChild(table);
-    auto* content = new Padding(column, DpiScaledInsets(8, 10));
+    auto* content = new Padding(column, Insets{UiScalePx(8), UiScalePx(10), UiScalePx(8), UiScalePx(10)});
     overlay->size = overlay->host->SetLayoutSizedToContent(content);
-    overlay->host->ClipToRoundedRect(6, overlay->size);
+    int radius = std::max(1, (int)lroundf(6 * GetUiScale()));
+    overlay->host->ClipToRoundedRect(radius, overlay->size);
 
     str::Builder dump;
     for (int i = 0; i < len(rows.keys); i++) {
@@ -3362,7 +3473,7 @@ static bool PositionAnnotationHoverOverlay(AnnotationHoverOverlay* overlay) {
         return false;
     }
 
-    int gap = DpiScale(6);
+    int gap = UiScalePx(6);
     int width = overlay->size.dx;
     int height = std::min(overlay->size.dy, canvas.dy);
     int x = annotRect.x;
@@ -3415,6 +3526,8 @@ void UpdateAnnotationHoverOverlay(MainWindow* win) {
         HideAnnotationHoverOverlay(win);
         return;
     }
+    DpiScope dpiScope(win->hwndFrame);
+    DpiSet(ToolbarDpi(win), ToolbarDpi(win));
     AnnotationHoverOverlay* overlay = GetOrCreateAnnotationHoverOverlay(win);
     if (!overlay) {
         return;
@@ -3431,7 +3544,7 @@ void UpdateAnnotationHoverOverlay(MainWindow* win) {
             overlay->hasMouseAnchor = true;
         }
     }
-    bool rebuild = appearing || !SameRectF(bounds, overlay->annotBounds);
+    bool rebuild = RefreshHoverFont(overlay) || appearing || !SameRectF(bounds, overlay->annotBounds);
     if (rebuild) {
         BuildAnnotationHoverOverlay(overlay, annot);
     }
@@ -3455,7 +3568,11 @@ void RepositionAnnotationHoverOverlay(MainWindow* win) {
 
 void RefreshAnnotationHoverOverlay(MainWindow* win) {
     AnnotationHoverOverlay* overlay = win ? win->annotationHoverOverlay : nullptr;
-    if (!overlay || !overlay->host->IsVisible()) {
+    if (!overlay || !overlay->host) {
+        return;
+    }
+    RefreshHoverFont(overlay);
+    if (!overlay->host->IsVisible()) {
         return;
     }
     overlay->annot = nullptr;

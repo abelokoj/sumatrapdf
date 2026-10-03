@@ -936,19 +936,20 @@ void DrawAboutPage(MainWindow* win, Gfx* gfx) {
 
 constexpr int kThumbsSeparatorDy = 2;
 constexpr int kThumbsBorderDx = 1;
+static int HomeTextLineDy();
 #define kThumbsMarginLeft UiScalePx(40)
 #define kThumbsMarginRight UiScalePx(40)
 #define kThumbsMarginTop UiScalePx(50)
 #define kThumbsMarginBottom UiScalePx(40)
 #define kThumbsSpaceBetweenX UiScalePx(38)
-#define kThumbsSpaceBetweenY UiScalePx(58)
+#define kThumbsSpaceBetweenY std::max(UiScalePx(58), kThumbsCaptionGapY + kThumbsCaptionDy + UiScalePx(24))
 // caption (file name + type icon) drawn below each thumbnail
 #define kThumbsCaptionGapY UiScalePx(3)
-#define kThumbsCaptionDy UiScalePx(20)
+#define kThumbsCaptionDy std::max(UiScalePx(20), HomeTextLineDy() + UiScalePx(4))
 #define kThumbsBottomBoxDy UiScalePx(50)
 #define kHomeListThumbDx UiScalePx(30)
 #define kHomeListThumbDy UiScalePx(40)
-#define kHomeListRowDy UiScalePx(46)
+#define kHomeListRowDy std::max(UiScalePx(46), std::max(kHomeListThumbDy, HomeTextLineDy()) + UiScalePx(6))
 #define kHomeListRowGapDx UiScalePx(8)
 
 // ThumbnailLayout::fileSize cache: AppendBlanks zero-fills, so set
@@ -1273,6 +1274,50 @@ static int HomeTitleSize(Rect rc) {
 static PlatformFont* HomePageFont(int size) {
     return GetUserGuiFont(GetAppFontFamily(), UiFontSizePx(size));
 }
+
+static int HomeTextLineDy() {
+    static PlatformFont* measuredFont = nullptr;
+    static int lineDy = 0;
+    PlatformFont* font = HomePageFont(14);
+    if (font != measuredFont) {
+        measuredFont = font;
+        lineDy = PlatformFontLineHeight(font);
+    }
+    return lineDy;
+}
+
+#if IS_DEBUG
+bool HomePage_UnitTestsTextSizing() {
+    Settings* saved = gSettings;
+    int savedDpiX = dpiX;
+    int savedDpiY = dpiY;
+    gSettings = NewSettings({});
+    bool ok = true;
+    for (Str family :
+         {StrL("system"), StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans"), StrL("Consolas")}) {
+        str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
+        for (int dpi : {96, 144, 192}) {
+            DpiSet(dpi, dpi);
+            for (int scale : {100, 150}) {
+                gSettings->interfaceScale = scale;
+                for (int fontSize : {0, 14, 32, 64}) {
+                    gSettings->uIFontSize = fontSize;
+                    int lineDy = PlatformFontLineHeight(HomePageFont(14));
+                    ok &= kThumbsCaptionDy >= lineDy + UiScalePx(4);
+                    ok &= kHomeListRowDy >= lineDy + UiScalePx(6);
+                    ok &= kHomeListRowDy >= kHomeListThumbDy + UiScalePx(6);
+                    ok &= kThumbsSpaceBetweenY >= kThumbsCaptionGapY + kThumbsCaptionDy + UiScalePx(8);
+                }
+            }
+        }
+    }
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    dpiX = savedDpiX;
+    dpiY = savedDpiY;
+    return ok;
+}
+#endif
 
 struct HomeLearningRow {
     Rect learning;
@@ -1655,6 +1700,8 @@ void PickAnotherRandomPromotion() {
 struct HomePageLayoutCache {
     bool valid = false;
     int dpi = 0;
+    PlatformFont* font = nullptr;
+    float uiScale = 0;
     Rect canvasRc;
     int scrollY = 0;
     int thumbnailSize = 100;
@@ -1767,6 +1814,9 @@ static bool HomeLayoutCacheMatches(MainWindow* win, const Rect& rc, Str filterTe
     if (c.dpi != DpiGet()) {
         return false;
     }
+    if (c.font != HomePageFont(14) || c.uiScale != GetUiScale()) {
+        return false;
+    }
     if (c.canvasRc != rc) {
         return false;
     }
@@ -1842,6 +1892,8 @@ static void SaveHomeLayoutCache(const HomePageLayout& l, Str filterText, int scr
     auto& c = HomeLayout(l.win);
     c.valid = true;
     c.dpi = DpiGet();
+    c.font = HomePageFont(14);
+    c.uiScale = GetUiScale();
     c.canvasRc = l.rc;
     c.scrollY = scrollY;
     c.thumbnailSize = HomeThumbPercent();
@@ -2247,7 +2299,7 @@ static void LayoutHomePage(HomePageLayout& l) {
                     thumb.szThumb = szThumb;
                 }
                 thumb.rcPage = rcPage;
-                int iconSpace = kThumbsCaptionDy;
+                int iconSpace = UiScalePx(20);
                 Rect rcText(rcPage.x + iconSpace, rcPage.y + rcPage.dy + kThumbsCaptionGapY, rcPage.dx - iconSpace,
                             kThumbsCaptionDy);
                 if (isRtl) {

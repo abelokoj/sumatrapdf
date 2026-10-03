@@ -19,6 +19,7 @@ constexpr int kMaxVocabDecks = 200;
 constexpr int kMaxVocabBytes = 64 * 1024 * 1024;
 constexpr i64 kVocabDay = 86400;
 constexpr int kMaxReviewDays = 3650;
+constexpr int kMaxRemovedWords = 20;
 
 VocabularyWord::~VocabularyWord() {
     str::Free(id);
@@ -41,9 +42,14 @@ VocabularyQuestion::~VocabularyQuestion() {
     str::Free(prompt);
     str::Free(answer);
 }
+struct RemovedWord {
+    VocabularyWord* word;
+    int index;
+};
 struct VocabularyData {
     Vec<VocabularyWord*> words;
     Vec<VocabularyDeck*> decks;
+    Vec<RemovedWord> removed;
     Str path, error;
     bool loaded = false, readOnly = false, batch = false, test = false;
     u64 revision = 0, dailyRevision = 0;
@@ -55,6 +61,7 @@ struct VocabularyData {
     ~VocabularyData() {
         for (auto* w : words) delete w;
         for (auto* d : decks) delete d;
+        for (auto& entry : removed) delete entry.word;
         str::Free(path);
         str::Free(error);
     }
@@ -480,9 +487,37 @@ VocabularyWord* VocabularyAdd(Str input, Str definition, Str dictionary, Str con
 bool VocabularyRemove(Str id) {
     VocabularyWord* w = VocabularyFind(id);
     if (!w || data->readOnly) return false;
-    VecRemove(data->words, w);
-    delete w;
-    return VocabularySave();
+    int index = VecRemove(data->words, w);
+    if (!VocabularySave()) {
+        VecInsertAt(data->words, index, w);
+        return false;
+    }
+    if (len(data->removed) == kMaxRemovedWords) {
+        delete data->removed[0].word;
+        VecRemoveAt(data->removed, 0);
+    }
+    VecAppend(data->removed, RemovedWord{w, index});
+    return true;
+}
+bool VocabularyCanUndoRemove() {
+    return VocabularyLoad() && !data->readOnly && len(data->removed) > 0;
+}
+// Keep the pending removal intact until restoration is saved successfully.
+bool VocabularyUndoRemove() {
+    if (!VocabularyCanUndoRemove()) return false;
+    RemovedWord entry = data->removed[len(data->removed) - 1];
+    auto* w = entry.word;
+    if (FindIn(data->words, w->id) || FindWord(data->words, w->word, w->dictionaryId))
+        return Fail(StrL("Cannot undo removal because the word was added again."));
+    if (len(data->words) >= kMaxVocabWords) return Fail(StrL("Cannot undo removal at the 20,000 saved words limit."));
+    int index = std::min(entry.index, len(data->words));
+    VecInsertAt(data->words, index, w);
+    if (!VocabularySave()) {
+        VecRemoveAt(data->words, index);
+        return false;
+    }
+    VecRemoveAt(data->removed, len(data->removed) - 1);
+    return true;
 }
 bool VocabularySetLearned(Str id, bool learned) {
     VocabularyWord* w = VocabularyFind(id);
@@ -586,6 +621,11 @@ bool VocabularyRemoveDeck(Str id) {
     VocabularyLoad();
     VocabularyDeck* d = FindDeck(data->decks, id);
     if (!d || d->builtin || data->readOnly) return false;
+    Str removedId = str::Dup(d->id);
+    id = removedId;
+    defer {
+        str::Free(removedId);
+    };
     for (auto* w : data->words) {
         int index = w->deckIds.Find(id);
         if (index >= 0) w->deckIds.RemoveAt(index);
@@ -593,7 +633,16 @@ bool VocabularyRemoveDeck(Str id) {
     }
     VecRemove(data->decks, d);
     delete d;
-    return VocabularySave();
+    bool success = VocabularySave();
+    if (success) {
+        for (auto& entry : data->removed) {
+            auto* w = entry.word;
+            int index = w->deckIds.Find(id);
+            if (index >= 0) w->deckIds.RemoveAt(index);
+            if (str::Eq(w->deckId, id)) str::ReplaceWithCopy(&w->deckId, len(w->deckIds) ? w->deckIds[0] : Str{});
+        }
+    }
+    return success;
 }
 Str VocabularyBuiltinMeaning(Str word) {
     int first = 0, end = dimofi(builtinVocabMeanings);
@@ -770,6 +819,8 @@ bool VocabularyImport(Str path, bool merge) {
     if (!success) return false;
     SwapLists(data->words, target.words);
     SwapLists(data->decks, target.decks);
+    for (auto& entry : data->removed) delete entry.word;
+    VecReset(data->removed);
     data->readOnly = false;
     data->revision++;
     str::ReplaceWithCopy(&data->error, {});
@@ -889,6 +940,199 @@ VocabularyWord* VocabularyWordOfDay(i64 now) {
 }
 
 #if IS_DEBUG
+static void RemoveUndoTests() {
+    VocabularyData isolated;
+    isolated.loaded = isolated.test = true;
+    isolated.path = str::Dup(GetTempFilePathTemp(StrL("vocabulary-undo-tests")));
+    VocabularyData* saved = data;
+    data = &isolated;
+    defer {
+        data = saved;
+        file::Delete(isolated.path);
+    };
+    AddBuiltins(isolated);
+    auto* first = VocabularyCreateDeck(StrL("First deck"));
+    auto* second = VocabularyCreateDeck(StrL("Second deck"));
+    utassert(first && second);
+    if (!first || !second) return;
+    auto* word = VocabularyAdd(StrL("recover"), StrL("First sense.\nSecond sense."), StrL("test-dictionary"),
+                               StrL("Quoted context."), StrL("C:\\reading\\source.pdf"), 17, first->id);
+    utassert(word != nullptr);
+    if (!word) return;
+    AttachDeck(word, second->id);
+    word->box = 3;
+    word->reviews = 7;
+    word->lapses = 2;
+    word->intervalDays = 14;
+    word->repetitions = 4;
+    word->ease = 2.35;
+    word->dueTime = 1701000000;
+    word->lastReviewed = 1700000000;
+    word->addedTime = 1699000000;
+    word->learned = true;
+    utassert(VocabularySave());
+    Str id = str::Dup(word->id);
+    Str before = Serialize(isolated);
+    defer {
+        str::Free(id);
+        str::Free(before);
+    };
+    utassert(!VocabularyCanUndoRemove());
+    utassert(!VocabularyUndoRemove());
+    utassert(VocabularyRemove(id));
+    utassert(!VocabularyFind(id) && VocabularyCanUndoRemove());
+    VocabReader removed;
+    utassert(ReadVocabFile(isolated.path, removed));
+    utassert(len(removed.parsed.words) == 0);
+    Str removedBytes = Serialize(isolated);
+    defer {
+        str::Free(removedBytes);
+    };
+    HANDLE locked = CreateFileW(CWStrTemp(ToWStrTemp(isolated.path)), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    utassert(locked != INVALID_HANDLE_VALUE);
+    if (locked == INVALID_HANDLE_VALUE) return;
+    utassert(!VocabularyUndoRemove());
+    utassert(!VocabularyFind(id) && VocabularyCanUndoRemove());
+    Str failedBytes = Serialize(isolated);
+    utassert(str::Eq(removedBytes, failedBytes));
+    str::Free(failedBytes);
+    Str failedDisk = file::ReadFile(isolated.path);
+    utassert(str::Eq(removedBytes, failedDisk));
+    str::Free(failedDisk);
+    CloseHandle(locked);
+    utassert(VocabularyUndoRemove());
+    utassert(VocabularyFind(id) == word && !VocabularyCanUndoRemove());
+    Str after = Serialize(isolated);
+    utassert(str::Eq(before, after));
+    str::Free(after);
+    VocabularyData reopened;
+    reopened.test = true;
+    reopened.path = str::Dup(isolated.path);
+    data = &reopened;
+    utassert(VocabularyLoad());
+    utassert(VocabularyFind(id) != nullptr && !VocabularyCanUndoRemove());
+    Str disk = Serialize(reopened);
+    utassert(str::Eq(before, disk));
+    str::Free(disk);
+    data = &isolated;
+    utassert(VocabularyRemove(id));
+    utassert(VocabularyRemoveDeck(first->id));
+    utassert(VocabularyUndoRemove());
+    utassert(VocabularyFind(id) == word);
+    utassert(str::Eq(word->deckId, second->id) && len(word->deckIds) == 1 && str::Eq(word->deckIds[0], second->id));
+    utassert(word->reviews == 7 && word->lapses == 2 && word->repetitions == 4);
+    utassert(VocabularyRemove(id));
+    utassert(VocabularyImport(isolated.path, true));
+    utassert(!VocabularyCanUndoRemove());
+}
+
+static void RemoveUndoLimitTests() {
+    VocabularyData isolated;
+    isolated.loaded = isolated.test = isolated.batch = true;
+    VocabularyData* saved = data;
+    data = &isolated;
+    defer {
+        data = saved;
+    };
+    auto* first = VocabularyAdd(StrL("first"), StrL("First word."));
+    auto* second = VocabularyAdd(StrL("second"), StrL("Second word."));
+    utassert(first && second);
+    if (!first || !second) return;
+    utassert(VocabularyRemove(first->id));
+    utassert(VocabularyRemove(second->id));
+    utassert(VocabularyUndoRemove() && len(isolated.words) == 1 && isolated.words[0] == second);
+    utassert(VocabularyUndoRemove() && len(isolated.words) == 2 && isolated.words[0] == first &&
+             isolated.words[1] == second);
+    utassert(!VocabularyCanUndoRemove());
+    utassert(VocabularyRemove(first->id));
+    auto* duplicate = VocabularyAdd(StrL("FIRST"), StrL("New definition."));
+    utassert(duplicate && duplicate != first);
+    utassert(!VocabularyUndoRemove() && VocabularyCanUndoRemove());
+    utassert(VocabularyFind(first->id) == nullptr && str::Eq(duplicate->definition, StrL("New definition.")));
+    utassert(VocabularyRemove(duplicate->id));
+    utassert(VocabularyUndoRemove());
+    utassert(!VocabularyUndoRemove());
+    VecRemove(isolated.words, duplicate);
+    delete duplicate;
+    auto* collision = new VocabularyWord;
+    collision->id = str::Dup(first->id);
+    collision->word = str::Dup(StrL("collision"));
+    VecAppend(isolated.words, collision);
+    utassert(!VocabularyUndoRemove() && VocabularyCanUndoRemove());
+    VecRemove(isolated.words, collision);
+    delete collision;
+    int count = len(isolated.words);
+    for (int i = count; i < kMaxVocabWords; i++) VecAppend(isolated.words, new VocabularyWord);
+    utassert(!VocabularyUndoRemove() && VocabularyCanUndoRemove());
+    while (len(isolated.words) > count) {
+        delete isolated.words[len(isolated.words) - 1];
+        VecRemoveAt(isolated.words, len(isolated.words) - 1);
+    }
+    utassert(VocabularyUndoRemove() && VocabularyFind(first->id) == first);
+    for (int i = 0; i < kMaxRemovedWords + 3; i++) {
+        auto* word = VocabularyAdd(fmt("removed-%d", i), StrL("Definition."));
+        utassert(word != nullptr);
+        if (!word) return;
+        utassert(VocabularyRemove(word->id));
+    }
+    for (int i = kMaxRemovedWords + 2; i >= 3; i--) {
+        utassert(VocabularyUndoRemove());
+        utassert(FindWord(isolated.words, fmt("removed-%d", i), {}) != nullptr);
+    }
+    utassert(!VocabularyCanUndoRemove());
+    utassert(FindWord(isolated.words, StrL("removed-2"), {}) == nullptr);
+}
+
+static void RemoveFailureTests() {
+    VocabularyData isolated;
+    isolated.loaded = isolated.test = true;
+    isolated.path = str::Dup(GetTempFilePathTemp(StrL("vocabulary-remove-failure")));
+    VocabularyData* saved = data;
+    data = &isolated;
+    defer {
+        data = saved;
+        file::Delete(isolated.path);
+    };
+    auto* word = VocabularyAdd(StrL("recover"), StrL("First sense.\nSecond sense."), StrL("test-dictionary"),
+                               StrL("Quoted context."), StrL("C:\\reading\\source.pdf"), 17, StrL("deck-one"));
+    utassert(word != nullptr);
+    if (!word) return;
+    AttachDeck(word, StrL("deck-two"));
+    word->box = 3;
+    word->reviews = 7;
+    word->lapses = 2;
+    word->intervalDays = 14;
+    word->repetitions = 4;
+    word->ease = 2.35;
+    word->dueTime = 1701000000;
+    word->lastReviewed = 1700000000;
+    word->addedTime = 1699000000;
+    word->learned = true;
+    utassert(VocabularySave());
+    Str id = str::Dup(word->id);
+    Str before = Serialize(isolated);
+    defer {
+        str::Free(id);
+        str::Free(before);
+    };
+    HANDLE locked = CreateFileW(CWStrTemp(ToWStrTemp(isolated.path)), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    utassert(locked != INVALID_HANDLE_VALUE);
+    if (locked == INVALID_HANDLE_VALUE) return;
+    defer {
+        CloseHandle(locked);
+    };
+    utassert(!VocabularyRemove(id));
+    utassert(VocabularyFind(id) == word);
+    Str after = Serialize(isolated);
+    utassert(str::Eq(before, after));
+    str::Free(after);
+    Str disk = file::ReadFile(isolated.path);
+    utassert(str::Eq(before, disk));
+    str::Free(disk);
+}
+
 static void DeckInstalledTests() {
     VocabularyData isolated;
     isolated.loaded = isolated.test = isolated.batch = true;
@@ -950,6 +1194,9 @@ static void DeckInstalledTests() {
     utassert(count == 0 && total == 0);
 }
 void Vocabulary_UnitTests() {
+    RemoveFailureTests();
+    RemoveUndoTests();
+    RemoveUndoLimitTests();
     DeckInstalledTests();
     VocabularyData isolated;
     isolated.loaded = true;

@@ -80,6 +80,9 @@ Run the installer to install the application, or run the standalone portable EXE
 - A home learning hub with word of the day, due reviews, study ahead and SM-2/Leitner scheduling.
 - Six activities: **flashcards, meaning quiz, word quiz, spelling, word scramble and matching pairs**.
 - Resize word and answer panels with a divider or keyboard controls, and replay the guide whenever needed.
+- Compact dictionary and library controls, with dictionary and deck tools that expand when needed. Practice keeps setup out of the way and emphasizes checking or advancing your answer.
+- Undo the last 20 word removals during the session, preserving definitions, PDF context, deck memberships and review history.
+- Persistent activity, review-method and voice labels, with help explaining SM-2, Leitner and learned status.
 
 ### ✍️ Pen and presentation tools
 

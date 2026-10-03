@@ -94,6 +94,8 @@ bool AnnotPlacement_UnitTestInkProfiles();
 void ToolbarLayout_UnitTests();
 void FindBarLayout_UnitTests();
 void EditSizing_UnitTests();
+bool HomePage_UnitTestsTextSizing();
+bool AnnotEditToolbar_UnitTestsFontRefresh();
 bool RegistryProviders_UnitTests();
 bool EngineMupdf_UnitTestEbookLineSpacingCss();
 bool EngineMupdf_UnitTestEbookFontFamilyCss();
@@ -650,6 +652,8 @@ int RunAppUnitTests(bool forAi) {
     ToolbarLayout_UnitTests();
     FindBarLayout_UnitTests();
     EditSizing_UnitTests();
+    utassert(HomePage_UnitTestsTextSizing());
+    utassert(AnnotEditToolbar_UnitTestsFontRefresh());
     utassert(RegistryProviders_UnitTests());
     utassert(EngineMupdf_UnitTestEbookLineSpacingCss());
     utassert(EngineMupdf_UnitTestEbookFontFamilyCss());

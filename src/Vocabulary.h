@@ -56,6 +56,8 @@ VocabularyWord* VocabularyFind(Str id);
 VocabularyWord* VocabularyAdd(Str word, Str definition, Str dictionaryId = {}, Str context = {}, Str sourcePath = {},
                               int page = 0, Str deckId = {});
 bool VocabularyRemove(Str id);
+bool VocabularyCanUndoRemove();
+bool VocabularyUndoRemove();
 bool VocabularySetLearned(Str id, bool learned);
 bool VocabularyReview(Str id, VocabGrade grade, VocabScheduler scheduler = VocabScheduler::Sm2, i64 now = 0);
 void VocabularySearch(Str query, Str deckId, bool learnedOnly, Vec<VocabularyWord*>& out);
