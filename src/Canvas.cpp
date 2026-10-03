@@ -23,6 +23,10 @@
 #include "gui/Layout.h"
 #include "gui/PlatformFont.h"
 #include "gui/win/WinGui.h"
+#if IS_DEBUG
+#include "gui/VirtCtrl.h"
+#include "gui/win/TabsCtrl.h"
+#endif
 
 #include "Settings.h"
 #include "DisplayMode.h"
@@ -311,13 +315,18 @@ static bool LaserContextChanged(MainWindow* win) {
            win->laserTrailPage != dm->CurrentPageNo();
 }
 
+static void FinishLaserStroke(MainWindow* win);
+
 void StopLaserPointer(MainWindow* win) {
+    bool captured = win->laserPointerDown && GetCapture() == win->hwndCanvas;
+    FinishLaserStroke(win);
     win->laserPointerActive = false;
-    if (win->laserPointerDown && GetCapture() == win->hwndCanvas) {
+    if (captured) {
         ReleaseCapture();
     }
-    win->laserPointerDown = false;
-    ClearLaserTrail(win);
+    // Changing tools ends the current stroke; its timer still owns its lifetime.
+    win->laserPointerRepaint = true;
+    HwndInvalidate(win->hwndCanvas);
     SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
 }
 
@@ -328,6 +337,8 @@ void ToggleLaserPointer(MainWindow* win) {
     }
     FinishAnnotationPlacement(win);
     CancelAnnotationPlacement(win);
+    CancelAnnotationLasso(win);
+    win->handTool = false;
     win->laserPointerActive = true;
     SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
 }
@@ -402,6 +413,46 @@ static void FinishLaserStroke(MainWindow* win) {
     win->laserPointerDown = false;
 }
 
+static void StopHandDrag(MainWindow* win);
+
+#if IS_DEBUG
+bool Canvas_UnitTestToolNavigation() {
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    win.laserPointerActive = true;
+    win.laserPointerDown = true;
+    VecAppend(win.laserTrail, {{10, 20}, 0, true});
+    StopLaserPointer(&win);
+    bool retained =
+        !win.laserPointerActive && !win.laserPointerDown && len(win.laserTrail) == 1 && win.laserTrail[0].time != 0;
+    win.annotPlacement.kind = AnnotPlacementKind::Shape;
+    bool rejectedShape = SuppressTouchForPen(&win);
+    win.penOnly = false;
+    bool enabledTouch = !SuppressTouchForPen(&win);
+    win.annotPlacement.Reset();
+    HWND canvas = CreateWindowExW(0, L"STATIC", L"Hand tool input test", WS_POPUP, 0, 0, 32, 32, nullptr, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr);
+    if (!canvas) return false;
+    win.hwndCanvas = canvas;
+    win.mouseAction = MouseAction::Dragging;
+    win.dragStartPending = win.textDragPending = win.imageDragPending = true;
+    SetCapture(canvas);
+    SetHandTool(&win, true);
+    bool handReady = win.handTool && win.mouseAction == MouseAction::None && !win.dragStartPending &&
+                     !win.textDragPending && !win.imageDragPending && GetCapture() != canvas;
+    win.mouseAction = MouseAction::Dragging;
+    win.dragStartPending = true;
+    SetCapture(canvas);
+    StopHandDrag(&win);
+    bool panEnded = win.mouseAction == MouseAction::None && !win.dragStartPending && GetCapture() != canvas;
+    SetHandTool(&win, false);
+    bool restored = !win.handTool && win.mouseAction == MouseAction::None;
+    DestroyWindow(canvas);
+    win.hwndCanvas = nullptr;
+    return retained && rejectedShape && enabledTouch && handReady && panEnded && restored;
+}
+#endif
+
 static void FadeLaserTrail(MainWindow* win) {
     if (len(win->laserTrail) > 0 && LaserContextChanged(win)) {
         ClearLaserTrail(win);
@@ -437,8 +488,7 @@ static void PaintLaserTrail(MainWindow* win, HDC hdc, Rect repaint) {
     if (len(win->laserTrail) > 0 && LaserContextChanged(win)) {
         ResetLaserTrail(win);
     }
-    if (!win->laserPointerActive || len(win->laserTrail) == 0 || win->presentation == PM_BLACK_SCREEN ||
-        win->presentation == PM_WHITE_SCREEN) {
+    if (len(win->laserTrail) == 0 || win->presentation == PM_BLACK_SCREEN || win->presentation == PM_WHITE_SCREEN) {
         return;
     }
     Gdiplus::Graphics graphics(hdc);
@@ -1384,6 +1434,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp) {
         OverlayScrollbarGetInfo(win->overlayScrollV, &si);
     } else {
         GetScrollInfo(win->hwndCanvas, SB_VERT, &si);
+        si.nTrackPos = AppScrollbarTrackPos(win->hwndCanvas, si.nTrackPos);
     }
 
     USHORT msg = LOWORD(wp);
@@ -1436,6 +1487,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp) {
                 targetPage = std::min(ctrl->PageCount(), targetPage + 1);
                 break;
             case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
                 targetPage = si.nTrackPos + 1;
                 break;
         }
@@ -1496,6 +1548,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp) {
             si.nPos += (int)si.nPage;
             break;
         case SB_THUMBTRACK:
+        case SB_THUMBPOSITION:
             si.nPos = si.nTrackPos;
             break;
     }
@@ -1626,6 +1679,42 @@ static void StartMouseDrag(MainWindow* win, int x, int y, bool right = false) {
     if (GetCursor() && !SetLaserPointerCursor(win)) {
         SetCursor(gCursorDrag);
     }
+}
+
+static void StopHandDrag(MainWindow* win) {
+    win->mouseAction = MouseAction::None;
+    win->dragStartPending = false;
+    win->dragRightClick = false;
+    win->linkOnLastButtonDown = nullptr;
+    if (GetCapture() == win->hwndCanvas) ReleaseCapture();
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+void SetHandTool(MainWindow* win, bool enabled) {
+    FinishAnnotationPlacement(win);
+    CancelAnnotationPlacement(win);
+    CancelAnnotationLasso(win);
+    StopLaserPointer(win);
+    if (IsPlacingSignature(win)) CancelPlacingSignature(win);
+    CancelDrag(win);
+    ReadingBarCancelDrag(win);
+    KillTimer(win->hwndCanvas, kTouchLongPressTimerID);
+    KillTimer(win->hwndCanvas, kAutoScrollTimerID);
+    win->xScrollSpeed = win->yScrollSpeed = win->xScrollAccum = win->yScrollAccum = 0;
+    win->dragStartPending = win->textDragPending = win->imageDragPending = false;
+    win->imageDragElement = nullptr;
+    win->imageDragPageNo = -1;
+    win->dragRightClick = false;
+    win->touchSelDragging = TouchSelHandle::None;
+    win->lastInputWasTouch = false;
+    HideTouchSelHandles(win);
+    win->handTool = enabled;
+    DeleteOldSelectionInfo(win, true);
+    if (win->CurrentTab()) SetSelectedAnnotation(win->CurrentTab(), nullptr);
+    win->annotationUnderCursor = nullptr;
+    HideAnnotationHoverOverlay(win);
+    if (win->infotip) win->DeleteToolTip();
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
 }
 
 static bool IsLineEndpointHandle(ResizeHandle handle) {
@@ -2002,6 +2091,7 @@ static void DragTouchSelHandle(MainWindow* win, int x, int y) {
 // Returns true when it handled the press, i.e. the context menu should not
 // open. x, y are canvas coordinates.
 static bool OnTouchLongPress(MainWindow* win, int x, int y) {
+    if (win->handTool) return false;
     DisplayModel* dm = win->AsFixed();
     logf("touch: long press at %d,%d, dm=%d\n", x, y, (int)(dm != nullptr));
     if (!dm || !dm->textSelection) {
@@ -2075,6 +2165,289 @@ static Annotation* AnnotationLockingMouse(MainWindow* win) {
 // started must not act on the page
 static bool gPressOnlyDeselected = false;
 
+static bool LassoContains(const Vec<PointF>& path, PointF p) {
+    bool inside = false;
+    for (int i = 0, j = len(path) - 1; i < len(path); j = i++) {
+        PointF a = path[i], b = path[j];
+        if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+}
+
+static void ClearLassoSelection(AnnotationLasso& lasso) {
+    VecClear(lasso.path);
+    VecClear(lasso.selected);
+    lasso.drawing = lasso.transforming = false;
+    lasso.bounds = lasso.preview = {};
+    lasso.edge = SelectionDragEdge::None;
+}
+
+void CancelAnnotationLasso(MainWindow* win) {
+    auto& lasso = win->annotationLasso;
+    bool capture = lasso.drawing || lasso.transforming;
+    ClearLassoSelection(lasso);
+    lasso.active = false;
+    lasso.tab = nullptr;
+    if (capture && GetCapture() == win->hwndCanvas) ReleaseCapture();
+    HwndInvalidate(win->hwndCanvas);
+}
+
+void ToggleAnnotationLasso(MainWindow* win) {
+    if (win->annotationLasso.active) {
+        CancelAnnotationLasso(win);
+        return;
+    }
+    auto* dm = win->AsFixed();
+    if (!dm || !EngineSupportsAnnotations(dm->GetEngine())) return;
+    FinishAnnotationPlacement(win);
+    CancelAnnotationPlacement(win);
+    StopLaserPointer(win);
+    win->handTool = false;
+    DeleteOldSelectionInfo(win, true);
+    SetSelectedAnnotation(win->CurrentTab(), nullptr);
+    win->annotationLasso.active = true;
+    win->annotationLasso.tab = win->CurrentTab();
+    win->annotationLasso.pageNo = dm->CurrentPageNo();
+    HwndInvalidate(win->hwndCanvas);
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+static void UpdateLassoBounds(AnnotationLasso& lasso);
+
+static bool ValidateLasso(MainWindow* win) {
+    auto& lasso = win->annotationLasso;
+    if (!lasso.active) return false;
+    auto* dm = win->AsFixed();
+    if (!dm || lasso.tab != win->CurrentTab() || !dm->ValidPageNo(lasso.pageNo)) {
+        CancelAnnotationLasso(win);
+        return false;
+    }
+    for (Annotation* annot : lasso.selected) {
+        if (!AnnotationIsLive(annot) || !EngineOwnsAnnotation(dm->GetEngine(), annot) ||
+            annot->pageNo != lasso.pageNo) {
+            ClearLassoSelection(lasso);
+            break;
+        }
+    }
+    // Undo and redo can move selected annotations without changing their
+    // identity. Refresh idle handles before drawing or starting another drag.
+    if (!lasso.drawing && !lasso.transforming) UpdateLassoBounds(lasso);
+    return true;
+}
+
+static void UpdateLassoBounds(AnnotationLasso& lasso) {
+    lasso.bounds = {};
+    for (Annotation* annot : lasso.selected) {
+        RectF bounds = GetBounds(annot);
+        lasso.bounds = lasso.bounds.IsEmpty() ? bounds : lasso.bounds.Union(bounds);
+    }
+    lasso.preview = lasso.bounds;
+}
+
+static SelectionDragEdge LassoHandle(MainWindow* win, Point pt) {
+    auto& lasso = win->annotationLasso;
+    if (len(lasso.selected) == 0) return SelectionDragEdge::None;
+    RectF r = lasso.bounds;
+    PointF corners[] = {{r.x, r.y}, {r.Right(), r.y}, {r.x, r.Bottom()}, {r.Right(), r.Bottom()}};
+    SelectionDragEdge edges[] = {SelectionDragEdge::TopLeft, SelectionDragEdge::TopRight, SelectionDragEdge::BottomLeft,
+                                 SelectionDragEdge::BottomRight};
+    int radius = DpiScale(8);
+    auto* dm = win->AsFixed();
+    for (int i = 0; i < dimof(corners); i++) {
+        Point corner = dm->CvtToScreen(lasso.pageNo, corners[i]);
+        if (std::abs(corner.x - pt.x) <= radius && std::abs(corner.y - pt.y) <= radius) return edges[i];
+    }
+    return dm->CvtToScreen(lasso.pageNo, r).Contains(pt) ? SelectionDragEdge::Move : SelectionDragEdge::None;
+}
+
+static bool LassoOnDown(MainWindow* win, Point pt) {
+    if (!ValidateLasso(win)) return false;
+    auto& lasso = win->annotationLasso;
+    auto* dm = win->AsFixed();
+    SelectionDragEdge edge = LassoHandle(win, pt);
+    if (edge != SelectionDragEdge::None) {
+        lasso.transforming = true;
+        lasso.edge = edge;
+        lasso.origin = dm->CvtFromScreen(pt, lasso.pageNo);
+    } else {
+        ClearLassoSelection(lasso);
+        int page = dm->GetPageNoByPoint(pt);
+        if (!dm->ValidPageNo(page)) return true;
+        lasso.pageNo = page;
+        lasso.drawing = true;
+        VecAppend(lasso.path, dm->CvtFromScreen(pt, page));
+    }
+    HwndSetFocus(win->hwndFrame);
+    SetCapture(win->hwndCanvas);
+    HwndInvalidate(win->hwndCanvas);
+    return true;
+}
+
+static bool LassoOnMove(MainWindow* win, Point pt) {
+    if (!ValidateLasso(win)) return false;
+    auto& lasso = win->annotationLasso;
+    auto* dm = win->AsFixed();
+    PointF p = dm->CvtFromScreen(pt, lasso.pageNo);
+    if (lasso.drawing) {
+        if (len(lasso.path) < 16384 &&
+            (len(lasso.path) == 0 || dm->CvtToScreen(lasso.pageNo, VecLast(lasso.path)) != pt))
+            VecAppend(lasso.path, p);
+    } else if (lasso.transforming) {
+        RectF r = lasso.bounds;
+        float dx = p.x - lasso.origin.x, dy = p.y - lasso.origin.y;
+        if (lasso.edge == SelectionDragEdge::Move) {
+            r.x += dx;
+            r.y += dy;
+        } else {
+            bool left = lasso.edge == SelectionDragEdge::TopLeft || lasso.edge == SelectionDragEdge::BottomLeft;
+            bool top = lasso.edge == SelectionDragEdge::TopLeft || lasso.edge == SelectionDragEdge::TopRight;
+            float minDx = std::max(2.f, r.dx / 20.f), minDy = std::max(2.f, r.dy / 20.f);
+            if (left) {
+                float x = std::min(r.x + dx, r.Right() - minDx);
+                r.dx = r.Right() - x;
+                r.x = x;
+            } else
+                r.dx = std::max(minDx, r.dx + dx);
+            if (top) {
+                float y = std::min(r.y + dy, r.Bottom() - minDy);
+                r.dy = r.Bottom() - y;
+                r.y = y;
+            } else
+                r.dy = std::max(minDy, r.dy + dy);
+        }
+        lasso.preview = r;
+    }
+    if (lasso.drawing || lasso.transforming) HwndInvalidate(win->hwndCanvas);
+    return true;
+}
+
+static void CommitLassoTransform(MainWindow* win) {
+    auto& lasso = win->annotationLasso;
+    auto* engine = win->AsFixed()->GetEngine();
+    if (lasso.bounds == lasso.preview) return;
+    EngineMupdfBeginOperation(engine, "Transform lasso selection");
+    bool changed = false;
+    for (Annotation* annot : lasso.selected) changed |= TransformAnnotation(annot, lasso.bounds, lasso.preview);
+    EngineMupdfEndOperation(engine);
+    UpdateLassoBounds(lasso);
+    if (changed) NotifyAnnotationsChanged(win->CurrentTab());
+}
+
+static bool LassoOnUp(MainWindow* win, Point pt) {
+    if (!ValidateLasso(win)) return false;
+    auto& lasso = win->annotationLasso;
+    LassoOnMove(win, pt);
+    if (lasso.drawing && len(lasso.path) >= 3) {
+        Vec<Annotation*> annotations;
+        EngineMupdfGetAnnotations(win->AsFixed()->GetEngine(), annotations);
+        for (Annotation* annot : annotations) {
+            if (annot->pageNo != lasso.pageNo ||
+                (!AnnotationCanBeCopied(annot->type) && !AnnotationIsTextMarkup(annot->type) &&
+                 annot->type != AnnotationType::FileAttachment))
+                continue;
+            RectF r = GetBounds(annot);
+            if (annot->type == AnnotationType::Ink) {
+                Vec<int> counts;
+                Vec<PointF> points;
+                GetInkList(annot, counts, points);
+                bool enclosed = len(points) > 0;
+                for (PointF p : points) enclosed &= LassoContains(lasso.path, p);
+                if (enclosed) VecAppend(lasso.selected, annot);
+                continue;
+            }
+            // Fully enclosed items are selected, including separate strokes of a handwritten word.
+            if (LassoContains(lasso.path, {r.x, r.y}) && LassoContains(lasso.path, {r.Right(), r.y}) &&
+                LassoContains(lasso.path, {r.x, r.Bottom()}) && LassoContains(lasso.path, {r.Right(), r.Bottom()}))
+                VecAppend(lasso.selected, annot);
+        }
+        UpdateLassoBounds(lasso);
+    } else if (lasso.transforming) {
+        CommitLassoTransform(win);
+    }
+    lasso.drawing = lasso.transforming = false;
+    VecClear(lasso.path);
+    if (GetCapture() == win->hwndCanvas) ReleaseCapture();
+    HwndInvalidate(win->hwndCanvas);
+    return true;
+}
+
+bool AnnotationLassoOnKeyDown(MainWindow* win, WPARAM key) {
+    if (!ValidateLasso(win)) return false;
+    auto& lasso = win->annotationLasso;
+    if (key == VK_ESCAPE) {
+        CancelAnnotationLasso(win);
+        ToolbarUpdateStateForWindow(win, true);
+        return true;
+    }
+    if (lasso.drawing || lasso.transforming) return false;
+    if (key == VK_DELETE && len(lasso.selected) > 0) {
+        auto* engine = win->AsFixed()->GetEngine();
+        EngineMupdfBeginOperation(engine, "Delete lasso selection");
+        for (Annotation* annot : lasso.selected) DeleteAnnotation(annot);
+        EngineMupdfEndOperation(engine);
+        ClearLassoSelection(lasso);
+        NotifyAnnotationsChanged(win->CurrentTab());
+        return true;
+    }
+    if (!IsCtrlPressed() && !IsAltPressed() && len(lasso.selected) > 0 &&
+        (key == VK_LEFT || key == VK_RIGHT || key == VK_UP || key == VK_DOWN)) {
+        auto* dm = win->AsFixed();
+        Point start = dm->CvtToScreen(lasso.pageNo, PointF{lasso.bounds.x, lasso.bounds.y});
+        Point end = start;
+        int step = DpiScale(IsShiftPressed() ? 10 : 1);
+        if (key == VK_LEFT) end.x -= step;
+        if (key == VK_RIGHT) end.x += step;
+        if (key == VK_UP) end.y -= step;
+        if (key == VK_DOWN) end.y += step;
+        PointF a = dm->CvtFromScreen(start, lasso.pageNo), b = dm->CvtFromScreen(end, lasso.pageNo);
+        lasso.preview = lasso.bounds;
+        lasso.preview.x += b.x - a.x;
+        lasso.preview.y += b.y - a.y;
+        CommitLassoTransform(win);
+        return true;
+    }
+    return false;
+}
+
+static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
+    if (!ValidateLasso(win)) return;
+    auto& lasso = win->annotationLasso;
+    auto* dm = win->AsFixed();
+    Gdiplus::Graphics gfx(hdc);
+    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Color rgb = ThemeBrandColor();
+    Gdiplus::Color color(255, GetRValue(rgb), GetGValue(rgb), GetBValue(rgb));
+    Gdiplus::Pen pen(color, (float)DpiScale(2));
+    pen.SetDashStyle(Gdiplus::DashStyleDash);
+    if (lasso.drawing && len(lasso.path) > 1) {
+        Vec<Gdiplus::Point> points;
+        for (PointF p : lasso.path) {
+            Point screen = dm->CvtToScreen(lasso.pageNo, p);
+            VecAppend(points, {screen.x, screen.y});
+        }
+        gfx.DrawLines(&pen, points.els, len(points));
+        gfx.DrawLine(&pen, points[0], VecLast(points));
+    }
+    if (len(lasso.selected) > 0) {
+        Rect r = dm->CvtToScreen(lasso.pageNo, lasso.preview);
+        gfx.DrawRectangle(&pen, r.x, r.y, r.dx, r.dy);
+        Gdiplus::SolidBrush brush(color);
+        int size = DpiScale(8);
+        for (Point p : {Point{r.x, r.y}, Point{r.Right(), r.y}, Point{r.x, r.Bottom()}, Point{r.Right(), r.Bottom()}})
+            gfx.FillEllipse(&brush, p.x - size / 2, p.y - size / 2, size, size);
+    }
+}
+
+#if IS_DEBUG
+bool Canvas_UnitTestLassoGeometry() {
+    Vec<PointF> path;
+    for (PointF p : {PointF{0, 0}, PointF{100, 0}, PointF{100, 30}, PointF{30, 30}, PointF{30, 100}, PointF{0, 100}})
+        VecAppend(path, p);
+    return LassoContains(path, {20, 20}) && LassoContains(path, {20, 80}) && !LassoContains(path, {80, 80}) &&
+           !LassoContains(path, {120, 20});
+}
+#endif
+
 static void OnMouseMove(MainWindow* win, int x, int y, WPARAM key) {
     if (win->laserPointerActive) {
         if (win->penOnly && IsMouseMessageFromTouch()) {
@@ -2097,6 +2470,10 @@ static void OnMouseMove(MainWindow* win, int x, int y, WPARAM key) {
     DisplayModel* dm = win->AsFixed();
     // ReportIf(!dm); // can happen if reload fails, we delete DisplayModel
     if (!dm) return;
+
+    if (win->handTool && win->mouseAction == MouseAction::None) return;
+
+    if (LassoOnMove(win, Point{x, y})) return;
 
     if (AnnotationPlacementOnMouseMove(win, Point{x, y}, key)) {
         return;
@@ -2622,6 +2999,16 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     if (SuppressTouchForPen(win) && IsMouseMessageFromTouch()) {
         return;
     }
+    if (win->handTool && win->AsFixed()) {
+        if (IsRightDragging(win)) return;
+        RefHoverOnCanvasLeftButtonDown(win->refHover, win->hwndCanvas);
+        HideToolbarHoverDropdown(win);
+        HwndSetFocus(win->hwndFrame);
+        win->dragStartPending = false;
+        StartMouseDrag(win, x, y);
+        return;
+    }
+    if (LassoOnDown(win, Point{x, y})) return;
     // lf("Left button clicked on %d %d", x, y);
     gPressOnlyDeselected = false;
     if (IsRightDragging(win)) {
@@ -2917,9 +3304,17 @@ static void OnMouseLeftButtonUp(MainWindow* win, int x, int y, WPARAM key) {
     if (SuppressTouchForPen(win) && IsMouseMessageFromTouch()) {
         return;
     }
+    if (win->handTool) {
+        if (win->mouseAction == MouseAction::Dragging && !win->dragRightClick && !win->annotationBeingDragged) {
+            if (win->AsFixed()) win->MoveDocBy(win->dragPrevPos.x - x, win->dragPrevPos.y - y);
+            StopHandDrag(win);
+        }
+        if (win->mouseAction != MouseAction::Scrolling) return;
+    }
     if (ReadingBarOnLeftUp(win)) {
         return;
     }
+    if (LassoOnUp(win, Point{x, y})) return;
 
     DisplayModel* dm = win->AsFixed();
     ReportIf(!dm);
@@ -4152,6 +4547,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
     // different color
     Color colPlaceholder;
     ThemeDocumentColors(colPlaceholder);
+    if (dm->pageBackgroundColor != kColorUnset) colPlaceholder = dm->pageBackgroundColor;
     // until the first page of this tab has been painted, use the theme's
     // window background instead: e.g. restoring a session into a maximized
     // window can take a while to render the first page and a white
@@ -4337,6 +4733,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
 
     WindowTab* tab = win->CurrentTab();
     PaintAnnotationPlacement(win, hdc, dm);
+    PaintAnnotationLasso(win, hdc);
     PaintHoveredAnnotationMark(win, hdc, dm);
     RepositionAnnotationHoverOverlay(win);
     RepositionAnnotationTextPopup(win);
@@ -4574,6 +4971,19 @@ static LRESULT OnSetCursorMouseNone(MainWindow* win, HWND hwnd) {
 
 static LRESULT OnSetCursor(MainWindow* win, HWND hwnd) {
     ReportIf(win->hwndCanvas != hwnd);
+    if (win->handTool && win->mouseAction == MouseAction::None) {
+        SetCursorCached(IDC_HAND);
+        if (win->infotip) win->DeleteToolTip();
+        return TRUE;
+    }
+    if (ValidateLasso(win)) {
+        SelectionDragEdge edge = LassoHandle(win, HwndGetCursorPos(hwnd));
+        SetCursorCached(edge == SelectionDragEdge::None   ? IDC_CROSS
+                        : edge == SelectionDragEdge::Move ? IDC_SIZEALL
+                                                          : CursorIdForSelectionEdge(edge));
+        win->DeleteToolTip();
+        return TRUE;
+    }
     if (ReadingBarOnSetCursor(win)) {
         win->DeleteToolTip();
         return TRUE;
@@ -5451,8 +5861,11 @@ static bool OnPointerMessage(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LP
     if (!ReadPointerSample(pointerId, current)) return false;
     if (current.device == PointerDevice::Touch) {
         if (SuppressTouchForPen(win)) {
-            return true;
+            // Reject contact as an annotation input, while Windows continues
+            // translating it into navigation gestures.
+            return false;
         }
+        if (win->handTool) return false;
         // Watch the raw contact but don't consume it: gestures (panning,
         // zooming) still have to come out of DefWindowProc. This is the only
         // place a finger's true timing shows up -- the gesture engine reports a
@@ -5585,12 +5998,21 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
             return 0;
 
         case WM_CAPTURECHANGED:
+            if (win->handTool && win->mouseAction == MouseAction::Dragging && !win->annotationBeingDragged) {
+                StopHandDrag(win);
+            }
             FinishLaserStroke(win);
             ReadingBarCancelDrag(win);
+            if (win->annotationLasso.drawing || win->annotationLasso.transforming) {
+                win->annotationLasso.drawing = win->annotationLasso.transforming = false;
+                VecClear(win->annotationLasso.path);
+                win->annotationLasso.preview = win->annotationLasso.bounds;
+                HwndInvalidate(win->hwndCanvas);
+            }
             return 0;
 
         case WM_LBUTTONDBLCLK:
-            if (win->laserPointerActive) {
+            if (win->laserPointerActive || win->handTool || win->annotationLasso.active) {
                 OnMouseLeftButtonDown(win, x, y, wp);
                 return 0;
             }
@@ -5686,10 +6108,6 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
         }
 
         case WM_GESTURE:
-            if (SuppressTouchForPen(win)) {
-                CloseGestureInfoHandle((HGESTUREINFO)lp);
-                return 0;
-            }
             return OnGesture(win, msg, wp, lp);
 
         case WM_POINTERDOWN:

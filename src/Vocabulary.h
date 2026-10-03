@@ -35,6 +35,8 @@ struct VocabularyWord {
 struct VocabularyDeck {
     Str id, name, description, source, license;
     StrVec words;
+    StrVec missingDefinitions;
+    int installedTotal = 0;
     bool builtin = false;
     const char* builtinWords = nullptr;
     ~VocabularyDeck();

@@ -2440,6 +2440,7 @@ static void LayoutHomePage(HomePageLayout& l) {
 
 #if IS_DEBUG
 static bool HomeSurfaceCaptures();
+static void UpdateHomeOverlayScrollbar(MainWindow* win);
 
 bool HomePage_UnitTestsCompactHeader() {
     Settings* saved = gSettings;
@@ -2470,6 +2471,26 @@ bool HomePage_UnitTestsCompactHeader() {
             ok &= layout.freqRead->lastBounds.Right() + UiScalePx(8) <= layout.rcIconThumbnailView.x;
             ok &= layout.freqRead->lastBounds.y <= UiScalePx(size.dx > 500 ? 350 : 500);
         }
+        for (int i = 0; i < 40; i++) {
+            FileHistoryAppend(NewFileState(fmt("C:\\Reading\\Lecture-%02d.pdf", i)));
+        }
+        gSettings->homePageMaxRecentItems = 30;
+        str::ReplaceWithCopy(&gSettings->homePageViewMode, StrL("list"));
+        HomePageLayout recent;
+        recent.win = &win;
+        recent.rc = {0, 0, 1100, 800};
+        LayoutHomePage(recent);
+        ok &= len(recent.thumbnails) == 30 && recent.totalContentDy > recent.thumbsVisibleDy;
+        SaveHomeLayoutCache(recent, {}, 0);
+        UpdateHomeOverlayScrollbar(&win);
+        ok &= win.overlayScrollV && win.overlayScrollV->nMax == recent.totalContentDy - 1;
+        win.homePageScrollY = INT_MAX;
+        HomePageLayout bottom;
+        bottom.win = &win;
+        bottom.rc = recent.rc;
+        LayoutHomePage(bottom);
+        ok &= win.homePageScrollY == bottom.totalContentDy - bottom.thumbsVisibleDy;
+        ok &= bottom.thumbnails[29].rcListRow.Bottom() <= bottom.rcThumbsArea.Bottom();
         HWND canvas = win.hwndCanvas;
         HomePageDestroyChrome(&win);
         win.hwndCanvas = nullptr;
@@ -4120,12 +4141,13 @@ static bool HomePageShouldShow(MainWindow* win) {
 
 static void UpdateHomeOverlayScrollbar(MainWindow* win) {
     auto& c = HomeLayout(win);
-    bool show = c.valid && ScrollbarsUseOverlay() && c.totalContentDy > c.thumbsVisibleDy;
+    bool show = c.valid && !ScrollbarsAreHidden() && c.totalContentDy > c.thumbsVisibleDy;
     if (show) {
         if (!win->overlayScrollV) {
             win->overlayScrollV =
-                OverlayScrollbarCreate(win->hwndCanvas, OverlayScrollbar::Type::Vert, ScrollbarsOverlayMode());
+                OverlayScrollbarCreate(win->hwndCanvas, OverlayScrollbar::Type::Vert, OverlayScrollbar::Mode::Thick);
         }
+        OverlayScrollbarSetMode(win->overlayScrollV, OverlayScrollbar::Mode::Thick);
         SCROLLINFO si{};
         si.cbSize = sizeof(si);
         si.fMask = SIF_ALL;
@@ -4133,10 +4155,9 @@ static void UpdateHomeOverlayScrollbar(MainWindow* win) {
         si.nMax = c.totalContentDy - 1;
         si.nPage = c.thumbsVisibleDy;
         si.nPos = win->homePageScrollY;
-        OverlayScrollbarShow(win->overlayScrollV, true);
-        OverlayScrollbarSetInfo(win->overlayScrollV, &si, TRUE);
+        OverlayScrollbarSetInfo(win->overlayScrollV, &si, HwndIsVisible(win->hwndCanvas));
     }
-    OverlayScrollbarShow(win->overlayScrollV, show);
+    OverlayScrollbarShow(win->overlayScrollV, show && HwndIsVisible(win->hwndCanvas));
 }
 
 void HomePageCreate(MainWindow* win) {
@@ -4155,6 +4176,7 @@ void HomePageRelayout(MainWindow* win) {
         HomePageHideSearch(win);
         return;
     }
+    RemoveAppScrollbar(win->hwndCanvas);
     EnsureHomeChrome(win);
     EnsureHomeSearchCreated(win);
 

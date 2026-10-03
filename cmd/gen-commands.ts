@@ -361,6 +361,8 @@ const commandsRaw = [
     "CmdVocabularyHome", "Vocabulary: Learn and Practice",
     "CmdExportStudyNotes", "Export Highlights and Notes...",
     "CmdEditBookmarks", "Edit PDF Bookmarks...",
+    "CmdAnnotationLasso", "Lasso annotation selection",
+    "CmdHandTool", "Hand tool: drag to pan",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them

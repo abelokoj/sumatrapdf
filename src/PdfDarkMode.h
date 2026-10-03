@@ -136,7 +136,8 @@ PdfDarkModeRenderer GetPdfDarkModeRenderer();
 bool PdfDarkModeUsesObjectLevel();
 bool DarkModeProfileUsesObjectLevel(const DarkModeProfile* profile);
 bool DarkModeProfileUsesLegacyPostProcess(const DarkModeProfile* profile);
-void BuildViewDarkModeProfile(EngineBase* engine, DarkModeProfile* profile);
+void BuildViewDarkModeProfile(EngineBase* engine, DarkModeProfile* profile, Color text = kColorUnset,
+                              Color background = kColorUnset);
 u32 PdfDarkModeComputeProfileHash(const DarkModeProfile* profile);
 bool EngineUsesDocumentColorsFollowTheme(EngineBase* engine);
 bool EngineUsesReflowThemeCss(EngineBase* engine);

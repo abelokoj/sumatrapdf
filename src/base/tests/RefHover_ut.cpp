@@ -1060,7 +1060,39 @@ static void TwoColumnWatermarkStaysInColumn() {
     utassert(box.x + box.dx < 340.f);
 }
 
+static void ExplicitDestCoordinates() {
+    RectF page = Mediabox();
+    RectF region = RefHoverDestinationRegion(page, 320.f, 200.f);
+    utassert(region.x == 320.f && region.y == 200.f);
+    utassert(region.dx == kPageW - 320.f && region.dy == kPageH - 200.f);
+    utassert(!RefHoverShouldResolveDestY(page, 0.f));
+    utassert(RefHoverShouldResolveDestY(page, -1.f));
+    utassert(RefHoverShouldResolveDestY(page, kPageH + 1.f));
+}
+
+static void PreviewResizeEdges() {
+    Rect window{100, 200, 400, 300};
+    utassert(RefHoverEdgeHit(window, {100, 200}, 8) == HTTOPLEFT);
+    utassert(RefHoverEdgeHit(window, {499, 200}, 8) == HTTOPRIGHT);
+    utassert(RefHoverEdgeHit(window, {100, 499}, 8) == HTBOTTOMLEFT);
+    utassert(RefHoverEdgeHit(window, {499, 499}, 8) == HTBOTTOMRIGHT);
+    utassert(RefHoverEdgeHit(window, {100, 350}, 8) == HTLEFT);
+    utassert(RefHoverEdgeHit(window, {499, 350}, 8) == HTRIGHT);
+    utassert(RefHoverEdgeHit(window, {300, 200}, 8) == HTTOP);
+    utassert(RefHoverEdgeHit(window, {300, 499}, 8) == HTBOTTOM);
+    utassert(RefHoverEdgeHit(window, {300, 350}, 8) == HTCLIENT);
+    utassert(RefHoverEdgeHit(window, {99, 200}, 8) == HTNOWHERE);
+    RectF region{320.f, 200.f, 60.f, 80.f};
+    RectF resized = RefHoverSizedRegion(Mediabox(), region, {400, 300}, 2.f);
+    utassert(resized.x == 320.f && resized.y == 200.f);
+    utassert(resized.dx == 200.f && resized.dy == 150.f);
+    resized = RefHoverSizedRegion(Mediabox(), region, {2000, 2000}, 1.f);
+    utassert(resized.Right() <= kPageW && resized.Bottom() <= kPageH);
+}
+
 void RefHoverTest() {
+    ExplicitDestCoordinates();
+    PreviewResizeEdges();
     TwoColumnNumericLeftEntryNotHijacked();
     TwoColumnNumericReferenceFound();
     TwoColumnWideSecondLineStaysInColumn();

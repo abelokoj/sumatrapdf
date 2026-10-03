@@ -13,6 +13,9 @@
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "gui/win/TabsCtrl.h"
 
 // Forward declaration - defined in MainWindow.cpp
@@ -39,6 +42,32 @@ using Gdiplus::TextRenderingHintClearTypeGridFit;
 using Gdiplus::UnitPixel;
 
 static const WStr kTabsCtrlClassName = L"SumatraTabsCtrlClass";
+
+struct TabListPopup {
+    StrVec titles;
+    Vec<TabInfo*> tabs;
+    PlatformFont* font = nullptr;
+    int rowDy = 0;
+    int width = 0;
+    int padding = 0;
+    int selected = -1;
+    bool isRtl = false;
+    Color background = 0;
+    Color selectedBackground = 0;
+    Color textColor = 0;
+    HBRUSH brush = nullptr;
+
+    ~TabListPopup() {
+        if (brush) {
+            DeleteObject(brush);
+        }
+    }
+};
+
+static Rect TabSeparatorRect(Rect r, int thickness, bool isRtl) {
+    int inset = r.dy / 4;
+    return {isRtl ? r.x : r.Right() - thickness, r.y + inset, thickness, r.dy - inset * 2};
+}
 
 // hwnd is kept LTR (like the canvas); UI direction comes from the parent frame
 static bool IsTabsRtl(HWND hwnd) {
@@ -213,19 +242,11 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
         textColor = IsLightColor(tabBgCol) ? MkRgb(0xC4, 0x1E, 0x1E) : MkRgb(0xFF, 0x6A, 0x6A);
     }
 
-    gfx->FillRect(r, tabBgCol);
+    gfx->FillRoundedRect(r, tabsCtrl->ScaleMetric(8), tabBgCol);
 
     bool isRtl = IsTabsRtl(hwnd);
-    int fadeDx = std::min(r.dx, tabsCtrl->ScaleMetric(10));
-    Color edgeCol = AccentColor(tabBgCol, 28);
-    for (int i = 0; i < fadeDx; i++) {
-        int amount = (i + 1) * 100 / fadeDx;
-        Color col = MkRgb((u8)((GetRValue(tabBgCol) * (100 - amount) + GetRValue(edgeCol) * amount) / 100),
-                          (u8)((GetGValue(tabBgCol) * (100 - amount) + GetGValue(edgeCol) * amount) / 100),
-                          (u8)((GetBValue(tabBgCol) * (100 - amount) + GetBValue(edgeCol) * amount) / 100));
-        int x = isRtl ? r.x + fadeDx - i - 1 : r.Right() - fadeDx + i;
-        gfx->FillRect({x, r.y + r.dy / 5, 1, r.dy * 3 / 5}, col);
-    }
+    Rect separator = TabSeparatorRect(r, std::max(1, tabsCtrl->ScaleMetric(1)), isRtl);
+    gfx->FillRect(separator, AccentColor(tabBgCol, 48));
     PlatformFont* font = tabsCtrl->GetFont();
 
     // draw text — inset from the close glyph (size varies with tab height),
@@ -469,7 +490,7 @@ void TabsCtrl::LayoutTabs() {
     dx = std::max(tabMinDx, dx);
     hasOverflow = dx * nTabs > rect.dx;
     scrollButtonDx = std::max(ScaleMetric(32), tabIconDx + ScaleMetric(12));
-    viewportDx = std::max(1, rect.dx - (hasOverflow ? scrollButtonDx * 2 : 0));
+    viewportDx = std::max(1, rect.dx - (hasOverflow ? scrollButtonDx * 3 : 0));
     scrollDx = limitValue(scrollDx, 0, std::max(0, dx * nTabs - viewportDx));
     tabSize = {dx, dy};
     if (IsRunningOnWine()) {
@@ -682,6 +703,139 @@ static bool TriggerSelectionChanging(TabsCtrl* tabs) {
     return ev.preventChanging;
 }
 
+static HMENU BuildTabListMenu(TabsCtrl* tc, TabListPopup& popup) {
+    HWND hwnd = tc->hwnd;
+    popup.font = tc->GetFont();
+    popup.padding = tc->ScaleMetric(12);
+    popup.isRtl = IsTabsRtl(hwnd);
+    popup.selected = tc->selectedIdx;
+    popup.background = tc->GetColor(kColTabInactiveBg);
+    popup.selectedBackground = tc->GetColor(kColTabBg);
+    popup.textColor = tc->GetColor(kColTabText);
+    HDC dc = GetDC(hwnd);
+    HGDIOBJ oldFont = SelectObject(dc, popup.font->GetHFont());
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(dc, &metrics);
+    popup.rowDy = std::max(tc->ScaleMetric(32), (int)metrics.tmHeight + tc->ScaleMetric(12));
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        SelectObject(dc, oldFont);
+        ReleaseDC(hwnd, dc);
+        return nullptr;
+    }
+    for (int i = 0; i < tc->TabCount(); i++) {
+        TabInfo* tab = tc->tabs[i];
+        popup.titles.Append(tab->text);
+        VecAppend(popup.tabs, tab);
+        SIZE size{};
+        WStr title = ToWStrTemp(tab->text);
+        GetTextExtentPoint32W(dc, title.s, len(title), &size);
+        popup.width = std::max(popup.width, (int)size.cx);
+        MENUITEMINFOW item{sizeof(item)};
+        item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STRING;
+        item.fType = MFT_OWNERDRAW;
+        item.wID = i + 1;
+        item.dwItemData = i;
+        item.dwTypeData = CWStrTemp(title);
+        InsertMenuItemW(menu, i, TRUE, &item);
+    }
+    SelectObject(dc, oldFont);
+    ReleaseDC(hwnd, dc);
+
+    RECT work{};
+    MONITORINFO monitor{sizeof(monitor)};
+    GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+    work = monitor.rcWork;
+    popup.width = std::min(std::max(tc->ScaleMetric(240), popup.width + popup.padding * 3 + popup.rowDy),
+                           std::max(1, (int)(work.right - work.left) - tc->ScaleMetric(16)));
+    int rows = std::min(tc->TabCount(), limitValue(tc->tabListVisibleItems, 1, 50));
+    MENUINFO info{sizeof(info)};
+    popup.brush = CreateSolidBrush(popup.background);
+    info.fMask = MIM_MAXHEIGHT | MIM_BACKGROUND;
+    info.hbrBack = popup.brush;
+    info.cyMax = std::min(rows * popup.rowDy + GetSystemMetrics(SM_CYBORDER) * 2,
+                          std::max(1, (int)(work.bottom - work.top) - tc->ScaleMetric(16)));
+    SetMenuInfo(menu, &info);
+    return menu;
+}
+
+void TabsCtrl::ShowTabList() {
+    if (!hwnd || tabListPopup || TabCount() == 0) {
+        return;
+    }
+    TabListPopup popup;
+    HMENU menu = BuildTabListMenu(this, popup);
+    if (!menu) {
+        return;
+    }
+
+    HWND host = hwnd;
+    tabListPopup = &popup;
+    Rect rect = HwndClientRect(host);
+    Point anchor = HwndMapWindowPoint(host, nullptr, {rect.Right(), rect.Bottom()});
+    UINT flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN | TPM_TOPALIGN;
+    int chosen = TrackPopupMenuEx(menu, flags, anchor.x, anchor.y, host, nullptr);
+    DestroyMenu(menu);
+    if (!IsWindow(host) || (TabsCtrl*)GetWindowLongPtrW(host, GWLP_USERDATA) != this) {
+        return;
+    }
+    tabListPopup = nullptr;
+    if (chosen <= 0 || chosen > len(popup.tabs)) {
+        return;
+    }
+    int index = VecFind(tabs, popup.tabs[chosen - 1]);
+    if (index < 0 || index == selectedIdx || TriggerSelectionChanging(this)) {
+        return;
+    }
+    SetSelected(index);
+    TriggerSelectionChanged(this);
+}
+
+static bool DrawTabListItem(TabListPopup* popup, DRAWITEMSTRUCT* item) {
+    if (!popup || item->CtlType != ODT_MENU || item->itemData >= (ULONG_PTR)len(popup->titles)) {
+        return false;
+    }
+    int index = (int)item->itemData;
+    bool hot = (item->itemState & ODS_SELECTED) != 0;
+    Color bg = hot ? popup->selectedBackground : popup->background;
+    if (hot) {
+        bg = AccentColor(bg, 18);
+    }
+    Color text = TabTextColorForBackground(popup->textColor, bg);
+    HDC dc = item->hDC;
+    RECT rect = item->rcItem;
+    HdcFillRect(dc, ToRect(rect), bg);
+    HGDIOBJ oldFont = SelectObject(dc, popup->font->GetHFont());
+    int oldMode = SetBkMode(dc, TRANSPARENT);
+    COLORREF oldColor = SetTextColor(dc, text);
+    RECT glyph = rect;
+    glyph.right = glyph.left + popup->rowDy;
+    if (popup->isRtl) {
+        glyph.left = rect.right - popup->rowDy;
+        glyph.right = rect.right;
+    }
+    if (index == popup->selected) {
+        SetTextColor(dc, IsLightColor(bg) ? RGB(0, 112, 64) : RGB(109, 233, 165));
+        DrawTextW(dc, L"\u2713", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+        SetTextColor(dc, text);
+    }
+    if (popup->isRtl) {
+        rect.left += popup->padding;
+        rect.right = glyph.left;
+    } else {
+        rect.left = glyph.right;
+        rect.right -= popup->padding;
+    }
+    WStr title = ToWStrTemp(popup->titles[index]);
+    UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
+    format |= popup->isRtl ? DT_RIGHT | DT_RTLREADING : DT_LEFT;
+    DrawTextW(dc, title.s, len(title), &rect, format);
+    SetTextColor(dc, oldColor);
+    SetBkMode(dc, oldMode);
+    SelectObject(dc, oldFont);
+    return true;
+}
+
 static void TriggerTabMigration(TabsCtrl* tabs, int tabIdx, Point p) {
     if (!tabs->onTabMigration.IsValid()) {
         return;
@@ -810,7 +964,12 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     if (hasOverflow && mousePos.x >= viewportDx && msg == WM_LBUTTONDOWN) {
-        ScrollTabs(mousePos.x < viewportDx + scrollButtonDx ? -1 : 1);
+        int button = (mousePos.x - viewportDx) / scrollButtonDx;
+        if (button >= 2) {
+            ShowTabList();
+        } else {
+            ScrollTabs(button == 0 ? -1 : 1);
+        }
         return 0;
     }
     if (hasOverflow && mousePos.x >= viewportDx && msg == WM_LBUTTONUP) {
@@ -851,6 +1010,20 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     switch (msg) {
+        case WM_MEASUREITEM: {
+            auto item = (MEASUREITEMSTRUCT*)lp;
+            if (tabListPopup && item->CtlType == ODT_MENU) {
+                item->itemWidth = tabListPopup->width;
+                item->itemHeight = tabListPopup->rowDy;
+                return TRUE;
+            }
+            break;
+        }
+        case WM_DRAWITEM:
+            if (DrawTabListItem(tabListPopup, (DRAWITEMSTRUCT*)lp)) {
+                return TRUE;
+            }
+            break;
         case WM_NCHITTEST: {
             // parts that are HTTRANSPARENT are used to move the window
             if (!inTitleBar || hwnd == GetCapture()) {
@@ -1066,9 +1239,11 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 int oldMode = SetBkMode(hdc, TRANSPARENT);
                 Color oldColor = SetTextColor(hdc, GetColor(kColTabText));
                 RECT left{viewportDx, 0, viewportDx + scrollButtonDx, clientRc.dy};
-                RECT right{left.right, 0, clientRc.dx, clientRc.dy};
+                RECT right{left.right, 0, left.right + scrollButtonDx, clientRc.dy};
+                RECT list{right.right, 0, clientRc.dx, clientRc.dy};
                 DrawTextW(hdc, L"\u2039", 1, &left, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 DrawTextW(hdc, L"\u203a", 1, &right, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawTextW(hdc, L"\u2304", 1, &list, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SetTextColor(hdc, oldColor);
                 SetBkMode(hdc, oldMode);
                 SelectObject(hdc, oldFont);
@@ -1296,3 +1471,79 @@ void TabsCtrl::SetHighlighted(int idx) {
     UpdateHover(tabHighlighted);
     HwndRepaintNow(hwnd);
 }
+
+#if IS_DEBUG
+void TabsCtrl_UnitTests() {
+    Rect left = TabSeparatorRect({10, 20, 100, 40}, 1, false);
+    Rect right = TabSeparatorRect({10, 20, 100, 40}, 1, true);
+    utassert(left.x == 109 && right.x == 10 && left.dx == 1 && right.dx == 1);
+    utassert(left.y == 30 && left.dy == 20 && right.y == left.y && right.dy == left.dy);
+
+    HWND parent =
+        CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPED, 0, 0, 800, 80, nullptr, nullptr, GetInstance(), nullptr);
+    utassert(parent != nullptr);
+    TabsCtrl tc;
+    TabsCtrl::CreateArgs args;
+    args.parent = parent;
+    args.font = GetUserGuiFont(StrL("Segoe UI"), 17);
+    utassert(tc.Create(args) != nullptr);
+    SetWindowPos(tc.hwnd, nullptr, 0, 0, 800, 40, SWP_NOZORDER | SWP_NOACTIVATE);
+    for (int i = 0; i < 25; i++) {
+        auto tab = new TabInfo();
+        tab->text = str::Dup(fmt("Document %d.pdf", i + 1));
+        tc.InsertTab(i, tab, false);
+    }
+    tc.LayoutTabs();
+    utassert(tc.hasOverflow);
+    utassert(tc.viewportDx == 800 - tc.scrollButtonDx * 3);
+    utassert(tc.TabStateFromMousePosition({tc.viewportDx, 10}).tabIdx == -1);
+    tc.SetSelected(24);
+    utassert(tc.scrollDx + tc.viewportDx >= tc.tabSize.dx * tc.TabCount());
+    tc.tabListVisibleItems = 10;
+    TabListPopup popup;
+    HMENU menu = BuildTabListMenu(&tc, popup);
+    utassert(menu != nullptr && GetMenuItemCount(menu) == 25);
+    utassert(len(popup.titles) == 25 && len(popup.tabs) == 25);
+    utassert(popup.selected == 24 && str::Eq(popup.titles[24], StrL("Document 25.pdf")));
+    MENUINFO info{sizeof(info)};
+    info.fMask = MIM_MAXHEIGHT;
+    utassert(GetMenuInfo(menu, &info));
+    utassert(info.cyMax <= (UINT)(popup.rowDy * 10 + GetSystemMetrics(SM_CYBORDER) * 2));
+    WCHAR title[64]{};
+    MENUITEMINFOW titleInfo{sizeof(titleInfo)};
+    titleInfo.fMask = MIIM_STRING;
+    titleInfo.dwTypeData = title;
+    titleInfo.cch = dimof(title);
+    utassert(GetMenuItemInfoW(menu, 24, TRUE, &titleInfo));
+    utassert(titleInfo.cch > 0);
+    utassert(str::Eq(ToUtf8Temp(WStr(title)), StrL("Document 25.pdf")));
+    DestroyMenu(menu);
+
+    HDC dc = GetDC(parent);
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, 320, popup.rowDy);
+    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    DRAWITEMSTRUCT item{};
+    item.CtlType = ODT_MENU;
+    item.itemData = 24;
+    item.hDC = memory;
+    item.rcItem = {0, 0, 320, popup.rowDy};
+    utassert(DrawTabListItem(&popup, &item));
+    int green = 0;
+    for (int y = 0; y < popup.rowDy; y++) {
+        for (int x = 0; x < popup.rowDy; x++) {
+            COLORREF color = GetPixel(memory, x, y);
+            if (GetGValue(color) > GetRValue(color) + 20 && GetGValue(color) > GetBValue(color) + 20) {
+                green++;
+            }
+        }
+    }
+    utassert(green > 0);
+    SelectObject(memory, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(parent, dc);
+    tc.Destroy();
+    DestroyWindow(parent);
+}
+#endif

@@ -14,6 +14,7 @@ struct TabCtrl;
 struct VirtRoot;
 struct VirtCloseButton;
 struct VirtMouseEvent;
+struct TabListPopup;
 
 constexpr Color kTabDefaultBgCol = (Color)-1;
 
@@ -113,6 +114,8 @@ struct TabsCtrl : VirtCtrl {
     int scrollDx = 0;
     int viewportDx = 0;
     bool hasOverflow = false;
+    int tabListVisibleItems = 10;
+    TabListPopup* tabListPopup = nullptr;
 
     Vec<TabInfo*> tabs;
     // VirtRoot over this control on `hwnd`; does not own us
@@ -191,6 +194,7 @@ struct TabsCtrl : VirtCtrl {
 
     void LayoutTabs();
     void ScrollTabs(int direction);
+    void ShowTabList();
     void ScheduleRepaint();
     TabsCtrl::MouseState TabStateFromMousePosition(const Point& p);
     HBITMAP RenderForDragging(int idx);

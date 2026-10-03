@@ -198,6 +198,20 @@ struct LaserTrailPoint {
     bool start;
 };
 
+struct AnnotationLasso {
+    bool active = false;
+    bool drawing = false;
+    bool transforming = false;
+    WindowTab* tab = nullptr; // identity only; never dereferenced after switching tabs
+    int pageNo = 0;
+    Vec<PointF> path;
+    Vec<Annotation*> selected; // borrowed; validated before every use
+    RectF bounds;
+    RectF preview;
+    PointF origin;
+    SelectionDragEdge edge = SelectionDragEdge::None;
+};
+
 enum class InkPenStyle {
     Ballpoint,
     Fountain,
@@ -535,6 +549,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     bool isToolbarVisible = false;
     bool pdfAnnotationsToolbarEnabled = false;
     AnnotPlacement annotPlacement;
+    AnnotationLasso annotationLasso;
+    bool handTool = false;
     int inkEraseMode = 0;
     InkPenStyle inkPenStyle = InkPenStyle::Ballpoint;
     bool penOnly = true;

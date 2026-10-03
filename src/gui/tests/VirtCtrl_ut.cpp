@@ -2,12 +2,14 @@
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "base/Base.h"
+#include "base/Win.h"
 
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
 #include "gui/VirtCtrl.h"
+#include "gui/win/WinGui.h"
 
 // must be last due to assert() over-write
 #include "base/tests/UtAssert.h"
@@ -236,6 +238,68 @@ static void Splitter_ShrinkTest() {
     delete col;
 }
 
+static void RoundedNativeControls_Test() {
+    HWND parent =
+        CreateWindowExW(0, WC_STATICW, L"", WS_POPUP, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
+    utassert(parent != nullptr);
+    if (!parent) return;
+    HWND edit = CreateWindowExW(0, WC_EDITW, L"Long text", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 10, 10, 180, 30,
+                                parent, nullptr, GetInstance(), nullptr);
+    utassert(edit != nullptr);
+    if (!edit) {
+        DestroyWindow(parent);
+        return;
+    }
+    SendMessageW(edit, EM_SETSEL, 2, 6);
+    RoundControlCorners(edit);
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    utassert(GetWindowRgn(edit, region) == COMPLEXREGION);
+    utassert(!PtInRegion(region, 0, 0));
+    utassert(PtInRegion(region, 90, 15));
+    DWORD selection = (DWORD)SendMessageW(edit, EM_GETSEL, 0, 0);
+    utassert(LOWORD(selection) == 2 && HIWORD(selection) == 6);
+
+    RECT resized{};
+    SetWindowPos(edit, nullptr, 0, 0, 260, 42, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    GetWindowRgn(edit, region);
+    GetRgnBox(region, &resized);
+    utassert(resized.right == 260 && resized.bottom == 42);
+    utassert(!PtInRegion(region, 0, 0));
+    utassert(PtInRegion(region, 130, 21));
+
+    // A viewport's temporary intersection must survive unchanged-size refreshes.
+    HRGN viewport = CreateRectRgn(0, 12, 260, 42);
+    CombineRgn(region, region, viewport, RGN_AND);
+    SetWindowRgn(edit, region, FALSE);
+    region = CreateRectRgn(0, 0, 0, 0);
+    RoundControlCorners(edit);
+    GetWindowRgn(edit, region);
+    utassert(!PtInRegion(region, 130, 3));
+    utassert(PtInRegion(region, 130, 21));
+    DeleteObject(viewport);
+    DeleteObject(region);
+
+    HWND combo = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | CBS_DROPDOWN, 10, 60, 180, 180, parent, nullptr,
+                                 GetInstance(), nullptr);
+    utassert(combo != nullptr);
+    if (combo) {
+        RoundControlCorners(combo);
+        COMBOBOXINFO info{sizeof(info)};
+        utassert(GetComboBoxInfo(combo, &info));
+        region = CreateRectRgn(0, 0, 0, 0);
+        utassert(GetWindowRgn(combo, region) == COMPLEXREGION);
+        utassert(PtInRegion(region, (info.rcButton.left + info.rcButton.right) / 2,
+                            (info.rcButton.top + info.rcButton.bottom) / 2));
+        DeleteObject(region);
+        utassert(RoundedControlRegion(info.hwndItem, {100, 30}) == nullptr);
+        utassert(RoundedControlRegion(info.hwndList, {180, 180}) == nullptr);
+    }
+    HWND check = CreateWindowExW(0, WC_BUTTONW, L"Remember", WS_CHILD | BS_AUTOCHECKBOX, 10, 110, 180, 30, parent,
+                                 nullptr, GetInstance(), nullptr);
+    utassert(RoundedControlRegion(check, {180, 30}) == nullptr);
+    DestroyWindow(parent);
+}
+
 void VirtCtrl_UnitTests() {
     Table_TestGrid();
     Table_TestAlign();
@@ -245,4 +309,5 @@ void VirtCtrl_UnitTests() {
     CollectTabStops_Test();
     ScrollBox_Test();
     Splitter_ShrinkTest();
+    RoundedNativeControls_Test();
 }

@@ -4,6 +4,7 @@
 #include "base/Base.h"
 #include "base/Win.h"
 #include "base/File.h"
+#include "base/Timer.h"
 
 #include "gui/Dpi.h"
 
@@ -28,10 +29,16 @@
 #include "AppTools.h"
 #include "Translations.h"
 #include "DarkMode.h"
+#include "UiFonts.h"
+#include "DocController.h"
+#include "EngineBase.h"
+#include "DisplayModel.h"
+#include "WindowTab.h"
+#include "RenderCache.h"
+#include "PdfDarkMode.h"
+#include <commdlg.h>
 
 #if IS_DEBUG
-#include "EngineBase.h"
-#include "RenderCache.h"
 #include "base/tests/UtAssert.h"
 #endif
 #include "SumatraDialogs.h"
@@ -47,6 +54,9 @@ enum class SettingsView {
 struct SettingsLabel : VirtText {
     Str display;
     bool wrapped = false;
+    PlatformFont* measuredFont = nullptr;
+    Size textSize, wrappedSize;
+    int wrappedWidth = -1;
 
     SettingsLabel(const VirtTextArgs& args) : VirtText(args.s, args.font) {
         prefix = args.prefix;
@@ -68,12 +78,25 @@ struct SettingsLabel : VirtText {
     ~SettingsLabel() override { str::Free(display); }
 
     Size Layout(Constraints bc) override {
+        if (measuredFont != font) {
+            textSize = PlatformFontMeasureText(font, display);
+            measuredFont = font;
+            wrappedWidth = -1;
+        }
         int padX = padding.left + padding.right;
         int width = bc.HasBoundedWidth() ? std::max(1, bc.max.dx - padX) : -1;
-        wrapped = width > 0 && PlatformFontMeasureText(font, display).dx > width;
-        Size size = PlatformFontMeasureText(font, display, width);
+        wrapped = width > 0 && textSize.dx > width;
+        Size size = textSize;
+        if (wrapped) {
+            if (wrappedWidth != width) {
+                wrappedSize = PlatformFontMeasureText(font, display, width);
+                wrappedWidth = width;
+            }
+            size = wrappedSize;
+        }
         return bc.Constrain({size.dx + padX, size.dy + padding.top + padding.bottom});
     }
+    int MinIntrinsicWidth(int) override { return Layout(ExpandInf()).dx; }
     int MinIntrinsicHeight(int width) override { return Layout(ExpandHeight(width)).dy; }
     void Paint(VirtPaintCtx& ctx) override {
         if (!wrapped) {
@@ -88,6 +111,87 @@ static VirtText* NewSettingsLabel(const VirtTextArgs& args) {
     return new SettingsLabel(args);
 }
 
+struct SettingsDropDownMetric {
+    PlatformFont* font;
+    StrVec items;
+    Size size;
+    int dpi, idealDx, maxDx, height;
+    DWORD margins;
+};
+struct SettingsMetrics {
+    Vec<SettingsDropDownMetric*> entries;
+#if IS_DEBUG
+    int measured = 0, reused = 0;
+#endif
+    ~SettingsMetrics() {
+        for (auto* entry : entries) delete entry;
+    }
+};
+static SettingsMetrics settingsMetrics;
+
+struct SettingsDropDown : DropDown {
+    PlatformFont* measuredFont = nullptr;
+    StrVec measuredItems;
+    Size measuredSize;
+    int measuredDpi = 0;
+    int measuredIdealDx = 0;
+    int measuredMaxDx = 0;
+    int measuredHeight = 0;
+    DWORD measuredMargins = 0;
+
+    Size GetIdealSize() override {
+        bool sameItems = len(items) == len(measuredItems);
+        for (int i = 0; sameItems && i < len(items); i++) sameItems = str::Eq(items[i], measuredItems[i]);
+        int height = HwndWindowRect(hwnd).dy;
+        HWND edit = CbEditHwnd(hwnd);
+        DWORD margins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : 0;
+        if (sameItems && measuredFont == font && measuredDpi == DpiGet() && measuredIdealDx == idealDx &&
+            measuredMaxDx == maxDx && measuredHeight == height && measuredMargins == margins)
+            return measuredSize;
+        SettingsDropDownMetric* found = nullptr;
+        for (auto* entry : settingsMetrics.entries) {
+            if (entry->font != font || entry->dpi != DpiGet() || entry->idealDx != idealDx || entry->maxDx != maxDx ||
+                entry->height != height || entry->margins != margins || len(entry->items) != len(items))
+                continue;
+            bool same = true;
+            for (int i = 0; same && i < len(items); i++) same = str::Eq(entry->items[i], items[i]);
+            if (same) {
+                found = entry;
+                break;
+            }
+        }
+        if (found) {
+            measuredSize = found->size;
+#if IS_DEBUG
+            settingsMetrics.reused++;
+#endif
+        } else {
+            measuredSize = DropDown::GetIdealSize();
+            // Reopening Settings keeps text metrics, with a bounded cache for changing fonts and values.
+            constexpr int kSettingsMetricLimit = 64;
+            if (len(settingsMetrics.entries) == kSettingsMetricLimit) {
+                delete settingsMetrics.entries[0];
+                VecRemoveAt(settingsMetrics.entries, 0);
+            }
+            auto* entry = new SettingsDropDownMetric{font, {}, measuredSize, DpiGet(), idealDx, maxDx, height, margins};
+            for (Str item : items) entry->items.Append(item);
+            VecAppend(settingsMetrics.entries, entry);
+#if IS_DEBUG
+            settingsMetrics.measured++;
+#endif
+        }
+        measuredFont = font;
+        measuredDpi = DpiGet();
+        measuredIdealDx = idealDx;
+        measuredMaxDx = maxDx;
+        measuredHeight = height;
+        measuredMargins = margins;
+        measuredItems.Reset();
+        for (Str item : items) measuredItems.Append(item);
+        return measuredSize;
+    }
+};
+
 struct SettingsForm : Table {
     Vec<Size> labelSizes;
     Vec<Size> valueSizes;
@@ -95,11 +199,28 @@ struct SettingsForm : Table {
     int contentHeight = 0;
     bool stacked = false;
     bool rtl = false;
+    int measuredWidth = -1;
+    int measuredDpi = 0;
+    PlatformFont* measuredFont = nullptr;
+    Size naturalSize;
+
+    Size NaturalSize() {
+        if (measuredDpi != DpiGet() || measuredFont != GetAppFont()) {
+            naturalSize = Table::Layout(ExpandInf());
+            labelWidth = Table::ColWidth(0);
+            measuredWidth = -1;
+            measuredDpi = DpiGet();
+            measuredFont = GetAppFont();
+        }
+        return naturalSize;
+    }
+    int MinIntrinsicWidth(int) override { return NaturalSize().dx; }
 
     Size Layout(Constraints bc) override {
-        Size natural = Table::Layout(ExpandInf());
+        Size natural = NaturalSize();
         int width = bc.HasBoundedWidth() ? bc.max.dx : natural.dx;
-        labelWidth = Table::ColWidth(0);
+        if (width == measuredWidth) return bc.Constrain({width, contentHeight});
+        measuredWidth = width;
         stacked = width < natural.dx;
         VecClear(labelSizes);
         VecClear(valueSizes);
@@ -156,6 +277,7 @@ struct SettingsCheckbox : Checkbox {
 };
 
 struct SettingsViewport : ScrollBox {
+    int wheelRemainder = 0;
     explicit SettingsViewport(ILayout* child) : ScrollBox(child) {}
     void ClipControls(ILayout* node) {
         if (auto* control = node->AsControl()) {
@@ -164,7 +286,18 @@ struct SettingsViewport : ScrollBox {
             clip.x -= bounds.x;
             clip.y -= bounds.y;
             HRGN region = CreateRectRgn(clip.x, clip.y, clip.x + clip.dx, clip.y + clip.dy);
-            if (!SetWindowRgn(control->hwnd, region, FALSE)) DeleteObject(region);
+            HRGN rounded = RoundedControlRegion(control->hwnd, bounds.Size());
+            if (rounded) {
+                CombineRgn(region, region, rounded, RGN_AND);
+                DeleteObject(rounded);
+            }
+            HRGN current = CreateRectRgn(0, 0, 0, 0);
+            bool unchanged = GetWindowRgn(control->hwnd, current) != ERROR && EqualRgn(current, region);
+            DeleteObject(current);
+            if (unchanged || !SetWindowRgn(control->hwnd, region, FALSE))
+                DeleteObject(region);
+            else
+                InvalidateRect(control->hwnd, nullptr, FALSE);
         }
         for (int i = 0; i < node->LayoutChildCount(); i++) ClipControls(node->LayoutChildAt(i));
     }
@@ -172,14 +305,32 @@ struct SettingsViewport : ScrollBox {
         ScrollBox::SetBounds(bounds);
         ClipControls(child);
     }
+    void Wheel(int delta) {
+        UINT lines = 3;
+        SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+        if (!lines) return;
+        // Accumulate fractional pixels instead of discarding small touchpad deltas.
+        int step = lines == WHEEL_PAGESCROLL ? lastBounds.dy
+                                             : (int)std::min(lines, (UINT)INT_MAX / std::max(1, lineDy)) * lineDy;
+        int64_t pixels = (int64_t)wheelRemainder - (int64_t)delta * step;
+        int dy = (int)std::clamp<int64_t>(pixels / WHEEL_DELTA, INT_MIN, INT_MAX);
+        wheelRemainder = (int)(pixels % WHEEL_DELTA);
+        if (ScrollBy(dy)) ClipControls(child);
+    }
 };
 
 // Section headers, labels and OK/Cancel are VirtCtrl; layout/zoom/command
 // combos and the checkboxes are HWNDs. Same WindowBase layout as Inverse Search.
 struct SettingsWnd : WindowBase {
-    ~SettingsWnd() override = default;
+    ~SettingsWnd() override { str::Free(colorFile); }
 
     MainWindow* win = nullptr;
+    Str colorFile;
+    DropDown* dropPageText = nullptr;
+    DropDown* dropPageBg = nullptr;
+    void PickPageColor(DropDown*);
+    void PickPageText(VirtMouseEvent*) { PickPageColor(dropPageText); }
+    void PickPageBg(VirtMouseEvent*) { PickPageColor(dropPageBg); }
     SettingsViewport* scroll = nullptr;
     Vec<SettingsForm*> forms;
     Vec<float> zoomLevels;
@@ -203,6 +354,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropThumbnailSize = nullptr;
     DropDown* dropToolbarSize = nullptr;
     DropDown* dropRecentCount = nullptr;
+    DropDown* dropTabListCount = nullptr;
+    DropDown* dropScrollbarWidth = nullptr;
     DropDown* dropMinTabWidth = nullptr;
     DropDown* dropHoverDelay = nullptr;
     DropDown* dropPenMin = nullptr;
@@ -263,9 +416,35 @@ static void FillSizeChoices(DropDown* drop, Vec<int>& sizes, int current, bool p
     CbSetCurrentSelection(drop, VecFind(sizes, current));
 }
 
+static bool ParseSettingNumber(Str text, Str unit, double& value) {
+    char* input = CStrTemp(text);
+    char* end = nullptr;
+    value = strtod(input, &end);
+    if (end == input || !isfinite(value)) return false;
+    while (*end && isspace((unsigned char)*end)) end++;
+    Str suffix(end);
+    while (len(suffix) && isspace((unsigned char)suffix.s[len(suffix) - 1])) suffix.len--;
+    return !len(suffix) || (len(unit) && str::EqI(suffix, unit));
+}
+
+static bool ReadSettingNumber(DropDown* drop, Str unit, double& value, bool automatic = false) {
+    Str text = drop->GetTextTemp();
+    str::TrimWSInPlace(text, str::TrimOpt::Both);
+    if (automatic && (str::EqI(text, Tr("Automatic (Windows)")) || str::EqI(text, StrL("automatic")))) {
+        value = 0;
+        return true;
+    }
+    return ParseSettingNumber(text, unit, value);
+}
+
 static int SelectedSize(DropDown* drop, const Vec<int>& sizes, int fallback) {
     int index = CbGetCurrentSelection(drop);
-    return index >= 0 && index < len(sizes) ? sizes[index] : fallback;
+    if (index >= 0 && index < len(sizes)) return sizes[index];
+    double value;
+    bool percentage = len(sizes) && sizes[0] != 0;
+    if (!ReadSettingNumber(drop, percentage ? StrL("%") : StrL("px"), value, !percentage)) return fallback;
+    if (value != floor(value)) return fallback;
+    return (int)limitValue(value, percentage ? 75.0 : 0.0, percentage ? 250.0 : 96.0);
 }
 
 static void FillNumberChoices(DropDown* drop, Str options, double current) {
@@ -275,15 +454,38 @@ static void FillNumberChoices(DropDown* drop, Str options, double current) {
     drop->SetText(fmt("%g", current));
 }
 
-static double SelectedNumber(DropDown* drop, double fallback, double minimum, double maximum) {
-    TempStr text = drop->GetTextTemp();
-    char* end = nullptr;
-    char* input = CStrTemp(text);
-    double value = strtod(input, &end);
-    if (end == input || !isfinite(value)) {
-        return fallback;
-    }
+static double SelectedNumber(DropDown* drop, double fallback, double minimum, double maximum, Str unit = {}) {
+    double value;
+    if (!ReadSettingNumber(drop, unit, value)) return fallback;
     return limitValue(value, minimum, maximum);
+}
+
+struct SettingsFontMatch {
+    Str name;
+    bool found = false;
+};
+
+static int CALLBACK FindSettingsFont(const LOGFONTW* font, const TEXTMETRICW*, DWORD, LPARAM data) {
+    auto* match = (SettingsFontMatch*)data;
+    match->found = str::EqI(ToUtf8Temp(font->lfFaceName), match->name);
+    return match->found ? 0 : 1;
+}
+
+static bool IsSettingsFont(Str name) {
+    if (str::EqI(name, StrL("Manrope")) || str::EqI(name, StrL("Pretendard Std")) ||
+        str::EqI(name, StrL("Public Sans")))
+        return true;
+    WStr wide = ToWStrTemp(name);
+    if (!len(wide) || len(wide) >= LF_FACESIZE || wide.s[0] == L'@') return false;
+    LOGFONTW font{};
+    font.lfCharSet = DEFAULT_CHARSET;
+    wstr::BufSet(WStr(font.lfFaceName, dimof(font.lfFaceName)), wide);
+    HDC dc = GetDC(nullptr);
+    if (!dc) return false;
+    SettingsFontMatch match{name};
+    EnumFontFamiliesExW(dc, &font, FindSettingsFont, (LPARAM)&match, 0);
+    ReleaseDC(nullptr, dc);
+    return match.found;
 }
 
 void SettingsWnd::UpdateDataLocation() {
@@ -429,11 +631,9 @@ float SettingsWnd::SelectedZoom() {
     if (len(text) == 0) {
         return startZoom;
     }
-    float zoom = (float)atof(CStrTemp(text));
-    if (zoom == 0) {
-        return startZoom;
-    }
-    return limitValue(zoom, kZoomMin, kZoomMax);
+    double zoom;
+    if (!ParseSettingNumber(text, StrL("%"), zoom) || zoom <= 0) return startZoom;
+    return (float)limitValue(zoom, (double)kZoomMin, (double)kZoomMax);
 }
 
 void SettingsWnd::OnReferenceHoverChanged() {
@@ -459,6 +659,91 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         ScheduleDelete();
         return;
     }
+    Color colors[2] = {kColorUnset, kColorUnset};
+    DropDown* colorDrops[] = {dropPageText, dropPageBg};
+    for (int i = 0; i < 2 && len(colorFile); i++) {
+        Str value = colorDrops[i]->GetTextTemp();
+        str::TrimWSInPlace(value, str::TrimOpt::Both);
+        if (str::EqI(value, Tr("Use theme"))) continue;
+        ParsedColor parsed{};
+        SetColorText(parsed, value);
+        ParseColor(parsed);
+        bool valid = parsed.parsedOk;
+        colors[i] = parsed.col;
+        FreeColorText(parsed);
+        if (valid) continue;
+        MessageBoxW(hwnd, CWStrTemp(Tr("Enter a color such as #202020, choose a color, or select Use theme.")),
+                    CWStrTemp(Tr("Check color")), MB_OK | MB_ICONWARNING);
+        SetFocus(colorDrops[i]->hwnd);
+        return;
+    }
+    struct NumberField {
+        DropDown* drop;
+        Str label;
+        Str unit;
+        double minimum;
+        double maximum;
+        bool automatic = false;
+        bool fractional = false;
+    };
+    NumberField fields[] = {
+        {dropInterfaceScale, Tr("Overall interface scale"), StrL("%"), 50, 250},
+        {dropUiSize, Tr("Interface text size"), StrL("px"), 9, 96, true},
+        {dropTreeSize, Tr("Sidebar text size"), StrL("px"), 9, 96, true},
+        {dropThumbnailSize, Tr("Home thumbnail size"), StrL("%"), 75, 250},
+        {dropToolbarSize, Tr("UI icon size"), StrL("px"), 8, 64},
+        {dropRecentCount, Tr("Recent documents shown"), {}, 1, 200},
+        {dropTabListCount, Tr("Visible open-file list rows"), {}, 1, 50},
+        {dropScrollbarWidth, Tr("Scrollbar width"), StrL("px"), 8, 40},
+        {dropMinTabWidth, Tr("Minimum tab width"), StrL("px"), 60, 400},
+        {dropHoverDelay, Tr("Reference preview delay"), StrL("ms"), 0, 2000},
+        {dropPenMin, Tr("Minimum width"), StrL("pt"), 0.1, 64, false, true},
+        {dropPenMax, Tr("Maximum width"), StrL("pt"), 0.1, 64, false, true},
+        {dropPenStep, Tr("Width adjustment step"), StrL("pt"), 0.1, 16, false, true},
+    };
+    for (const auto& field : fields) {
+        if (!field.drop->IsEnabled()) continue;
+        double value;
+        bool valid = ReadSettingNumber(field.drop, field.unit, value, field.automatic);
+        valid = valid && ((value >= field.minimum && value <= field.maximum) || (field.automatic && value == 0));
+        valid = valid && (field.fractional || value == floor(value));
+        if (valid) continue;
+        Str message =
+            fmt("%s: %s %g–%g %s.%s", field.label, Tr("Enter a value in the range"), field.minimum, field.maximum,
+                field.unit, field.automatic ? fmt(" %s", Tr("Use Automatic (Windows) for the default size.")) : Str{});
+        MessageBoxW(hwnd, CWStrTemp(message), CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
+        SetFocus(field.drop->hwnd);
+        return;
+    }
+    Str family = dropUiFamily->GetTextTemp();
+    str::TrimWSInPlace(family, str::TrimOpt::Both);
+    if (CbGetCurrentSelection(dropUiFamily) == 0 || str::EqI(family, Tr("System (Windows)")) ||
+        str::EqI(family, StrL("system")))
+        family = StrL("system");
+    if (!str::EqI(family, StrL("system")) && !IsSettingsFont(family)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose a bundled font or enter the name of an installed Windows font.")),
+                    CWStrTemp(Tr("Font unavailable")), MB_OK | MB_ICONWARNING);
+        SetFocus(dropUiFamily->hwnd);
+        return;
+    }
+    if (CbGetCurrentSelection(dropZoom) < 0) {
+        double zoom;
+        if (!ReadSettingNumber(dropZoom, StrL("%"), zoom) || zoom < kZoomMin || zoom > kZoomMax) {
+            Str message =
+                fmt("%s: %s %g–%g%%.", Tr("Default Zoom"), Tr("Enter a value in the range"), kZoomMin, kZoomMax);
+            MessageBoxW(hwnd, CWStrTemp(message), CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
+            SetFocus(dropZoom->hwnd);
+            return;
+        }
+    }
+    double minimum = SelectedNumber(dropPenMin, gSettings->penMinWidth, 0.1, 64, StrL("pt"));
+    double maximum = SelectedNumber(dropPenMax, gSettings->penMaxWidth, 0.1, 64, StrL("pt"));
+    if (maximum < minimum) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Maximum pen width must be at least the minimum pen width.")),
+                    CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
+        SetFocus(dropPenMax->hwnd);
+        return;
+    }
     int layoutIdx = CbGetCurrentSelection(dropLayout);
     int nLayout = dropLayout ? len(dropLayout->items) : 0;
     if (layoutIdx >= 0 && nLayout > 0 && layoutIdx == nLayout - 1) {
@@ -471,10 +756,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->defaultZoomFloat = SelectedZoom();
     int uiSize = SelectedSize(dropUiSize, uiSizes, gSettings->uIFontSize);
     int treeSize = SelectedSize(dropTreeSize, treeSizes, gSettings->treeFontSize);
-    static const Str families[] = {StrL("system"), StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")};
-    int familyIndex = CbGetCurrentSelection(dropUiFamily);
-    Str family = familyIndex >= 0 && familyIndex < dimofi(families) ? families[familyIndex] : gSettings->uIFontFamily;
-    int interfaceScale = (int)SelectedNumber(dropInterfaceScale, gSettings->interfaceScale, 50, 250);
+    int interfaceScale = (int)SelectedNumber(dropInterfaceScale, gSettings->interfaceScale, 50, 250, StrL("%"));
     bool fontsChanged = interfaceScale != gSettings->interfaceScale || uiSize != gSettings->uIFontSize ||
                         treeSize != gSettings->treeFontSize || !str::EqI(family, gSettings->uIFontFamily);
     str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
@@ -484,15 +766,17 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->homePageThumbnailSize =
         SelectedSize(dropThumbnailSize, thumbnailSizes, gSettings->homePageThumbnailSize);
     gSettings->citationHoverDelay =
-        chkReferenceHover->IsChecked() ? (int)SelectedNumber(dropHoverDelay, 300, 0, 2000) : -1;
-    gSettings->toolbarSize = (int)SelectedNumber(dropToolbarSize, gSettings->toolbarSize, 8, 64);
+        chkReferenceHover->IsChecked() ? (int)SelectedNumber(dropHoverDelay, 300, 0, 2000, StrL("ms")) : -1;
+    gSettings->toolbarSize = (int)SelectedNumber(dropToolbarSize, gSettings->toolbarSize, 8, 64, StrL("px"));
     gSettings->homePageMaxRecentItems = (int)SelectedNumber(dropRecentCount, gSettings->homePageMaxRecentItems, 1, 200);
-    gSettings->minTabWidth = (int)SelectedNumber(dropMinTabWidth, gSettings->minTabWidth, 60, 400);
-    float penMin = (float)SelectedNumber(dropPenMin, gSettings->penMinWidth, 0.1, 64);
-    float penMax = (float)SelectedNumber(dropPenMax, gSettings->penMaxWidth, penMin, 64);
+    gSettings->tabListVisibleItems = (int)SelectedNumber(dropTabListCount, gSettings->tabListVisibleItems, 1, 50);
+    gSettings->scrollbarWidth = (int)SelectedNumber(dropScrollbarWidth, gSettings->scrollbarWidth, 8, 40, StrL("px"));
+    gSettings->minTabWidth = (int)SelectedNumber(dropMinTabWidth, gSettings->minTabWidth, 60, 400, StrL("px"));
+    float penMin = (float)SelectedNumber(dropPenMin, gSettings->penMinWidth, 0.1, 64, StrL("pt"));
+    float penMax = (float)SelectedNumber(dropPenMax, gSettings->penMaxWidth, penMin, 64, StrL("pt"));
     gSettings->penMinWidth = penMin;
     gSettings->penMaxWidth = penMax;
-    gSettings->penWidthStep = (float)SelectedNumber(dropPenStep, gSettings->penWidthStep, 0.1, 16);
+    gSettings->penWidthStep = (float)SelectedNumber(dropPenStep, gSettings->penWidthStep, 0.1, 16, StrL("pt"));
     if (fontsChanged) {
         RefreshUiFonts();
     }
@@ -524,6 +808,24 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         EmptyThumbnailCacheDirectory();
     }
     UpdateDocumentColors();
+    if (len(colorFile)) {
+        FileState* fs = FileHistoryFindByPath(colorFile);
+        if (fs) {
+            SetColorText(fs->pageTextColor, colors[0] == kColorUnset ? Str{} : SerializeColorTemp(colors[0]));
+            SetColorText(fs->pageBackgroundColor, colors[1] == kColorUnset ? Str{} : SerializeColorTemp(colors[1]));
+        }
+        for (MainWindow* window : gWindows) {
+            for (WindowTab* tab : window->Tabs()) {
+                auto* dm = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+                if (!dm || !str::EqI(dm->GetFilePath(), colorFile)) continue;
+                gRenderCache->CancelRenderingBlocking(dm);
+                gRenderCache->FreeForDisplayModel(dm);
+                dm->pageTextColor = colors[0];
+                dm->pageBackgroundColor = colors[1];
+                dm->RepaintDisplay();
+            }
+        }
+    }
     // note: ideally we would also update state for useTabs changes but that's complicated since
     // to do it right we would have to convert tabs to windows. When moving no tabs -> tabs,
     // there's no problem. When moving tabs -> no tabs, a half solution would be to only
@@ -532,6 +834,20 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     ScheduleSaveSettings();
     MaybeRedrawHomePage();
     ScheduleDelete();
+}
+
+void SettingsWnd::PickPageColor(DropDown* drop) {
+    Color selected = kColWhite;
+    if (drop == dropPageText) selected = kColBlack;
+    ParseColor(&selected, drop->GetTextTemp());
+    static COLORREF customColors[16]{};
+    CHOOSECOLORW cc{};
+    cc.lStructSize = sizeof(cc);
+    cc.hwndOwner = hwnd;
+    cc.rgbResult = selected;
+    cc.lpCustColors = customColors;
+    cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+    if (DarkModeChooseColor(&cc)) drop->SetText(SerializeColorTemp(cc.rgbResult));
 }
 
 static void OnClose(WindowBase::CloseEvent* /*ev*/) {
@@ -552,7 +868,8 @@ static DropDown* MakeDropDown(HWND parent, PlatformFont* font, bool isRtl, bool 
     args.font = font;
     args.isRtl = isRtl;
     args.isEditable = editable;
-    auto* c = new DropDown();
+    args.deferItems = true;
+    auto* c = new SettingsDropDown();
     c->Create(args);
     return c;
 }
@@ -578,25 +895,43 @@ static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     if (msg == WM_SETFOCUS) {
         auto* wnd = (SettingsWnd*)data;
         auto* scroll = wnd->scroll;
-        Rect bounds = ChildPosWithinParent(hwnd);
+        Rect bounds = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, wnd->hwnd);
         Rect view = scroll->lastBounds;
         int delta = bounds.y < view.y ? bounds.y - view.y : std::max(0, bounds.y + bounds.dy - view.y - view.dy);
         if (delta && scroll->ScrollBy(delta)) scroll->ClipControls(scroll->child);
+    }
+    if (msg == WM_MOUSEWHEEL) {
+        auto* wnd = (SettingsWnd*)data;
+        HWND combo = GetParent(hwnd) == wnd->hwnd ? hwnd : GetParent(hwnd);
+        if (!SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0)) return SendMessageW(wnd->hwnd, msg, wp, lp);
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
-    if (auto* control = node->AsControl()) SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+    if (auto* control = node->AsControl()) {
+        SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+        if (HWND edit = CbEditHwnd(control->hwnd)) SetWindowSubclass(edit, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+    }
     for (int i = 0; i < node->LayoutChildCount(); i++) SettingsFocusStops(wnd, node->LayoutChildAt(i));
 }
 
 static void OnSettingsMessage(WindowBase::WndProcEvent* ev);
 
 bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
+#if IS_DEBUG
+    TimeStamp openingStart = TimeGet();
+    int measurementsBefore = settingsMetrics.measured, reuseBefore = settingsMetrics.reused;
+#endif
+    autoLayout = false;
     bool visible = view == SettingsView::Visible;
     onWndProc = MkFunc1Void<WindowBase::WndProcEvent*>(OnSettingsMessage);
     win = mainWin;
+    auto* colorModel = win ? win->AsFixed() : nullptr;
+    if (colorModel && EngineUsesDocumentColorsFollowTheme(colorModel->GetEngine()) &&
+        !EngineUsesReflowThemeCss(colorModel->GetEngine())) {
+        colorFile = str::Dup(colorModel->GetFilePath());
+    }
     showInverseSearch = gSettings && gSettings->enableTeXEnhancements && CanAccessDisk();
 
     {
@@ -609,6 +944,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         CreateCustom(args);
     }
     if (!hwnd) {
+        autoLayout = true;
         return false;
     }
     DpiScope dpi(hwnd);
@@ -675,6 +1011,47 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         FillZoom();
     }
 
+    if (len(colorFile)) {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Current file colors"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
+        vbox->AddChild(NewSettingsLabel({.s = path::GetBaseNameTemp(colorFile), .font = font, .isRtl = isRtl}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        table->SetSize(2, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        VecAppend(forms, table);
+        DropDown** drops[] = {&dropPageText, &dropPageBg};
+        Str labels[] = {Tr("Foreground:"), Tr("Page background:")};
+        Color colors[] = {colorModel->pageTextColor, colorModel->pageBackgroundColor};
+        for (int i = 0; i < 2; i++) {
+            table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
+                CrossAxisAlign::CrossCenter;
+            auto* drop = MakeDropDown(hwnd, font, isRtl, true);
+            *drops[i] = drop;
+            StrVec presets;
+            presets.Append(Tr("Use theme"));
+            for (Str color : {StrL("#000000"), StrL("#ffffff"), StrL("#202020"), StrL("#f5efdf"), StrL("#dceadf")})
+                presets.Append(color);
+            drop->SetItems(presets);
+            drop->SetText(colors[i] == kColorUnset ? Tr("Use theme") : SerializeColorTemp(colors[i]));
+            auto* choose = NewThemedButton(hwnd, Tr("Choose..."), font, false);
+            choose->onClick = i == 0 ? MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::PickPageText>(this)
+                                     : MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::PickPageBg>(this);
+            auto* row = new HBox();
+            row->gap = UiScalePx(8);
+            row->alignCross = CrossAxisAlign::CrossCenter;
+            row->AddChild(drop, 1);
+            row->AddChild(choose);
+            table->SetCell(i, 1, row).alignH = CrossAxisAlign::Stretch;
+        }
+        vbox->AddChild(table);
+        vbox->AddChild(NewSettingsLabel(
+            {.s = Tr("Colors apply to this file only. Select Use theme to reset."), .font = font, .isRtl = isRtl}));
+    }
+
     {
         vbox->AddChild(NewSettingsLabel({
             .s = Tr("Appearance"),
@@ -685,19 +1062,20 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         auto* table = new SettingsForm();
         table->rtl = isRtl;
         VecAppend(forms, table);
-        table->SetSize(9, 2);
+        table->SetSize(11, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         const Str names[] = {
             Tr("Overall interface scale (%):"), Tr("Interface font:"),         Tr("&Interface text size:"),
             Tr("&Sidebar text size:"),          Tr("Home &thumbnail size:"),   Tr("UI icon size (px):"),
-            Tr("Recent documents shown:"),      Tr("Minimum tab width (px):"), Tr("Reference preview delay (ms):")};
-        DropDown** controls[] = {&dropInterfaceScale, &dropUiFamily,      &dropUiSize,
-                                 &dropTreeSize,       &dropThumbnailSize, &dropToolbarSize,
-                                 &dropRecentCount,    &dropMinTabWidth,   &dropHoverDelay};
+            Tr("Recent documents shown:"),      Tr("Minimum tab width (px):"), Tr("Reference preview delay (ms):"),
+            Tr("Visible open-file list rows:"), Tr("Scrollbar width (px):")};
+        DropDown** controls[] = {&dropInterfaceScale, &dropUiFamily,     &dropUiSize,        &dropTreeSize,
+                                 &dropThumbnailSize,  &dropToolbarSize,  &dropRecentCount,   &dropMinTabWidth,
+                                 &dropHoverDelay,     &dropTabListCount, &dropScrollbarWidth};
         for (int row = 0; row < dimofi(names); row++) {
             auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
-            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, row == 0 || row >= 5);
+            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, true);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
@@ -710,26 +1088,32 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         families.Append(StrL("Manrope"));
         families.Append(StrL("Pretendard Std"));
         families.Append(StrL("Public Sans"));
-        dropUiFamily->SetItems(families);
         int familyIndex = 0;
         for (int i = 1; i < len(families); i++) {
             if (str::EqI(families[i], gSettings->uIFontFamily)) {
                 familyIndex = i;
             }
         }
+        if (!familyIndex && len(gSettings->uIFontFamily) && !str::EqI(gSettings->uIFontFamily, StrL("system"))) {
+            familyIndex = len(families);
+            families.Append(gSettings->uIFontFamily);
+        }
+        dropUiFamily->SetItems(families);
         CbSetCurrentSelection(dropUiFamily, familyIndex);
         FillSizeChoices(dropUiSize, uiSizes, gSettings ? gSettings->uIFontSize : 0, false);
         FillSizeChoices(dropTreeSize, treeSizes, gSettings ? gSettings->treeFontSize : 0, false);
         FillSizeChoices(dropThumbnailSize, thumbnailSizes, gSettings ? gSettings->homePageThumbnailSize : 100, true);
         FillNumberChoices(dropToolbarSize, StrL("12|16|18|24|28|32|40|48|64"), gSettings->toolbarSize);
         FillNumberChoices(dropRecentCount, StrL("10|20|30|50|100|200"), gSettings->homePageMaxRecentItems);
+        FillNumberChoices(dropTabListCount, StrL("5|10|15|20|30|50"), gSettings->tabListVisibleItems);
+        FillNumberChoices(dropScrollbarWidth, StrL("8|12|16|20|24|28|32|40"), gSettings->scrollbarWidth);
         FillNumberChoices(dropHoverDelay, StrL("0|150|300|500|750|1000|2000"),
                           std::max(0, gSettings->citationHoverDelay));
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
         vbox->AddChild(table);
         vbox->AddChild(NewSettingsLabel({
             .s = Tr("Overall scale changes the interface, not document zoom. Individual font and icon sizes remain "
-                    "available."),
+                    "available. Choose a preset or type a custom value. You can also enter an installed font name."),
             .font = font,
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(4), UiScalePx(0), UiScalePx(0), UiScalePx(0)},
@@ -900,6 +1284,10 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 
     int pad = UiScalePx(16);
     layout = new Padding(root, Insets{pad, pad, pad, pad});
+#if IS_DEBUG
+    double controlsMs = TimeSinceInMs(openingStart);
+    TimeStamp layoutStart = TimeGet();
+#endif
     int naturalWidth = 0;
     for (auto* form : forms) naturalWidth = std::max(naturalWidth, form->MinIntrinsicWidth(0));
     int width = limitValue(naturalWidth + pad * 2, DpiScale(kSettingsMinWidth), DpiScale(kSettingsMaxWidth));
@@ -910,7 +1298,12 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     if (!workArea.IsEmpty()) maxHeight = std::min(maxHeight, std::max(1, workArea.dy - DpiScale(80)));
     ResizeHwndToClientArea(hwnd, width, std::min(desired.dy, maxHeight), false);
     DoLayout(HwndClientRect(hwnd).Size());
+    autoLayout = true;
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
+#if IS_DEBUG
+    double layoutMs = TimeSinceInMs(layoutStart);
+    TimeStamp themeStart = TimeGet();
+#endif
     UpdateTheme();
 
     SettingsFocusStops(this, scroll->child);
@@ -918,6 +1311,13 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     if (visible && dropLayout) {
         HwndSetFocus(dropLayout->hwnd);
     }
+#if IS_DEBUG
+    logf(
+        "Settings opening: %.3f ms controls, %.3f ms layout, %.3f ms theme/show; %d dropdown measurements, %d "
+        "reused; %.3f ms total\n",
+        controlsMs, layoutMs, TimeSinceInMs(themeStart), settingsMetrics.measured - measurementsBefore,
+        settingsMetrics.reused - reuseBefore, TimeSinceInMs(openingStart));
+#endif
     return true;
 }
 
@@ -934,14 +1334,12 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     }
     if (ev->msg == WM_VSCROLL && ev->lparam == 0) {
         window->scroll->OnVScroll(ev->wparam);
+        window->scroll->ClipControls(window->scroll->child);
     } else if (ev->msg == WM_MOUSEWHEEL) {
-        VirtMouseEvent mouse;
-        mouse.wheelDelta = GET_WHEEL_DELTA_WPARAM(ev->wparam);
-        window->scroll->OnMouseWheel(&mouse);
+        window->scroll->Wheel(GET_WHEEL_DELTA_WPARAM(ev->wparam));
     } else {
         return;
     }
-    window->scroll->ClipControls(window->scroll->child);
     ev->result = 0;
     ev->didHandle = true;
 }
@@ -974,6 +1372,143 @@ void ShowSettingsDialog(MainWindow* win) {
 
 #if IS_DEBUG
 
+struct SettingsMeasureProbe : SettingsLabel {
+    int layouts = 0;
+    SettingsMeasureProbe() : SettingsLabel({.s = StrL("Measured label"), .font = GetAppFont()}) {}
+    Size Layout(Constraints bc) override {
+        layouts++;
+        return SettingsLabel::Layout(bc);
+    }
+};
+
+static void SettingsResponsivenessTests(SettingsWnd* wnd) {
+    SettingsForm form;
+    form.SetSize(1, 2);
+    auto* probe = new SettingsMeasureProbe();
+    form.SetCell(0, 0, probe);
+    form.SetCell(0, 1, NewSettingsLabel({.s = StrL("Value"), .font = GetAppFont()}));
+    form.Layout(ExpandHeight(DpiScale(500)));
+    int measured = probe->layouts;
+    for (int i = 0; i < 20; i++) form.Layout(ExpandHeight(DpiScale(500)));
+    utassert(probe->layouts == measured);
+    form.Layout(ExpandHeight(DpiScale(200)));
+    utassert(probe->layouts > measured);
+    form.Layout(ExpandHeight(DpiScale(50)));
+    utassert(probe->wrapped);
+    measured = probe->layouts;
+    form.MinIntrinsicWidth(0);
+    form.Layout(ExpandHeight(DpiScale(50)));
+    utassert(probe->layouts == measured && probe->wrapped);
+
+    wnd->scroll->ScrollTo(0);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    UINT lines = 3;
+    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    for (int i = 0; i < WHEEL_DELTA; i++) SendMessageW(wnd->hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-1), 0);
+    utassert(lines ? wnd->scroll->scrollY > 0 : wnd->scroll->scrollY == 0);
+    wnd->scroll->ScrollTo(0);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    int selection = CbGetCurrentSelection(wnd->dropLayout);
+    SendMessageW(wnd->dropLayout->hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 0);
+    utassert(lines ? wnd->scroll->scrollY > 0 : wnd->scroll->scrollY == 0);
+    utassert(CbGetCurrentSelection(wnd->dropLayout) == selection);
+    wnd->scroll->ScrollTo(0);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    HWND edit = CbEditHwnd(wnd->dropZoom);
+    utassert(edit);
+    SendMessageW(edit, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 0);
+    utassert(lines ? wnd->scroll->scrollY > 0 : wnd->scroll->scrollY == 0);
+    wnd->scroll->ScrollTo(0);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+
+    auto* drop = (SettingsDropDown*)wnd->dropLayout;
+    Size original = drop->GetIdealSize();
+    StrVec choices;
+    choices.Append(StrL("A much longer replacement setting choice for measurement invalidation"));
+    drop->SetItems(choices);
+    utassert(drop->GetIdealSize().dx > original.dx);
+    wnd->FillLayout();
+    CbSetCurrentSelection(drop, selection);
+}
+
+static void SettingsCustomValueTests(SettingsWnd* wnd) {
+    wnd->dropTabListCount->SetText(StrL("17"));
+    utassert(SelectedNumber(wnd->dropTabListCount, 10, 1, 50) == 17);
+    wnd->dropScrollbarWidth->SetText(StrL("26 px"));
+    utassert(SelectedNumber(wnd->dropScrollbarWidth, 20, 8, 40, StrL("px")) == 26);
+    Color parsed;
+    utassert(ParseColor(&parsed, StrL("#123456")) && parsed == MkRgb(0x12, 0x34, 0x56));
+    utassert(!ParseColor(&parsed, StrL("#not-a-color")));
+    DarkModeProfile first, second, theme;
+    BuildViewDarkModeProfile(nullptr, &first, MkRgb(20, 30, 40), MkRgb(230, 240, 250));
+    BuildViewDarkModeProfile(nullptr, &second, MkRgb(200, 210, 220), MkRgb(10, 20, 30));
+    BuildViewDarkModeProfile(nullptr, &theme);
+    utassert(first.foreground == MkRgb(20, 30, 40) && first.pageBackground == MkRgb(230, 240, 250));
+    utassert(second.foreground == MkRgb(200, 210, 220) && second.pageBackground == MkRgb(10, 20, 30));
+    utassert(first.hash != second.hash && first.hash != theme.hash);
+    Settings* sample = NewSettings({});
+    FileState* state = NewFileState(StrL("reading-colors.pdf"));
+    state->useDefaultState = false;
+    SetColorText(state->pageTextColor, StrL("#123456"));
+    SetColorText(state->pageBackgroundColor, StrL("#f5efdf"));
+    VecAppend(*sample->fileStates, state);
+    Str serialized = SerializeSettings(sample, {});
+    Settings* restored = NewSettings(serialized);
+    utassert(len(*restored->fileStates) == 1);
+    if (len(*restored->fileStates)) {
+        utassert(GetParsedColor((*restored->fileStates)[0]->pageTextColor, kColorUnset) == MkRgb(0x12, 0x34, 0x56));
+        utassert(GetParsedColor((*restored->fileStates)[0]->pageBackgroundColor, kColorUnset) ==
+                 MkRgb(0xf5, 0xef, 0xdf));
+    }
+    str::Free(serialized);
+    DeleteSettings(sample);
+    DeleteSettings(restored);
+    DropDown* fields[] = {wnd->dropUiSize, wnd->dropTreeSize, wnd->dropThumbnailSize};
+    Vec<int>* choices[] = {&wnd->uiSizes, &wnd->treeSizes, &wnd->thumbnailSizes};
+    const int values[] = {23, 37, 137};
+    for (int i = 0; i < dimofi(fields); i++) {
+        utassert(CbEditHwnd(fields[i]));
+        CbSetCurrentSelection(fields[i], -1);
+        fields[i]->SetText(fmt("%d", values[i]));
+        utassert(SelectedSize(fields[i], *choices[i], 100) == values[i]);
+    }
+    wnd->dropUiSize->SetText(StrL("23 px"));
+    utassert(SelectedSize(wnd->dropUiSize, wnd->uiSizes, 100) == 23);
+    wnd->dropUiSize->SetText(StrL(" Automatic (Windows) "));
+    utassert(SelectedSize(wnd->dropUiSize, wnd->uiSizes, 100) == 0);
+    wnd->dropThumbnailSize->SetText(StrL("137%"));
+    utassert(SelectedSize(wnd->dropThumbnailSize, wnd->thumbnailSizes, 100) == 137);
+    double value;
+    utassert(!ParseSettingNumber(StrL("nan"), {}, value));
+    utassert(!ParseSettingNumber(StrL("1e999"), {}, value));
+    utassert(!ParseSettingNumber(StrL("24oops"), StrL("px"), value));
+    utassert(!ParseSettingNumber(StrL("24%"), StrL("px"), value));
+    utassert(ParseSettingNumber(StrL(" 0.75 pt "), StrL("pt"), value) && value == 0.75);
+    VecClear(wnd->uiSizes);
+    VecClear(wnd->treeSizes);
+    VecClear(wnd->thumbnailSizes);
+    FillSizeChoices(wnd->dropUiSize, wnd->uiSizes, 0, false);
+    FillSizeChoices(wnd->dropTreeSize, wnd->treeSizes, 0, false);
+    FillSizeChoices(wnd->dropThumbnailSize, wnd->thumbnailSizes, 100, true);
+    wnd->dropToolbarSize->SetText(StrL("24oops"));
+    utassert(SelectedNumber(wnd->dropToolbarSize, 16, 8, 64) == 16);
+    wnd->dropToolbarSize->SetText(StrL("24 px"));
+    utassert(SelectedNumber(wnd->dropToolbarSize, 16, 8, 64, StrL("px")) == 24);
+    utassert(CbEditHwnd(wnd->dropUiFamily));
+    utassert(IsSettingsFont(StrL("Manrope")));
+    utassert(IsSettingsFont(StrL("Segoe UI")));
+    utassert(!IsSettingsFont(StrL("Nonexistent enhanced settings font")));
+    utassert(!IsSettingsFont(StrL("NoSuchEnhancedFont")));
+    utassert(str::Eq(ResolveUiFontName(StrL("Segoe UI")), StrL("Segoe UI")));
+    utassert(!len(ResolveUiFontName(StrL("system"))));
+    CbSetCurrentSelection(wnd->dropZoom, -1);
+    wnd->dropZoom->SetText(StrL("137.5%"));
+    utassert(wnd->SelectedZoom() == 137.5f);
+    wnd->dropZoom->SetText(StrL("137oops"));
+    utassert(wnd->SelectedZoom() == wnd->startZoom);
+    wnd->FillZoom();
+}
+
 struct SettingsPrintCtx {
     HDC dc;
     HWND hwnd;
@@ -994,8 +1529,14 @@ static BOOL CALLBACK PrintSettingsChild(HWND hwnd, LPARAM data) {
         Rect expected = bounds.Intersect(args->viewport);
         RECT regionBounds{};
         GetRgnBox(region, &regionBounds);
-        utassert(regionBounds.right - regionBounds.left == expected.dx);
-        utassert(regionBounds.bottom - regionBounds.top == expected.dy);
+        utassert(regionBounds.left >= 0 && regionBounds.top >= 0);
+        utassert(regionBounds.right <= bounds.dx && regionBounds.bottom <= bounds.dy);
+        if (regionBounds.right > regionBounds.left && regionBounds.bottom > regionBounds.top) {
+            RECT actual = regionBounds;
+            OffsetRect(&actual, bounds.x, bounds.y);
+            utassert(actual.left >= expected.x && actual.top >= expected.y);
+            utassert(actual.right <= expected.Right() && actual.bottom <= expected.Bottom());
+        }
         OffsetRgn(region, bounds.x, bounds.y);
         ExtSelectClipRgn(dc, region, RGN_AND);
     }
@@ -1042,6 +1583,13 @@ static void SettingsSnapshots() {
     if (!length || length >= dimof(folder)) return;
     Str output = ToUtf8Temp(folder);
     utassert(dir::CreateAll(output));
+    // Unit tests run before normal startup initializes native control theming.
+    // Captures must use the same subclasses as the actual Settings window.
+    auto* oldDarkModeHook = gWindowBaseApplyDarkMode;
+    DarkModeInit();
+    defer {
+        gWindowBaseApplyDarkMode = oldDarkModeHook;
+    };
     RenderCache* previousCache = gRenderCache;
     if (!previousCache) gRenderCache = new RenderCache();
     int originalTheme = ThemeGetCurrentIndex();
@@ -1075,10 +1623,39 @@ static void SettingsSnapshots() {
     }
 }
 
+static void SettingsOpeningTests() {
+    for (auto* entry : settingsMetrics.entries) delete entry;
+    VecReset(settingsMetrics.entries);
+    int before = settingsMetrics.measured;
+    auto* first = new SettingsWnd();
+    first->SetFont(GetAppFont());
+    utassert(first->Create(nullptr, SettingsView::Hidden));
+    int coldMeasurements = settingsMetrics.measured - before;
+    int width = HwndClientRect(first->hwnd).dx;
+    utassert(!IsWindowVisible(first->hwnd) && first->autoLayout);
+    DestroyWindow(first->hwnd);
+    delete first;
+
+    before = settingsMetrics.measured;
+    int reused = settingsMetrics.reused;
+    auto* second = new SettingsWnd();
+    second->SetFont(GetAppFont());
+    utassert(second->Create(nullptr, SettingsView::Hidden));
+    utassert(!IsWindowVisible(second->hwnd) && second->autoLayout);
+    utassert(HwndClientRect(second->hwnd).dx == width);
+    utassert(settingsMetrics.measured - before < coldMeasurements);
+    utassert(settingsMetrics.reused > reused);
+    utassert(len(settingsMetrics.entries) <= 64);
+    DestroyWindow(second->hwnd);
+    delete second;
+}
+
 bool SettingsDialog_UnitTestsSizing() {
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     RefreshUiFonts();
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
     defer {
         DeleteSettings(gSettings);
         gSettings = saved;
@@ -1086,6 +1663,7 @@ bool SettingsDialog_UnitTestsSizing() {
         RefreshUiFonts();
     };
     utassert(gSettings);
+    SettingsOpeningTests();
     auto* wnd = new SettingsWnd();
     wnd->SetFont(GetAppFont());
     utassert(wnd->Create(nullptr, SettingsView::Hidden));
@@ -1093,6 +1671,8 @@ bool SettingsDialog_UnitTestsSizing() {
     int maxWidth = std::min(DpiScale(900), std::max(1, work.dx - DpiScale(32)));
     utassert(HwndClientRect(wnd->hwnd).dx <= maxWidth);
     utassert(!IsWindowVisible(wnd->hwnd));
+    SettingsResponsivenessTests(wnd);
+    SettingsCustomValueTests(wnd);
     Rect footer = wnd->btnOk->lastBounds;
     utassert(footer.y >= wnd->scroll->lastBounds.y + wnd->scroll->lastBounds.dy);
     wnd->scroll->ScrollTo(INT_MAX);

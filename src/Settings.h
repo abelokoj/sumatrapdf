@@ -297,6 +297,10 @@ struct FileState {
     Str zoom;
     // if given, overrides the background color for this document
     ParsedColor bgCol;
+    // reading foreground color for this file; empty follows the theme
+    ParsedColor pageTextColor;
+    // reading page background for this file; empty follows the theme
+    ParsedColor pageBackgroundColor;
     // if given, overrides the tab color for this document
     ParsedColor tabCol;
     // how often the document was opened, halved every week so that the
@@ -900,6 +904,10 @@ struct Settings {
     int homePageThumbnailSize;
     // maximum recent documents shown on the home page, from 1 to 200
     int homePageMaxRecentItems;
+    // maximum visible rows in the open-file tab list, from 1 to 50
+    int tabListVisibleItems;
+    // app scrollbar width in logical pixels, from 8 to 40
+    int scrollbarWidth;
     // file open dialog used by Open File: empty or os (standard Windows
     // file picker), or sumatrapdf (Navigate Files in Folder). Toggled by
     // Settings / SumatraPDF File Picker
@@ -2144,6 +2152,8 @@ static const FieldInfo gFileStateFields[] = {
     {offsetof(FileState, displayMode), SettingType::String, (intptr_t)"automatic"},
     {offsetof(FileState, zoom), SettingType::String, (intptr_t)"fit page"},
     {offsetof(FileState, bgCol), SettingType::Color, (intptr_t)""},
+    {offsetof(FileState, pageTextColor), SettingType::Color, (intptr_t)""},
+    {offsetof(FileState, pageBackgroundColor), SettingType::Color, (intptr_t)""},
     {offsetof(FileState, tabCol), SettingType::Color, (intptr_t)""},
     {offsetof(FileState, openCount), SettingType::Int, 0},
     {offsetof(FileState, pageNo), SettingType::String, (intptr_t)"1"},
@@ -2164,11 +2174,11 @@ static const FieldInfo gFileStateFields[] = {
 };
 static StructInfo gFileStateInfo = {
     sizeof(FileState),
-    25,
+    27,
     gFileStateFields,
-    "Favorites\0EBookUI\0TocState\0FilePath\0DecryptionKey\0DisplayMode\0Zoom\0BgCol\0TabCol\0OpenCount\0PageNo\0PageCo"
-    "unt\0Rotation\0WindowState\0SidebarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissing\0UseDefaultState\0ShowToc\0Displa"
-    "yR2L\0UniformPageWidth\0TrimEmptyMargins\0FreePan",
+    "Favorites\0EBookUI\0TocState\0FilePath\0DecryptionKey\0DisplayMode\0Zoom\0BgCol\0PageTextColor\0PageBackgroundColo"
+    "r\0TabCol\0OpenCount\0PageNo\0PageCount\0Rotation\0WindowState\0SidebarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissi"
+    "ng\0UseDefaultState\0ShowToc\0DisplayR2L\0UniformPageWidth\0TrimEmptyMargins\0FreePan",
     "pages of this document bookmarked in the Favorites menu\0reflowable (ebook) settings for just this document. The "
     "block is absent until you add it; a field left empty or 0 uses the global EBookUI value. The global section's "
     "WindowBgCol and DefaultDisplayMode are already per-document as BgCol and DisplayMode below\0data required to "
@@ -2176,10 +2186,11 @@ static StructInfo gFileStateInfo = {
     "password protected document without having to ask for the password again\0layout of pages. valid values: "
     "automatic, single page, facing, book view, continuous, continuous facing, continuous book view\0zoom (in %) or "
     "one of those values: fit page, fit width, fit height, fit content, fit visible\0if given, overrides the "
-    "background color for this document\0if given, overrides the tab color for this document\0number of times this "
-    "document has been opened recently\0number of the last read page, or `bm:<bookmark>` for documents with chapters "
-    "(folds in ReparseIdx; see PagePosition.cpp)\0number of pages in the document when it was last open; 0 if unknown. "
-    "Used to show reading progress on the home page\0how far pages have been rotated as a multiple of 90 "
+    "background color for this document\0reading foreground color for this file; empty follows the theme\0reading page "
+    "background for this file; empty follows the theme\0if given, overrides the tab color for this document\0number of "
+    "times this document has been opened recently\0number of the last read page, or `bm:<bookmark>` for documents with "
+    "chapters (folds in ReparseIdx; see PagePosition.cpp)\0number of pages in the document when it was last open; 0 if "
+    "unknown. Used to show reading progress on the home page\0how far pages have been rotated as a multiple of 90 "
     "degrees\0state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0width of the "
     "bookmarks / favorites sidebar in screen pixels, as last resized\0how far this document has been scrolled (in x "
     "and y direction)\0default position (can be on any monitor)\0if true, the document is \"pinned\" to the Frequently "
@@ -2294,6 +2305,8 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, homePageSortByFrequentlyRead), SettingType::Bool, false},
     {offsetof(Settings, homePageViewMode), SettingType::String, (intptr_t)"thumbnails"},
     {offsetof(Settings, homePageMaxRecentItems), SettingType::Int, 30},
+    {offsetof(Settings, tabListVisibleItems), SettingType::Int, 10},
+    {offsetof(Settings, scrollbarWidth), SettingType::Int, 20},
     {offsetof(Settings, homePageThumbnailSize), SettingType::Int, 100},
     {offsetof(Settings, filePicker), SettingType::String, (intptr_t)""},
     {offsetof(Settings, printerUI), SettingType::String, (intptr_t)""},
@@ -2455,30 +2468,30 @@ static const FieldInfo gSettingsFields[] = {
 };
 static const StructInfo gSettingsInfo = {
     sizeof(Settings),
-    174,
+    176,
     gSettingsFields,
     "\0\0DefaultDisplayMode\0DefaultZoom\0DisableJavaScript\0AllowExternalImages\0EnableTeXEnhancements\0EscToExit\0Ful"
     "lPathInTitle\0InverseSearchCmdLine\0LazyLoading\0MainWindowBackground\0NoHomeTab\0HomePageSortByFrequentlyRead\0Ho"
-    "mePageViewMode\0HomePageMaxRecentItems\0HomePageThumbnailSize\0FilePicker\0PrinterUI\0ReloadModifiedDocuments\0Rem"
-    "emberOpenedFiles\0RememberStatePerDocument\0RestoreSession\0ReuseInstance\0ShowMenubar\0ShowMenubarWithTabs\0ShowP"
-    "ageNumberInTabs\0ShowHomePageReadingProgress\0ShowChaptersInEbooks\0ShowTips\0CustomColors\0ShowToolbar\0Toolbar\0"
-    "ToolbarPosition\0SearchUIFloating\0ShowFavorites\0SortFavoritesByName\0ShowToc\0AlwaysShowSidebar\0SidebarOnRight"
-    "\0SidebarWindowSize\0ShowLinks\0HighlightFormFields\0ClickEdgeToTurnPage\0DisableLinks\0ExplorerQuickLook\0Remembe"
-    "rViewOffsetOnPageTurn\0MouseWheelTurnsPage\0ScrollEdgeTurnsPage\0ShowDocumentFocusIndicator\0ShowAnnotationNotific"
-    "ation\0ShowFileNavigateHint\0ShowAnnotationAuthorInTooltip\0ShowTocPageNumbers\0AutoGenerateTOC\0ShowStartPage\0Si"
-    "debarDx\0Scrollbars\0ScrollbarInSinglePage\0SmoothScroll\0ScrollLineAmount\0SaveMemory\0PaddingAfterLastPage\0Igno"
-    "reDestinationZoom\0HighlightLinkDestination\0CitationHoverDelay\0ReadAloudVoiceId\0ReadAloudSpeed\0ReadingAutoScro"
-    "llSpeed\0ReadingBar\0FastScrollOverScrollbar\0PreventSleepInFullscreen\0MinTabWidth\0TabWidth\0Theme\0HelpTheme\0L"
-    "astLightTheme\0LastDarkTheme\0DocumentColorsFollowTheme\0TocDy\0ToolbarCustomLayout\0ToolbarShowReadAloud\0Toolbar"
-    "Size\0TreeFontName\0TreeFontSize\0InterfaceScale\0UIFontFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEn"
-    "hance\0DisableAutoLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0"
-    "ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0"
-    "ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0Tra"
-    "nslateEngine\0\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandl"
-    "ers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserWidth\0Pinn"
-    "edAnnotationTools\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0Wind"
-    "owState\0WindowPos\0SearchUIWindowPos\0HelpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0"
-    "OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
+    "mePageViewMode\0HomePageMaxRecentItems\0TabListVisibleItems\0ScrollbarWidth\0HomePageThumbnailSize\0FilePicker\0Pr"
+    "interUI\0ReloadModifiedDocuments\0RememberOpenedFiles\0RememberStatePerDocument\0RestoreSession\0ReuseInstance\0Sh"
+    "owMenubar\0ShowMenubarWithTabs\0ShowPageNumberInTabs\0ShowHomePageReadingProgress\0ShowChaptersInEbooks\0ShowTips"
+    "\0CustomColors\0ShowToolbar\0Toolbar\0ToolbarPosition\0SearchUIFloating\0ShowFavorites\0SortFavoritesByName\0ShowT"
+    "oc\0AlwaysShowSidebar\0SidebarOnRight\0SidebarWindowSize\0ShowLinks\0HighlightFormFields\0ClickEdgeToTurnPage\0Dis"
+    "ableLinks\0ExplorerQuickLook\0RememberViewOffsetOnPageTurn\0MouseWheelTurnsPage\0ScrollEdgeTurnsPage\0ShowDocument"
+    "FocusIndicator\0ShowAnnotationNotification\0ShowFileNavigateHint\0ShowAnnotationAuthorInTooltip\0ShowTocPageNumber"
+    "s\0AutoGenerateTOC\0ShowStartPage\0SidebarDx\0Scrollbars\0ScrollbarInSinglePage\0SmoothScroll\0ScrollLineAmount\0S"
+    "aveMemory\0PaddingAfterLastPage\0IgnoreDestinationZoom\0HighlightLinkDestination\0CitationHoverDelay\0ReadAloudVoi"
+    "ceId\0ReadAloudSpeed\0ReadingAutoScrollSpeed\0ReadingBar\0FastScrollOverScrollbar\0PreventSleepInFullscreen\0MinTa"
+    "bWidth\0TabWidth\0Theme\0HelpTheme\0LastLightTheme\0LastDarkTheme\0DocumentColorsFollowTheme\0TocDy\0ToolbarCustom"
+    "Layout\0ToolbarShowReadAloud\0ToolbarSize\0TreeFontName\0TreeFontSize\0InterfaceScale\0UIFontFamily\0UIFontSize\0D"
+    "isableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionTo"
+    "olbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI"
+    "\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0Tr"
+    "anslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDef"
+    "aults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0L"
+    "aserLifetimeSeconds\0LaserWidth\0PinnedAnnotationTools\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPassw"
+    "ords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0HelpWindowPos\0FileStates\0SessionData"
+    "\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
     "\0\0default layout of pages. valid values: automatic, single page, facing, book view, continuous, continuous "
     "facing, continuous book view, page aspect. page aspect (3.7+): first open of a PDF, XPS, DjVu or PostScript file "
     "uses page 1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered "
@@ -2494,10 +2507,11 @@ static const StructInfo gSettingsInfo = {
     "#80fff200 is a marker meaning \"use the theme's color\", so setting any other value also colorizes the toolbar "
     "and sidebars\0if true, doesn't open Home tab\0if true, the home page lists documents by how often they've been "
     "opened (the pre-3.6 behavior); if false, the most recently opened come first\0valid values: thumbnails, "
-    "list\0maximum recent documents shown on the home page, from 1 to 200\0home grid preview size in percent, from 75 "
-    "to 250; Ctrl+wheel also adjusts it\0valid values: (empty), os, sumatrapdf\0valid values: (empty), auto, modern, "
-    "classic\0if true, a document will be reloaded automatically whenever it's changed (currently doesn't work for "
-    "documents shown in the ebook UI)\0if true, keep a history of opened documents and their display settings "
+    "list\0maximum recent documents shown on the home page, from 1 to 200\0maximum visible rows in the open-file tab "
+    "list, from 1 to 50\0app scrollbar width in logical pixels, from 8 to 40\0home grid preview size in percent, from "
+    "75 to 250; Ctrl+wheel also adjusts it\0valid values: (empty), os, sumatrapdf\0valid values: (empty), auto, "
+    "modern, classic\0if true, a document will be reloaded automatically whenever it's changed (currently doesn't work "
+    "for documents shown in the ebook UI)\0if true, keep a history of opened documents and their display settings "
     "(FileStates); closing a document doesn't remove it from the history. Also required for saving SessionData\0if "
     "true, store display settings for each document separately (i.e. everything after UseDefaultState in "
     "FileStates)\0if true, documents that were still open when the last window was closed (SessionData) are reopened "

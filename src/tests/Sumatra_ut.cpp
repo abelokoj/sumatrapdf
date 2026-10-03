@@ -83,6 +83,8 @@ bool Canvas_UnitTestScrollLineAmount();
 bool Canvas_UnitTestPointerInput();
 bool Canvas_UnitTestLaserExpiry();
 bool Canvas_UnitTestLaserWidth();
+bool Canvas_UnitTestToolNavigation();
+bool Canvas_UnitTestLassoGeometry();
 bool Installer_UnitTestsIdentity();
 void VocabularyDialog_UnitTests();
 void StudyExport_UnitTests();
@@ -90,13 +92,21 @@ void EnhancedUpdate_UnitTests();
 bool AppTools_UnitTestsStorage();
 bool AppSettings_UnitTestsUiFonts();
 bool AppSettings_UnitTestsUiScale();
+bool AppSettings_UnitTestsSession();
 bool AnnotPlacement_UnitTestInkProfiles();
 void ToolbarLayout_UnitTests();
+void DropDown_UnitTestsDeferred();
 void FindBarLayout_UnitTests();
 void EditSizing_UnitTests();
 bool HomePage_UnitTestsTextSizing();
 bool HomePage_UnitTestsCompactHeader();
 bool SettingsDialog_UnitTestsSizing();
+bool RoundedControl_UnitTestHidden();
+void WindowCorners_UnitTests();
+void TabsCtrl_UnitTests();
+void RefHoverPopup_UnitTests();
+bool OverlayScrollbar_UnitTestsNative();
+void ReadingColors_UnitTests();
 bool CpdfBookmarks_UnitTests();
 bool AnnotEditToolbar_UnitTestsFontRefresh();
 bool RegistryProviders_UnitTests();
@@ -590,6 +600,15 @@ int RunAppUnitTests(bool forAi) {
         SetupForAi();
     }
     printf("Running unit tests\n");
+#if IS_DEBUG
+    WCHAR settingsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SETTINGS_TIMING_ONLY", settingsOnly, dimof(settingsOnly))) {
+        utassert(RoundedControl_UnitTestHidden());
+        utassert(Canvas_UnitTestToolNavigation());
+        utassert(SettingsDialog_UnitTestsSizing());
+        return utassert_print_results();
+    }
+#endif
 
     BaseUtilTest();
     ByteOrderTests();
@@ -644,6 +663,8 @@ int RunAppUnitTests(bool forAi) {
     utassert(Canvas_UnitTestPointerInput());
     utassert(Canvas_UnitTestLaserExpiry());
     utassert(Canvas_UnitTestLaserWidth());
+    utassert(Canvas_UnitTestToolNavigation());
+    utassert(Canvas_UnitTestLassoGeometry());
     utassert(Installer_UnitTestsIdentity());
     VocabularyDialog_UnitTests();
     StudyExport_UnitTests();
@@ -651,12 +672,20 @@ int RunAppUnitTests(bool forAi) {
     utassert(AppTools_UnitTestsStorage());
     utassert(AppSettings_UnitTestsUiFonts());
     utassert(AppSettings_UnitTestsUiScale());
+    utassert(AppSettings_UnitTestsSession());
     utassert(AnnotPlacement_UnitTestInkProfiles());
     ToolbarLayout_UnitTests();
+    DropDown_UnitTestsDeferred();
     FindBarLayout_UnitTests();
     EditSizing_UnitTests();
     utassert(HomePage_UnitTestsTextSizing());
     utassert(SettingsDialog_UnitTestsSizing());
+    utassert(RoundedControl_UnitTestHidden());
+    WindowCorners_UnitTests();
+    TabsCtrl_UnitTests();
+    RefHoverPopup_UnitTests();
+    utassert(OverlayScrollbar_UnitTestsNative());
+    ReadingColors_UnitTests();
     utassert(HomePage_UnitTestsCompactHeader());
     utassert(CpdfBookmarks_UnitTests());
     utassert(AnnotEditToolbar_UnitTestsFontRefresh());

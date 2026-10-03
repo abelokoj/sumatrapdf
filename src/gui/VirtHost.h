@@ -140,6 +140,8 @@ Point UiCursorScreenPos();
 int UiTooltipDelayMs();
 // height of a horizontal scrollbar the OS draws
 int UiHScrollbarDy();
+extern int (*gUiScrollbarWidth)(int dpi);
+int UiScrollbarWidth(int dpi);
 // width of the 3d border the OS draws around a sunken control
 int UiEdgeDx();
 // show a cursor; does nothing for CursorId::None

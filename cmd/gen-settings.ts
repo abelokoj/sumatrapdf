@@ -1166,6 +1166,8 @@ const fileState: Field[] = [
     "if true, the view can be panned past the page edges, so any part of a page can be brought to the center of the window",
   ).ver("3.7"),
   field("BgCol", Color, "", "if given, overrides the background color for this document").ver("3.7"),
+  field("PageTextColor", Color, "", "reading foreground color for this file; empty follows the theme"),
+  field("PageBackgroundColor", Color, "", "reading page background for this file; empty follows the theme"),
   field("TabCol", Color, "", "if given, overrides the tab color for this document").ver("3.7"),
   compactArray(
     "TocState",
@@ -1201,6 +1203,8 @@ const fileStateLayout = [
   "DisplayMode",
   "Zoom",
   "BgCol",
+  "PageTextColor",
+  "PageBackgroundColor",
   "TabCol",
   "OpenCount",
   "PageNo",
@@ -1348,6 +1352,8 @@ const globalPrefs: Field[] = [
     .ver("3.7")
     .doc("valid values: thumbnails, list"),
   field("HomePageMaxRecentItems", Int, 30, "maximum recent documents shown on the home page, from 1 to 200"),
+  field("TabListVisibleItems", Int, 10, "maximum visible rows in the open-file tab list, from 1 to 50"),
+  field("ScrollbarWidth", Int, 20, "app scrollbar width in logical pixels, from 8 to 40"),
   field(
     "HomePageThumbnailSize",
     Int,
@@ -2081,6 +2087,8 @@ const globalPrefsLayout = [
   "HomePageViewMode",
   "HomePageThumbnailSize",
   "HomePageMaxRecentItems",
+  "TabListVisibleItems",
+  "ScrollbarWidth",
   "FilePicker",
   "CustomColors",
   "Toolbar",

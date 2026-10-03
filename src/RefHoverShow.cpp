@@ -67,7 +67,7 @@ void RefHoverOnTimer(RefHoverState* s, HWND hwndCanvas, EngineBase* engine, floa
     if (mediabox.dx <= 0.f || mediabox.dy <= 0.f) {
         return;
     }
-    if (destY <= 0.f || destY >= mediabox.dy - 1.f) {
+    if (RefHoverShouldResolveDestY(mediabox, destY)) {
         destY = 0.f;
         float resolved = RefHoverResolveDestYFromSourceText(engine, s->pending.srcPage, s->pending.srcRect, destPage);
         if (resolved >= 0.f) {
@@ -88,7 +88,7 @@ void RefHoverOnTimer(RefHoverState* s, HWND hwndCanvas, EngineBase* engine, floa
     // bitmap. Empty (dx/dy <= 0) otherwise.
     RectF continuation{};
     if (useLinkZoom) {
-        region = RectF{0.f, destY, mediabox.dx, mediabox.dy - destY};
+        region = RefHoverDestinationRegion(mediabox, destX, destY);
     } else {
         region = DetectRegion(engine, destPage, mediabox, destX, destY, &continuation, MissingEntry::Empty);
         bool regionEmpty = region.dx <= 0.f || region.dy <= 0.f;

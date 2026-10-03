@@ -75,6 +75,13 @@ struct ToolbarButtonInfo {
     bool isText = false;
 };
 
+static int PinnedToolCommand(Str);
+static bool ShowPinToolMenu(MainWindow*, int);
+static const char* kHandToolIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8 12V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v8c0 5-3 8-7 8-2 0-4-1-5-3l-4-5a2 2 0 0 1 3-3l1 1Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>)";
+static const char* kLassoToolIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 15c-2-1-3-3-2-6 1-4 5-6 10-5 5 1 8 4 6 8-2 3-7 5-11 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2" stroke-linecap="round"/><path d="M9 14c-3-1-5 0-5 2 0 2 4 3 5 1 1-1 0-3-1-2-1 2 0 6 3 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>)";
+
 static bool FitToolbarGroups(const Vec<int>& widths, int available, int gap, int overflowDx, int brandIdx,
                              Vec<bool>& visible) {
     VecReset(visible);
@@ -98,6 +105,38 @@ static bool FitToolbarGroups(const Vec<int>& widths, int available, int gap, int
     return true;
 }
 
+static bool FitScrolledToolbarGroups(const Vec<int>& widths, int available, int gap, int controlsDx, int brandIdx,
+                                     int& first, Vec<bool>& visible, bool& before, bool& after) {
+    before = after = false;
+    if (!FitToolbarGroups(widths, available, gap, controlsDx, brandIdx, visible)) {
+        first = 0;
+        return false;
+    }
+    VecReset(visible);
+    for (int i = 0; i < len(widths); i++) VecAppend(visible, false);
+    first = std::clamp(first, 0, std::max(0, len(widths) - 1));
+    int remaining = std::max(0, available - controlsDx - gap);
+    bool showed = false;
+    for (int i = 0; i < len(widths); i++) {
+        if (i == brandIdx || widths[i] <= 0) continue;
+        if (i < first) {
+            before = true;
+            continue;
+        }
+        int needed = widths[i] + (showed ? gap : 0);
+        if (needed > remaining) {
+            after = true;
+            continue;
+        }
+        // Keep a contiguous run: arrows move through groups in displayed order.
+        if (after) continue;
+        visible[i] = true;
+        remaining -= needed;
+        showed = true;
+    }
+    return true;
+}
+
 static int LocationEditWidth(int preferred, int minimum, int cap) {
     return std::min(std::max(preferred, minimum), std::max(minimum, cap));
 }
@@ -108,6 +147,8 @@ static int LocationEditCap(int available, int fixedDx, int reservedDx, int field
 }
 
 #if IS_DEBUG
+static void ToolbarInteractionTests();
+
 void ToolbarLayout_UnitTests() {
     Vec<int> widths;
     for (int width : {180, 120, 170, 100}) VecAppend(widths, width);
@@ -126,6 +167,21 @@ void ToolbarLayout_UnitTests() {
     utassert(!FitToolbarGroups(widths, 100, 6, 36, -1, visible));
     utassert(!visible[0] && visible[1]);
 
+    VecReset(widths);
+    for (int width : {180, 120, 170, 100}) VecAppend(widths, width);
+    int first = 0;
+    bool before = false, after = false;
+    utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, 0, first, visible, before, after));
+    utassert(!visible[0] && visible[1] && !visible[2] && !before && after);
+    first = 2;
+    utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, 0, first, visible, before, after));
+    utassert(!visible[1] && visible[2] && !visible[3] && before && after);
+    first = 3;
+    utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, 0, first, visible, before, after));
+    utassert(visible[3] && before && !after);
+    utassert(!FitScrolledToolbarGroups(widths, 600, 6, 108, 0, first, visible, before, after));
+    utassert(first == 0 && !before && !after && visible[0] && visible[3]);
+
     // Empty and one-digit labels stay compact; longer text grows until capped.
     utassert(LocationEditWidth(0, 24, 100) == 24);
     utassert(LocationEditWidth(18, 24, 100) == 24);
@@ -140,6 +196,7 @@ void ToolbarLayout_UnitTests() {
     utassert(LocationEditCap(200, 140, 36, 2) == 12);
     utassert(LocationEditCap(100, 140, 36, 1) == 0);
     utassert(LocationEditCap(1200, 160, 72, 1) == 300);
+    ToolbarInteractionTests();
 }
 #endif
 
@@ -210,6 +267,12 @@ struct ToolbarLine : HBox {
     int brandIdx = -1;
     int findGroupIdx = -1;
     ToolbarLineKind lineKind;
+    VirtIconButton* previousButton = nullptr;
+    VirtIconButton* nextButton = nullptr;
+    int firstGroup = 0;
+    int wheelRemainder = 0;
+    bool canScrollBefore = false;
+    bool canScrollAfter = false;
 
     explicit ToolbarLine(ToolbarVirt* toolbar, ToolbarLineKind kind = ToolbarLineKind::Main)
         : tb(toolbar), lineKind(kind) {
@@ -222,6 +285,19 @@ struct ToolbarLine : HBox {
 
     Vec<VirtCtrl*>& OverflowItems() const {
         return lineKind == ToolbarLineKind::Main ? tb->overflowItems : tb->annotationOverflowItems;
+    }
+
+    bool Scroll(int direction) {
+        if ((direction < 0 && !canScrollBefore) || (direction > 0 && !canScrollAfter)) return false;
+        Restore();
+        int next = firstGroup + direction;
+        int count = len(children) - 3;
+        while (next >= 0 && next < count && (next == brandIdx || children[next].layout->MinIntrinsicWidth(0) == 0))
+            next += direction;
+        firstGroup = std::clamp(next, 0, std::max(0, count - 1));
+        tb->host->Relayout();
+        tb->host->Invalidate(true);
+        return true;
     }
 
     void Restore() {
@@ -276,11 +352,14 @@ struct ToolbarLine : HBox {
         }
         auto* overflowButton = OverflowButton();
         overflowButton->SetVisibility(Visibility::Collapse);
+        previousButton->SetVisibility(Visibility::Collapse);
+        nextButton->SetVisibility(Visibility::Collapse);
         int available = bc.HasBoundedWidth() ? bc.max.dx : Inf;
-        int overflowDx = overflowButton->MinIntrinsicWidth(0);
+        int overflowDx = overflowButton->MinIntrinsicWidth(0) + previousButton->MinIntrinsicWidth(0) +
+                         nextButton->MinIntrinsicWidth(0) + 2 * gap;
         SizeLocationFields(available, overflowDx);
         Vec<int> widths;
-        for (int i = 0; i < len(children) - 1; i++) {
+        for (int i = 0; i < len(children) - 3; i++) {
             auto* child = children[i].layout;
             VecAppend(widths, IsCollapsed(child) ? 0 : child->MinIntrinsicWidth(0));
         }
@@ -292,11 +371,16 @@ struct ToolbarLine : HBox {
             widths[findGroupIdx] = withoutFind + searchDx;
         }
         Vec<bool> visible;
-        bool overflow = FitToolbarGroups(widths, available, gap, overflowDx, brandIdx, visible);
+        bool overflow = FitScrolledToolbarGroups(widths, available, gap, overflowDx, brandIdx, firstGroup, visible,
+                                                 canScrollBefore, canScrollAfter);
         for (int i = 0; i < len(widths); i++) {
             if (widths[i] > 0 && !visible[i]) HideLayout(children[i].layout);
         }
         overflowButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
+        previousButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
+        nextButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
+        previousButton->SetIsEnabled(canScrollBefore);
+        nextButton->SetIsEnabled(canScrollAfter);
         Size size = HBox::Layout(bc);
         size.dy = bc.ConstrainHeight(MinIntrinsicHeight(available));
         return size;
@@ -309,6 +393,12 @@ struct ToolbarLine : HBox {
             Rect button = overflowButton->lastBounds;
             button.x = rtl ? r.x : r.Right() - button.dx;
             overflowButton->SetBounds(button);
+            for (VirtIconButton* nav : {nextButton, previousButton}) {
+                Rect next = nav->lastBounds;
+                next.x = rtl ? button.Right() + gap : button.x - gap - next.dx;
+                nav->SetBounds(next);
+                button = next;
+            }
         }
     }
 };
@@ -330,6 +420,8 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {kEnhancedIconRotateRight, CmdRotateRight, TrN("Rotate Right")},
     {nullptr, 0, {}},
     {kEnhancedIconEdit, CmdToggleEditPDF, TrN("Edit PDF")},
+    {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
+    {kLassoToolIcon, CmdAnnotationLasso, TrN("Lasso: select, move, resize or delete annotations")},
     {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Pen: tools, colors and thickness")},
     {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Text highlighter")},
     {kEnhancedIconUnderline, CmdCreateAnnotUnderline, TrN("Underline")},
@@ -364,6 +456,8 @@ static ToolbarButtonInfo gToolbarButtons[] = {
 constexpr int kButtonsCount = dimof(gToolbarButtons);
 
 static ToolbarButtonInfo gPdfAnnotationButtons[] = {
+    {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
+    {kLassoToolIcon, CmdAnnotationLasso, TrN("Lasso: select, move, resize or delete annotations")},
     {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Highlighter: select text to highlight it")},
     {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Ink")},
     {gIconAnnotHighlight, CmdCreateAnnotHighlight, TrN("Highlight Selection")},
@@ -501,6 +595,15 @@ VirtCtrl* ToolbarItemFromPoint(MainWindow* win, Point pt) {
         return nullptr;
     }
     for (VirtCtrl* button : {tb->overflowButton, tb->annotationOverflowButton}) {
+        if (button && button->IsVisible() && button->BoundsInWindow().Contains(pt)) return button;
+    }
+    for (ToolbarLine* line : {tb->mainRow, tb->annotationLine}) {
+        if (!line || IsCollapsed(line) || (line == tb->annotationLine && IsCollapsed(tb->annotationRow))) continue;
+        for (VirtCtrl* button : {line->previousButton, line->nextButton}) {
+            if (button && button->IsVisible() && button->BoundsInWindow().Contains(pt)) return button;
+        }
+    }
+    for (VirtCtrl* button : tb->pinnedItems) {
         if (button && button->IsVisible() && button->BoundsInWindow().Contains(pt)) return button;
     }
     for (VirtCtrl* w : tb->items) {
@@ -967,8 +1070,10 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     }
 
     if (win->toolbarVirt) {
-        for (VirtCtrl* pinned : win->toolbarVirt->pinnedItems)
-            pinned->SetIsEnabled(IsCmdEnabled(win, CmdCreateAnnotInk, ctx));
+        auto* presets = gSettings->pinnedAnnotationTools;
+        for (int i = 0; presets && i < len(win->toolbarVirt->pinnedItems) && i < len(*presets); i++)
+            win->toolbarVirt->pinnedItems[i]->SetIsEnabled(
+                IsCmdEnabled(win, PinnedToolCommand((*presets)[i]->tool), ctx));
         if (Edit* zoom = win->toolbarVirt->zoomEdit) {
             zoom->SetIsEnabled(win->IsDocLoaded());
             if (GetFocus() != zoom->hwnd && win->IsDocLoaded())
@@ -978,6 +1083,8 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     SetToolbarButtonCheckedState(win, CmdCreateAnnotInk, IsPlacingInkAnnotation(win) && win->inkEraseMode == 0);
     SetToolbarButtonCheckedState(win, CmdInkEraser, win->inkEraseMode == 1);
     SetToolbarButtonCheckedState(win, CmdToggleLaserPointer, IsLaserPointerActive(win));
+    SetToolbarButtonCheckedState(win, CmdHandTool, win->handTool);
+    SetToolbarButtonCheckedState(win, CmdAnnotationLasso, win->annotationLasso.active);
 
     bool showPdfAnnotationsToolbar = win->pdfAnnotationsToolbarEnabled && ctx->isPdf && ctx->supportsAnnots;
     SetPdfAnnotationsToolbarVisible(win, showPdfAnnotationsToolbar);
@@ -1729,6 +1836,7 @@ void ToolbarSetFindExpanded(MainWindow* win, bool expanded, int minWidth, int pr
     tb->findExpanded = expanded;
     if (minWidth > 0) tb->findMinWidth = minWidth;
     if (preferredWidth > 0) tb->findPreferredWidth = preferredWidth;
+    if (expanded) RevealToolbarTool(win, CmdFindFirst);
     tb->host->Relayout();
     tb->host->Invalidate(true);
 }
@@ -1887,6 +1995,10 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
     }
     // right-click: the drop-down, not the button's command
     if (ev->button == 1) {
+        if (ShowPinToolMenu(win, cmdId)) {
+            ev->didHandle = true;
+            return;
+        }
         if (ShowToolbarButtonDropdown(win, cmdId)) {
             ev->didHandle = true;
             return;
@@ -4005,6 +4117,7 @@ static Str PinnedToolName(MainWindow* win, int cmd) {
     if (cmd == CmdAnnotationHighlightBrush) return StrL("highlight");
     if (cmd == CmdCreateAnnotUnderline) return StrL("underline");
     if (cmd == CmdCreateAnnotStrikeOut) return StrL("strikeout");
+    if (cmd != CmdCreateAnnotInk) return GetCommandName(cmd);
     switch (win->inkPenStyle) {
         case InkPenStyle::Fountain:
             return StrL("fountain");
@@ -4027,7 +4140,19 @@ static int PinnedToolCommand(Str tool) {
     if (str::Eq(tool, StrL("brush"))) return CmdInkBrush;
     if (str::Eq(tool, StrL("pencil"))) return CmdInkPencil;
     if (str::Eq(tool, StrL("marker"))) return CmdInkHighlighter;
-    return CmdInkPen;
+    if (str::Eq(tool, StrL("ballpoint"))) return CmdInkPen;
+    return GetCommandIdByName(tool);
+}
+
+static bool IsPenPresetCommand(int cmd) {
+    return cmd == CmdInkPen || cmd == CmdInkFountain || cmd == CmdInkBrush || cmd == CmdInkPencil ||
+           cmd == CmdInkHighlighter;
+}
+
+static bool IsPinnableTool(int cmd) {
+    for (const auto& button : gPdfAnnotationButtons)
+        if (button.cmdId == cmd && cmd != 0) return true;
+    return cmd == CmdInkEraser;
 }
 
 static void RefreshPinnedBars() {
@@ -4053,14 +4178,17 @@ static void RemovePinnedTool(int index) {
 static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
     int cmd = ev->target->id;
     Str tool = PinnedToolName(win, cmd);
-    Color color = AnnotCurrentColor(win, cmd);
-    float width = InkPenWidth(win);
+    bool presetColor = cmd == CmdCreateAnnotInk || cmd == CmdAnnotationHighlightBrush ||
+                       cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut;
+    Color color = presetColor ? AnnotCurrentColor(win, cmd) : kColorUnset;
+    Str colorName = presetColor ? SerializeColorTemp(color) : StrL("");
+    float width = cmd == CmdCreateAnnotInk ? InkPenWidth(win) : 0;
     auto*& presets = gSettings->pinnedAnnotationTools;
     if (!presets) presets = new Vec<PinnedAnnotationTool*>();
     for (int i = 0; i < len(*presets); i++) {
         auto* preset = (*presets)[i];
-        if (str::Eq(preset->tool, tool) && str::Eq(preset->color, SerializeColorTemp(color)) &&
-            fabsf(preset->width - width) < 0.001f) {
+        if (str::Eq(preset->tool, tool) && str::Eq(preset->color, colorName) &&
+            (cmd != CmdCreateAnnotInk || fabsf(preset->width - width) < 0.001f)) {
             RemovePinnedTool(i);
             ev->didHandle = true;
             return;
@@ -4069,7 +4197,7 @@ static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
     if (len(*presets) >= 32) return;
     auto* preset = AllocStruct<PinnedAnnotationTool>();
     str::ReplaceWithCopy(&preset->tool, tool);
-    str::ReplaceWithCopy(&preset->color, SerializeColorTemp(color));
+    str::ReplaceWithCopy(&preset->color, colorName);
     preset->width = width;
     VecAppend(*presets, preset);
     ScheduleSaveSettings();
@@ -4080,8 +4208,10 @@ static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
 struct PinnedToolButton : VirtIconButton {
     int index = 0;
     Color inkColor = kColBlack;
+    bool hasColor = true;
     void Paint(VirtPaintCtx& ctx) override {
         VirtIconButton::Paint(ctx);
+        if (!hasColor) return;
         int sz = UiScalePx(9);
         Rect dot{ctx.bounds.Right() - sz - UiScalePx(2), ctx.bounds.Bottom() - sz - UiScalePx(2), sz, sz};
         ctx.gfx->FillEllipse(dot, TbTextColor());
@@ -4105,11 +4235,13 @@ static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     if (cmd == CmdAnnotationHighlightBrush || cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut) {
         SetAnnotPresetColor(win, cmd, color);
         HwndSendCommand(win->hwndFrame, cmd);
-    } else {
+    } else if (IsPenPresetCommand(cmd)) {
         HandlePenToolCommand(win, cmd);
         SetInkPenColor(win, color);
         SetInkPenWidth(win, preset->width);
         StartAnnotationPlacement(win, CmdCreateAnnotInk);
+    } else if (cmd > CmdNone) {
+        HwndSendCommand(win->hwndFrame, cmd);
     }
     HideToolbarHoverDropdown(win);
     ToolbarUpdateStateForWindow(win, true);
@@ -4131,14 +4263,21 @@ static ILayout* BuildPinnedTools(MainWindow* win) {
         button->index = i;
         button->id = CmdLast + 2000 + i;
         button->inkColor = ParseColor(preset->color);
+        button->hasColor = len(preset->color) > 0;
         button->padding = {UiScalePx(4), UiScalePx(6), UiScalePx(4), UiScalePx(6)};
         button->cornerRadius = UiScalePx(6);
-        button->pixmap =
-            GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
+        int cmd = PinnedToolCommand(preset->tool);
+        const char* svg = kEnhancedIconInk;
+        for (const auto& info : gPdfAnnotationButtons)
+            if (info.cmdId == cmd && info.icon) svg = info.icon;
+        if (cmd == CmdInkEraser) svg = kEnhancedIconEraser;
+        button->pixmap = GetCachedPixmapForSvg(Str(svg), tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
         button->pixmapDisabled =
-            GetCachedPixmapForSvg(Str(kEnhancedIconInk), tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
-        button->SetTooltip(
-            fmt("%s Â· %s Â· %.2f pt. Right-click to unpin.", preset->tool, preset->color, preset->width));
+            GetCachedPixmapForSvg(Str(svg), tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
+        Str name = GetCommandDescription(cmd);
+        button->SetTooltip(button->hasColor
+                               ? fmt("%s - %s - %.2f pt. Right-click to unpin.", name, preset->color, preset->width)
+                               : fmt("%s. Right-click to unpin.", name));
         button->onClick = MkFunc1(PinnedToolClick, win);
         button->onKeyDown = MkFunc1(OnToolbarKey, win);
         button->SetFlag(vwfFocusable, true);
@@ -4148,12 +4287,78 @@ static ILayout* BuildPinnedTools(MainWindow* win) {
     return row;
 }
 
+static bool ShowPinToolMenu(MainWindow* win, int cmd) {
+    if (!IsPinnableTool(cmd)) return false;
+    Rect anchor = GetToolbarButtonScreenRect(win, cmd);
+    HideToolbarHoverDropdown(win);
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, ToWStrTemp(Tr("Pin / unpin this tool")).s);
+    if (IsAnnotColorCmd(cmd)) AppendMenuW(menu, MF_STRING, 2, ToWStrTemp(Tr("Tools, colors and settings")).s);
+    MarkMenuOwnerDraw(menu);
+    int picked =
+        TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    if (picked == 1) {
+        VirtCtrl target;
+        target.id = cmd;
+        VirtMouseEvent event;
+        event.target = &target;
+        PinToolClick(win, &event);
+    } else if (picked == 2) {
+        ShowToolbarButtonDropdown(win, cmd);
+    }
+    ToolbarNoteDropdownClosed();
+    return true;
+}
+
 static void ShowToolbarOverflow(MainWindow* win, int anchorId);
 static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev);
 
 static void OnOverflowClicked(MainWindow* win, VirtMouseEvent* ev) {
     if (!ToolbarDropdownJustClosed()) ShowToolbarOverflow(win, ev->target->id);
     ev->didHandle = true;
+}
+
+static void OnToolbarScrollClicked(MainWindow* win, VirtMouseEvent* ev) {
+    auto* tb = win->toolbarVirt;
+    auto* line = ev->target->userData ? tb->annotationLine : tb->mainRow;
+    HideToolbarHoverDropdown(win);
+    line->Scroll(ev->target == line->previousButton ? -1 : 1);
+    ev->didHandle = true;
+}
+
+void RevealToolbarTool(MainWindow* win, int cmd) {
+    auto* tb = win->toolbarVirt;
+    if (!tb) return;
+    auto contains = [&](auto&& self, ILayout* item) -> bool {
+        if (auto* ctrl = item->AsVirtCtrl()) {
+            if (ctrl->id == cmd) return true;
+            int index = VecFind(tb->pinnedItems, ctrl);
+            if (index >= 0 && gSettings) {
+                auto* presets = gSettings->pinnedAnnotationTools;
+                if (presets && index < len(*presets) && (*presets)[index] &&
+                    PinnedToolCommand((*presets)[index]->tool) == cmd)
+                    return true;
+            }
+        }
+        for (int i = 0; i < item->LayoutChildCount(); i++)
+            if (self(self, item->LayoutChildAt(i))) return true;
+        return false;
+    };
+    for (ToolbarLine* line : {tb->mainRow, tb->annotationLine}) {
+        if (!line || (line == tb->annotationLine && IsCollapsed(tb->annotationRow))) continue;
+        for (int i = 0; i < len(line->children) - 3; i++) {
+            auto* group = line->children[i].layout;
+            if (!contains(contains, group)) continue;
+            if (IsCollapsed(group)) {
+                line->firstGroup = i;
+                tb->host->Relayout();
+                tb->host->Invalidate(true);
+            }
+            return;
+        }
+    }
 }
 
 bool FocusToolbar(MainWindow* win, bool backwards) {
@@ -4219,7 +4424,9 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
     auto* tb = win->toolbarVirt;
     Rect anchor = GetToolbarButtonScreenRect(win, anchorId);
     if (!tb || anchor.IsEmpty()) return;
-    Vec<VirtCtrl*> hidden = anchorId == ToolbarAnnotOverflowId ? tb->annotationOverflowItems : tb->overflowItems;
+    Vec<VirtCtrl*> hidden = anchorId == ToolbarAnnotOverflowId ? tb->annotationItems : tb->items;
+    if (anchorId != ToolbarAnnotOverflowId)
+        for (VirtCtrl* pinned : tb->pinnedItems) VecAppend(hidden, pinned);
     CollapseFindBar(win);
     HideToolbarHoverDropdown(win);
     HMENU menu = CreatePopupMenu();
@@ -4298,6 +4505,11 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
     };
     for (VirtCtrl* ctrl : hidden) addItem(ctrl);
     MarkMenuOwnerDraw(menu);
+    MENUINFO info{sizeof(info)};
+    info.fMask = MIM_MAXHEIGHT;
+    info.cyMax = (UINT)((PlatformFontLineHeight(tb->platformFont) + UiScalePx(12)) *
+                        std::clamp(gSettings->tabListVisibleItems, 1, 50));
+    SetMenuInfo(menu, &info);
     UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (IsUIRtl() ? TPM_RIGHTALIGN | TPM_LAYOUTRTL : TPM_LEFTALIGN);
     int picked =
         TrackPopupMenu(menu, flags, IsUIRtl() ? anchor.Right() : anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
@@ -4308,6 +4520,7 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
     if (picked >= kActionFirst && picked - kActionFirst < len(actions)) {
         auto action = actions[picked - kActionFirst];
         if (action.kind == ToolbarMenuActionKind::Palette) {
+            RevealToolbarTool(win, action.id);
             ShowToolbarButtonDropdown(win, action.id);
             auto* hover = win->toolbarVirt->hoverHost;
             if (hover && hover->vroot) hover->vroot->TabNavigate(false);
@@ -4485,8 +4698,12 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
     }
     mainRow->AddChild(group);
-    if (gSettings->pinnedAnnotationTools && len(*gSettings->pinnedAnnotationTools) > 0)
-        mainRow->AddChild(BuildPinnedTools(win));
+    if (gSettings->pinnedAnnotationTools && len(*gSettings->pinnedAnnotationTools) > 0) {
+        auto* pinned = (HBox*)BuildPinnedTools(win);
+        for (auto& item : pinned->children) mainRow->AddChild(item.layout);
+        VecClear(pinned->children);
+        delete pinned;
+    }
 
     auto* annotationBox = new ToolbarLine(tb, ToolbarLineKind::Annotations);
     tb->annotationLine = annotationBox;
@@ -4524,11 +4741,34 @@ static void BuildToolbarLayout(MainWindow* win) {
     annotationBox->AddChild(annotationGroup);
 
     mainRow->AddChild(appearance);
+    auto addScrollButtons = [&](ToolbarLine* line, bool annotations) {
+        for (int direction : {-1, 1}) {
+            auto* button = new VirtIconButton();
+            button->id = CmdLast + 30 + (annotations ? 2 : 0) + (direction > 0 ? 1 : 0);
+            button->userData = annotations ? 1 : 0;
+            button->padding = {cyPad, iconPad, cyPad, iconPad};
+            Str svg = Str(direction < 0 ? kEnhancedIconPrevious : kEnhancedIconNext);
+            button->pixmap = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, fg, TbBgColor());
+            button->pixmapDisabled = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, dis, TbBgColor());
+            button->SetTooltip(direction < 0 ? Tr("Scroll toolbar left") : Tr("Scroll toolbar right"));
+            button->SetFlag(vwfFocusable, true);
+            button->onClick = MkFunc1(OnToolbarScrollClicked, win);
+            button->onKeyDown = MkFunc1(OnToolbarKey, win);
+            ApplyToolbarItemColors(button);
+            if (direction < 0)
+                line->previousButton = button;
+            else
+                line->nextButton = button;
+            line->AddChild(button);
+        }
+    };
+    addScrollButtons(mainRow, false);
+    addScrollButtons(annotationBox, true);
     auto* overflow = new VirtIconButton();
     overflow->id = ToolbarOverflowId;
     overflow->padding = {cyPad, iconPad, cyPad, iconPad};
     Str dots = StrL(
-        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></g></svg>)");
+        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>)");
     overflow->pixmap = GetCachedPixmapForSvg(dots, tb->iconSize, tb->iconSize, fg, TbBgColor());
     overflow->SetTooltip(Tr("More toolbar commands"));
     overflow->SetFlag(vwfFocusable, true);
@@ -4743,6 +4983,7 @@ bool ToolbarFrameIsVisible(MainWindow* win) {
 }
 
 void ToolbarPostCommand(MainWindow* win, int cmdId) {
+    RevealToolbarTool(win, cmdId);
     LPARAM commandPoint = 0;
     if (cmdId >= CmdCreateAnnotFirst && cmdId <= CmdCreateAnnotLast && !CommandUsesPlacementMode(cmdId)) {
         Rect canvas = HwndClientRect(win->hwndCanvas);
@@ -4915,6 +5156,26 @@ static bool OnCaptionDrag(MainWindow* win, VirtHostNativeMsg* ev) {
 
 static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
     switch (ev->msg) {
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
+            if (GET_KEYSTATE_WPARAM(ev->wp) & MK_CONTROL) return;
+            auto* tb = win->toolbarVirt;
+            if (!tb || !tb->mainRow) return;
+            Point pt =
+                HwndMapWindowPoint(HWND_DESKTOP, win->hwndToolbar, Point{GET_X_LPARAM(ev->lp), GET_Y_LPARAM(ev->lp)});
+            auto* line =
+                tb->annotationLine && tb->annotationLine->lastBounds.Contains(pt) ? tb->annotationLine : tb->mainRow;
+            int delta = GET_WHEEL_DELTA_WPARAM(ev->wp);
+            line->wheelRemainder += ev->msg == WM_MOUSEHWHEEL ? delta : -delta;
+            while (std::abs(line->wheelRemainder) >= WHEEL_DELTA) {
+                int direction = line->wheelRemainder > 0 ? 1 : -1;
+                line->wheelRemainder -= direction * WHEEL_DELTA;
+                if (line->Scroll(direction)) HideToolbarHoverDropdown(win);
+            }
+            ev->didHandle = true;
+            ev->res = 0;
+            return;
+        }
         case WM_KEYDOWN:
             if (ev->wp == VK_TAB && !IsCtrlPressed() && !IsAltPressed()) {
                 auto* tb = win->toolbarVirt;
@@ -4949,3 +5210,108 @@ static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
 void ToolbarSetNativeHooks(MainWindow* win, VirtHost* host) {
     host->onNativeMsg = MkFunc1(OnToolbarNativeMsg, win);
 }
+
+#if IS_DEBUG
+static void ToolbarInteractionTests() {
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    ToolbarVirt toolbar;
+    win.toolbarVirt = &toolbar;
+    VirtHost::CreateArgs args;
+    args.className = WStrL("SumatraToolbarInteractionTest");
+    args.initialSize = {240, 40};
+    args.isPopup = true;
+    args.visible = false;
+    auto* host = VirtHost::Create(args);
+    utassert(host != nullptr);
+    if (!host) {
+        win.toolbarVirt = nullptr;
+        return;
+    }
+    toolbar.host = host;
+    win.hwndToolbar = host->native;
+    toolbar.rowDy = 36;
+    auto* line = new ToolbarLine(&toolbar);
+    toolbar.mainRow = line;
+    line->gap = 6;
+    int commands[] = {CmdGoToPrevPage, CmdGoToNextPage, CmdHandTool, CmdAnnotationLasso};
+    for (int cmd : commands) {
+        auto* button = new VirtIconButton();
+        button->id = cmd;
+        button->padding = {12, 50, 12, 50};
+        line->AddChild(button);
+        VecAppend(toolbar.items, (VirtCtrl*)button);
+    }
+    auto* pinned = new VirtIconButton();
+    pinned->id = CmdLast + 50;
+    pinned->padding = {12, 50, 12, 50};
+    line->AddChild(pinned);
+    VecAppend(toolbar.pinnedItems, (VirtCtrl*)pinned);
+    for (int direction : {-1, 1}) {
+        auto* button = new VirtIconButton();
+        button->id = CmdLast + 30 + (direction > 0 ? 1 : 0);
+        button->padding = {12, 12, 12, 12};
+        button->onClick = MkFunc1(OnToolbarScrollClicked, &win);
+        button->onKeyDown = MkFunc1(OnToolbarKey, &win);
+        button->SetFlag(vwfFocusable, true);
+        line->AddChild(button);
+        if (direction < 0)
+            line->previousButton = button;
+        else
+            line->nextButton = button;
+    }
+    toolbar.overflowButton = new VirtIconButton();
+    toolbar.overflowButton->id = ToolbarOverflowId;
+    toolbar.overflowButton->padding = {12, 12, 12, 12};
+    line->AddChild(toolbar.overflowButton);
+    ToolbarSetNativeHooks(&win, host);
+    host->SetLayout(line);
+    auto center = [](VirtCtrl* button) {
+        Rect rect = button->BoundsInWindow();
+        return Point{rect.x + rect.dx / 2, rect.y + rect.dy / 2};
+    };
+    Point screen = HwndMapWindowPoint(host->native, HWND_DESKTOP, {10, 10});
+    LPARAM wheelPoint = MAKELPARAM(screen.x, screen.y);
+    utassert(line->firstGroup == 0 && line->canScrollAfter && !line->canScrollBefore);
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA / 2), wheelPoint);
+    utassert(line->firstGroup == 0);
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA / 2), wheelPoint);
+    utassert(line->firstGroup == 1 && line->canScrollBefore);
+    SendMessageW(host->native, WM_MOUSEWHEEL, MAKEWPARAM(MK_CONTROL, WHEEL_DELTA), wheelPoint);
+    utassert(line->firstGroup == 1);
+    SendMessageW(host->native, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), wheelPoint);
+    utassert(line->firstGroup == 0);
+
+    // Caption dragging must leave these controls' clicks in the virtual input path.
+    win.tabsInTitlebar = true;
+    Point next = center(line->nextButton);
+    bool hitNext = ToolbarItemFromPoint(&win, next) == line->nextButton;
+    utassert(hitNext);
+    if (hitNext) {
+        SendMessageW(host->native, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(next.x, next.y));
+        SendMessageW(host->native, WM_LBUTTONUP, 0, MAKELPARAM(next.x, next.y));
+        utassert(line->firstGroup == 1);
+    }
+    host->vroot->SetFocus(line->nextButton);
+    SendMessageW(host->native, WM_KEYDOWN, VK_RETURN, 0);
+    utassert(line->firstGroup == 2);
+    Point previous = center(line->previousButton);
+    utassert(ToolbarItemFromPoint(&win, previous) == line->previousButton);
+    host->vroot->SetFocus(line->previousButton);
+    SendMessageW(host->native, WM_KEYDOWN, VK_SPACE, 0);
+    utassert(line->firstGroup == 1);
+
+    ToolbarPostCommand(&win, CmdAnnotationLasso);
+    utassert(line->firstGroup == 3 && toolbar.items[3]->IsVisible());
+    line->Scroll(1);
+    utassert(line->firstGroup == 4 && !line->canScrollAfter && pinned->IsVisible());
+    utassert(ToolbarItemFromPoint(&win, center(pinned)) == pinned);
+    host->SetBounds({0, 0, 640, 40});
+    host->Relayout();
+    utassert(line->firstGroup == 0 && !line->canScrollAfter && !line->canScrollBefore);
+    utassert(toolbar.overflowButton->GetVisibility() == Visibility::Collapse);
+    win.toolbarVirt = nullptr;
+    win.hwndToolbar = nullptr;
+    delete host;
+}
+#endif

@@ -337,6 +337,75 @@ void SetRect(Annotation* annot, RectF r) {
     MarkNotificationAsModified(e, annot);
 }
 
+bool TransformAnnotation(Annotation* annot, RectF from, RectF to) {
+    if (!AnnotationIsLive(annot) || from.dx <= 0 || from.dy <= 0 || to.dx <= 0 || to.dy <= 0) return false;
+    if (!AnnotationCanBeMoved(annot->type) && !AnnotationIsTextMarkup(annot->type)) return false;
+    auto* e = annot->engine;
+    auto* a = annot->pdfannot;
+    auto map = [&](fz_point p) -> fz_point {
+        return {to.x + (p.x - from.x) * to.dx / from.dx, to.y + (p.y - from.y) * to.dy / from.dy};
+    };
+    Vec<fz_point> points;
+    Vec<int> counts;
+    Vec<fz_quad> quads;
+    bool failed = false;
+    {
+        auto* ctx = e->Ctx();
+        AutoUnlockRecursiveMutex lock(&e->docLock);
+        fz_try(ctx) {
+            auto type = annot->type;
+            if (type == AnnotationType::Ink) {
+                int n = pdf_annot_ink_list_count(ctx, a);
+                for (int i = 0; i < n; i++) {
+                    int count = pdf_annot_ink_list_stroke_count(ctx, a, i);
+                    VecAppend(counts, count);
+                    for (int j = 0; j < count; j++)
+                        VecAppend(points, map(pdf_annot_ink_list_stroke_vertex(ctx, a, i, j)));
+                }
+                pdf_set_annot_ink_list(ctx, a, n, counts.els, points.els);
+            } else if (type == AnnotationType::Line) {
+                fz_point start, end;
+                pdf_annot_line(ctx, a, &start, &end);
+                pdf_set_annot_line(ctx, a, map(start), map(end));
+            } else if (type == AnnotationType::Polygon || type == AnnotationType::PolyLine) {
+                int n = pdf_annot_vertex_count(ctx, a);
+                for (int i = 0; i < n; i++) VecAppend(points, map(pdf_annot_vertex(ctx, a, i)));
+                pdf_set_annot_vertices(ctx, a, n, points.els);
+            } else if (AnnotationIsTextMarkup(type) || type == AnnotationType::Redact) {
+                int n = pdf_annot_quad_point_count(ctx, a);
+                for (int i = 0; i < n; i++) {
+                    fz_quad q = pdf_annot_quad_point(ctx, a, i);
+                    q.ul = map(q.ul);
+                    q.ur = map(q.ur);
+                    q.ll = map(q.ll);
+                    q.lr = map(q.lr);
+                    VecAppend(quads, q);
+                }
+                if (n > 0)
+                    pdf_set_annot_quad_points(ctx, a, n, quads.els);
+                else {
+                    fz_rect r = pdf_annot_rect(ctx, a);
+                    fz_point p = map({r.x0, r.y0}), end = map({r.x1, r.y1});
+                    pdf_set_annot_rect(ctx, a, {p.x, p.y, end.x, end.y});
+                }
+            } else {
+                fz_rect r = pdf_annot_rect(ctx, a);
+                fz_point p = map({r.x0, r.y0}), end = map({r.x1, r.y1});
+                pdf_set_annot_rect(ctx, a, {p.x, p.y, end.x, end.y});
+            }
+            pdf_update_annot(ctx, a);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+            failed = true;
+        }
+    }
+    if (failed) return false;
+    annot->bounds = GetBounds(annot);
+    MarkNotificationAsModified(e, annot);
+    return true;
+}
+
 static Str MupdfCStrDupTemp(const char* s) {
     if (!s) {
         return {};
@@ -3237,6 +3306,31 @@ bool Annotation_UnitTestInkRoundtrip() {
         Annotation* annot = annotations[0];
         ok = fabsf(BorderWidthF(annot) - 0.1f) < 0.001f && InkPenStyleTag(annot) == 3;
         SetBorderWidth(annot, 0.3f);
+        Vec<int> counts;
+        Vec<PointF> original;
+        GetInkList(annot, counts, original);
+        EngineMupdfBeginOperation(engine, "Resize lasso selection");
+        ok = ok && TransformAnnotation(annot, {0, 0, 100, 100}, {20, 30, 200, 50});
+        EngineMupdfEndOperation(engine);
+        Vec<PointF> transformed;
+        GetInkList(annot, counts, transformed);
+        ok = ok && len(transformed) == len(original);
+        for (int i = 0; ok && i < len(original); i++) {
+            ok = fabsf(transformed[i].x - (20 + original[i].x * 2)) < 0.001f &&
+                 fabsf(transformed[i].y - (30 + original[i].y * 0.5f)) < 0.001f;
+        }
+        Vec<Annotation*> removed;
+        ok = ok && EngineMupdfUndo(engine, removed);
+        EngineMupdfGetAnnotations(engine, annotations);
+        if (len(annotations) != 1) ok = false;
+        if (ok) {
+            Vec<PointF> restored;
+            GetInkList(annotations[0], counts, restored);
+            ok = len(restored) == len(original);
+            for (int i = 0; ok && i < len(original); i++)
+                ok = fabsf(restored[i].x - original[i].x) < 0.001f && fabsf(restored[i].y - original[i].y) < 0.001f;
+            ok = ok && EngineMupdfRedo(engine, removed);
+        }
     }
     Str savedPath = str::Dup(GetTempFilePathTemp(StrL("enhanced-ink")));
     ok = ok && EngineMupdfSaveCopy(engine, savedPath);

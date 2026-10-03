@@ -1599,7 +1599,7 @@ int VirtListBox::ScrollbarDx() {
     if (MaxScrollY() <= 0) {
         return 0;
     }
-    return DpiScaleByDpi(GetDpi(), 10);
+    return UiScrollbarWidth(GetDpi());
 }
 
 Rect VirtListBox::ContentRectLocal() {
@@ -1936,7 +1936,8 @@ Rect VirtListBox::ItemRect(int idx) {
 
 void VirtListBox::Paint(VirtPaintCtx& ctx) {
     Color colBg = GetColor(kColListBg);
-    ctx.gfx->FillRect(ctx.bounds, colBg);
+    int diameter = DpiScaleByDpi(GetDpi(), 8);
+    ctx.gfx->FillRoundedRect(ctx.bounds, diameter, colBg);
     int n = ItemsCount();
     Rect clip = ctx.clip.Intersect(ctx.bounds);
     bool isFocused = HasFlag(vwfFocused);
@@ -1978,7 +1979,7 @@ void VirtListBox::Paint(VirtPaintCtx& ctx) {
                 onDrawItem.Call(&ev);
             } else {
                 if (isSel) {
-                    ctx.gfx->FillRect(r, colSel);
+                    ctx.gfx->FillRoundedRect(r, diameter, colSel);
                 }
                 Rect rt = r;
                 rt.SubLR(DpiScaleByDpi(GetDpi(), 4), 0);
@@ -1997,7 +1998,7 @@ void VirtListBox::Paint(VirtPaintCtx& ctx) {
             thumb.Offset(orig.x, orig.y);
             // a slim thumb with a gap on both sides, like an overlay scrollbar
             thumb.SubLR(2, 2);
-            ctx.gfx->FillRect(thumb, colThumb);
+            ctx.gfx->FillRoundedRect(thumb, std::max(thumb.dx, 1), colThumb);
         }
     }
 
@@ -2652,6 +2653,7 @@ void VirtLink::OnMouseLeave() {
 static Kind kindVirtCtrlButton = "virtCtrlButton";
 
 VirtButton::VirtButton(Str str, PlatformFont* f) : VirtText(str, f) {
+    cornerRadius = DpiScale(8);
     onMouseEnter = MkMethod0<VirtButton, &VirtButton::OnMouseEnter>(this);
     onMouseLeave = MkMethod0<VirtButton, &VirtButton::OnMouseLeave>(this);
     onKeyDown = MkMethod1<VirtButton, VirtKeyEvent*, &VirtButton::OnKeyDown>(this);
@@ -2731,10 +2733,7 @@ void VirtButton::Paint(VirtPaintCtx& ctx) {
         b.SubLR(2, 2);
         Color col = (textCol != kColorUnset) ? textCol : borderCol;
         if (col != kColorUnset && !b.IsEmpty()) {
-            ctx.gfx->FillRect({b.x, b.y, b.dx, 1}, col);
-            ctx.gfx->FillRect({b.x, b.Bottom() - 1, b.dx, 1}, col);
-            ctx.gfx->FillRect({b.x, b.y, 1, b.dy}, col);
-            ctx.gfx->FillRect({b.Right() - 1, b.y, 1, b.dy}, col);
+            ctx.gfx->FillRoundedRect(b, std::max(1, cornerRadius - 4), kColorTransparent, col);
         }
     }
 }
@@ -2777,6 +2776,7 @@ void VirtButton::OnMouseLeave() {
 static Kind kindVirtCtrlIconButton = "virtCtrlIconButton";
 
 VirtIconButton::VirtIconButton() {
+    cornerRadius = DpiScale(8);
     onMouseEnter = MkMethod0<VirtIconButton, &VirtIconButton::OnMouseEnter>(this);
     onMouseLeave = MkMethod0<VirtIconButton, &VirtIconButton::OnMouseLeave>(this);
     onMouseMove = MkMethod1<VirtIconButton, VirtMouseEvent*, &VirtIconButton::OnMouseMove>(this);
@@ -4184,11 +4184,11 @@ void VirtFixedLinesText::Paint(VirtPaintCtx& ctx) {
     ctx.gfx->PushClip(clip);
     Color bg = GetColor(kColRichBg);
     if (!ColorSkipsPaint(bg)) {
-        ctx.gfx->FillRect(ctx.bounds, bg);
+        ctx.gfx->FillRoundedRect(ctx.bounds, DpiScaleByDpi(DpiGetForHwnd(GetHwnd()), 8), bg);
     }
     VirtRichText::Paint(ctx);
     if (!ColorSkipsPaint(borderCol)) {
-        ctx.gfx->DrawRect(ctx.bounds, borderCol);
+        ctx.gfx->FillRoundedRect(ctx.bounds, DpiScaleByDpi(DpiGetForHwnd(GetHwnd()), 8), kColorTransparent, borderCol);
     }
     ctx.gfx->PopClip();
 }

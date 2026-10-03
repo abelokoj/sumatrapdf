@@ -656,6 +656,8 @@ void StartAnnotationPlacement(MainWindow* win, int cmdId) {
         return;
     }
 
+    win->handTool = false;
+    CancelAnnotationLasso(win);
     StopLaserPointer(win);
     EndCurrentPlacement(win);
     win->inkEraseMode = 0;
@@ -664,6 +666,7 @@ void StartAnnotationPlacement(MainWindow* win, int cmdId) {
     p.Reset();
     p.kind = kind;
     p.cmdId = cmdId;
+    RevealToolbarTool(win, OrigCommandId(cmdId));
     p.circle = OrigCommandId(cmdId) == CmdCreateAnnotCircle;
     if (IsPointPlacementKind(kind)) {
         p.pos = HwndGetCursorPos(win->hwndCanvas);
@@ -1820,8 +1823,7 @@ TempStr AnnotationPlacementStateTemp(MainWindow* win) {
 }
 
 bool SuppressTouchForPen(MainWindow* win) {
-    return win && win->penOnly &&
-           (IsPlacingInkAnnotation(win) || IsPlacingHighlighterAnnotation(win) || win->laserPointerActive);
+    return win && win->penOnly && (IsPlacingAnnotation(win) || win->laserPointerActive || win->annotationLasso.active);
 }
 
 void AddInkPressure(MainWindow* win, UINT32 pressure) {

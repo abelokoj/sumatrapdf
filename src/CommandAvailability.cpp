@@ -240,6 +240,7 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
 };
 
 static UINT_PTR removeIfAnnotsNotSupported[] = {
+    CmdAnnotationLasso,
     CmdExportStudyNotes,
     CmdSaveAnnotations,
     CmdSaveAnnotationsNewFile,

@@ -127,6 +127,7 @@ int PageNo(Annotation*);
 RectF GetBounds(Annotation*);
 RectF GetRect(Annotation*);
 void SetRect(Annotation*, RectF);
+bool TransformAnnotation(Annotation*, RectF from, RectF to);
 void SetQuadPointsAsRect(Annotation*, const Vec<RectF>&);
 Vec<RectF> GetQuadPointsAsRect(Annotation*);
 

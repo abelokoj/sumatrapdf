@@ -34,6 +34,7 @@
 #include "AppSettings.h"
 #include "Flags.h"
 #include "Version.h"
+#include "DarkMode.h"
 #include "SumatraPDF.h"
 #include "AppTools.h"
 #include "RegistryPreview.h"
@@ -2019,6 +2020,7 @@ static bool CreateInstallerWnd(Flags* cli) {
     if (!hwnd) {
         return false;
     }
+    WindowApplyRoundedCorners(hwnd);
     gWnd->hwnd = hwnd;
     DpiSetFromHwnd(hwnd);
     DpiScale(dx, dy);
@@ -2331,6 +2333,7 @@ static bool ShouldInstallMismatchedArch(HWND hwndParent) {
 }
 
 int RunInstaller() {
+    WindowCornersInit();
     gLogRegistryCalls = true;
     trans::SetCurrentLangByCode(trans::DetectUserLang());
 

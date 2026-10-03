@@ -894,6 +894,8 @@ bool RenderCache::Render(DisplayModel* dm, int pageNo, int rotation, float zoom,
     ReportIf(requestCount > kMaxPageRequests);
 
     newRequest->dm = dm;
+    newRequest->pageTextColor = dm->pageTextColor;
+    newRequest->pageBackgroundColor = dm->pageBackgroundColor;
     newRequest->pageNo = pageNo;
     newRequest->rotation = rotation;
     newRequest->zoom = zoom;
@@ -1284,7 +1286,9 @@ static DWORD WINAPI RenderCacheThread(LPVOID data) {
         args.keepAlpha = true;
         args.transparentBackdrop = ShowTransparencyGrid();
         DarkModeProfile darkProfile;
-        BuildViewDarkModeProfile(engine, &darkProfile);
+        BuildViewDarkModeProfile(engine, &darkProfile, req.pageTextColor, req.pageBackgroundColor);
+        bool customColors = req.pageTextColor != kColorUnset || req.pageBackgroundColor != kColorUnset;
+        if (customColors && EngineUsesDocumentColorsFollowTheme(engine)) args.keepAlpha = false;
         if (darkProfile.mode != PageColorMode::Normal) {
             args.darkProfile = &darkProfile;
         }
@@ -1335,8 +1339,8 @@ static DWORD WINAPI RenderCacheThread(LPVOID data) {
                         skipRectsPtr = &skipRects;
                     }
                 }
-                Color textCol = profile ? profile->foreground : cache->textColor;
-                Color bgCol = profile ? profile->pageBackground : cache->backgroundColor;
+                Color textCol = profile || customColors ? darkProfile.foreground : cache->textColor;
+                Color bgCol = profile || customColors ? darkProfile.pageBackground : cache->backgroundColor;
                 Color linkCol = profile ? profile->linkColor : cache->linkColor;
                 RecolorPixmap(bmp, textCol, bgCol, linkCol, skipRectsPtr);
             }

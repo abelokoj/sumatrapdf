@@ -28,6 +28,7 @@ struct RefHoverState {
     // engine for the currently displayed page, AddRef'd while shown so the
     // popup can hit-test links under the cursor (hand cursor + click-to-open)
     EngineBase* hitEngine = nullptr;
+    bool resizing = false;
 
     // cache of plain-text citation lookups (lazy-init on first use)
     RefLookupCache* lookupCache = nullptr;
@@ -171,6 +172,10 @@ RectF DetectEntryBox(WStr text, const Rect* coords, RectF mediabox, float destX,
                      RectF* continuationOut = nullptr);
 
 bool ShouldSearchNextPage(RectF mediabox, float destY);
+RectF RefHoverDestinationRegion(RectF mediabox, float destX, float destY);
+bool RefHoverShouldResolveDestY(RectF mediabox, float destY);
+int RefHoverEdgeHit(Rect window, Point cursor, int grip);
+RectF RefHoverSizedRegion(RectF page, RectF region, Size content, float zoom);
 
 //--- plain-text citation lookup (RefHoverText.cpp)
 
@@ -236,3 +241,4 @@ bool RefHoverPopupCreate(RefHoverState* s, HWND hwndCanvas);
 void RefHoverShowPopup(RefHoverState* s, Point screenPt);
 void RefHoverRequestRender(RefHoverState* s, EngineBase* engine, RefHoverState::RenderRequest req);
 bool RefHoverRerenderDisplayedRegion(RefHoverState* s, EngineBase* engine, int page, RectF region);
+bool RefHoverResizePopup(RefHoverState* s);

@@ -7,8 +7,11 @@
 // enabled, is the current theme the default one - live here instead.
 
 #include "base/Base.h"
+#include "base/Win.h"
 
 #include <commdlg.h>
+#include <dwmapi.h>
+#include "base/WinDynCalls.h"
 #include "gui/Dpi.h"
 
 #include "gui/UIModels.h"
@@ -17,6 +20,7 @@
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
 #include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
 
 #include "Settings.h"
 #include "AppSettings.h"
@@ -52,7 +56,64 @@ Color DarkModeDialogBgColor() {
     return MkGray(0xee);
 }
 
+bool WindowApplyRoundedCorners(HWND hwnd) {
+    if (!hwnd) {
+        return false;
+    }
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if ((style & WS_CHILD) || (style & WS_CAPTION) != WS_CAPTION) {
+        return false;
+    }
+    // DWM handles maximized and snapped windows; older Windows ignores this attribute.
+    DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_ROUND;
+    return SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference)));
+}
+
+static LRESULT CALLBACK WindowCornersHook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HCBT_ACTIVATE) {
+        WindowApplyRoundedCorners((HWND)wp);
+        RoundChildControls((HWND)wp);
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
+static void RoundPopupMenu(HWND hwnd) {
+    Size size = HwndWindowRect(hwnd).Size();
+    if (size.dx <= 0 || size.dy <= 0) return;
+    int diameter = UiScalePxForDpi(DpiGetForHwnd(hwnd), 12);
+    HRGN rounded = CreateRoundRectRgn(0, 0, size.dx + 1, size.dy + 1, diameter, diameter);
+    if (!rounded) return;
+    HRGN previous = CreateRectRgn(0, 0, 0, 0);
+    bool same = GetWindowRgn(hwnd, previous) != ERROR && EqualRgn(previous, rounded);
+    DeleteObject(previous);
+    if (same || !SetWindowRgn(hwnd, rounded, TRUE)) DeleteObject(rounded);
+}
+
+static LRESULT CALLBACK MenuCornersHook(int code, WPARAM wp, LPARAM lp) {
+    if (code >= 0) {
+        auto* message = (CWPRETSTRUCT*)lp;
+        if (message->message == WM_WINDOWPOSCHANGED || message->message == WM_SHOWWINDOW) {
+            WCHAR name[32]{};
+            GetClassNameW(message->hwnd, name, dimof(name));
+            if (wcscmp(name, L"#32768") == 0) RoundPopupMenu(message->hwnd);
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
+void WindowCornersInit() {
+    // Common dialogs and message boxes also pass through the owning UI thread.
+    static thread_local HHOOK hook = nullptr;
+    if (!hook) {
+        hook = SetWindowsHookExW(WH_CBT, WindowCornersHook, nullptr, GetCurrentThreadId());
+    }
+    static thread_local HHOOK menuHook = nullptr;
+    if (!menuHook) menuHook = SetWindowsHookExW(WH_CALLWNDPROCRET, MenuCornersHook, nullptr, GetCurrentThreadId());
+}
+
 void DarkModeInit() {
+    WindowCornersInit();
+    gUiScrollbarWidth = GetAppScrollbarWidth;
     // WindowBase::UpdateTheme() re-applies dark mode through this hook, so
     // gui/ never names darkmodelib. Installed even when the lib isn't used:
     // DarkModeApplyToWindow() no-ops then
@@ -113,6 +174,8 @@ void DarkModeRememberTreeViewStyle() {
 }
 
 void DarkModeApplyToWindow(HWND hwnd) {
+    WindowApplyRoundedCorners(hwnd);
+    RoundChildControls(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -120,6 +183,8 @@ void DarkModeApplyToWindow(HWND hwnd) {
 }
 
 void DarkModeApplyToWindowAndEraseBg(HWND hwnd) {
+    WindowApplyRoundedCorners(hwnd);
+    RoundChildControls(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -128,6 +193,8 @@ void DarkModeApplyToWindowAndEraseBg(HWND hwnd) {
 }
 
 void DarkModeApplyToNotifyWindowAndEraseBg(HWND hwnd) {
+    WindowApplyRoundedCorners(hwnd);
+    RoundChildControls(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -136,6 +203,7 @@ void DarkModeApplyToNotifyWindowAndEraseBg(HWND hwnd) {
 }
 
 void DarkModeApplyToTitleBar(HWND hwnd) {
+    WindowApplyRoundedCorners(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -146,6 +214,7 @@ void DarkModeApplyToTitleBar(HWND hwnd) {
 // darkmodelib only themes the children that exist when it is called - so they
 // call this once the children are there (issues #5894, #5895).
 void DarkModeApplyToPopupWindow(HWND hwnd) {
+    WindowApplyRoundedCorners(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -162,6 +231,7 @@ void DarkModeApplyToPopupWindow(HWND hwnd) {
 }
 
 void DarkModeApplyToMenuWindow(HWND hwnd) {
+    if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) == GetCurrentThreadId()) RoundPopupMenu(hwnd);
     if (!DarkModeIsActive() || !hwnd) {
         return;
     }
@@ -194,6 +264,7 @@ static void ApplyToInfotip(MainWindow* win) {
 }
 
 void DarkModeApplyToNewFrame(MainWindow* win) {
+    WindowApplyRoundedCorners(win->hwndFrame);
     if (!gUseDarkModeLib || IsCurrentThemeDefault()) {
         return;
     }
@@ -230,3 +301,64 @@ void DarkModeApplyToFrameAfterThemeChange(MainWindow* win) {
     DarkMode::setWindowMenuBarSubclass(win->hwndFrame);
     ApplyToInfotip(win);
 }
+
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+
+void WindowCorners_UnitTests() {
+    utassert(!WindowApplyRoundedCorners(nullptr));
+    HWND frame = CreateWindowExW(0, L"STATIC", L"Corner test", WS_OVERLAPPEDWINDOW, 0, 0, 300, 200, nullptr, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    utassert(frame != nullptr);
+    if (!frame) {
+        return;
+    }
+
+    DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_DEFAULT;
+    HRESULT supported = DwmGetWindowAttribute(frame, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
+    bool applied = WindowApplyRoundedCorners(frame);
+    if (SUCCEEDED(supported)) {
+        utassert(applied);
+        utassert(
+            SUCCEEDED(DwmGetWindowAttribute(frame, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference))));
+        utassert(preference == DWMWCP_ROUND);
+    }
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    utassert(GetWindowRgn(frame, region) == ERROR);
+    DeleteObject(region);
+
+    HWND child = CreateWindowExW(0, L"STATIC", L"Child", WS_CHILD | WS_CAPTION, 0, 0, 100, 30, frame, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    utassert(child != nullptr);
+    utassert(!WindowApplyRoundedCorners(child));
+    DestroyWindow(child);
+
+    // Fullscreen and overlay styles must retain the caller's square-corner preference.
+    SetWindowLongPtrW(frame, GWL_STYLE, WS_POPUP);
+    preference = DWMWCP_DONOTROUND;
+    DwmSetWindowAttribute(frame, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
+    utassert(!WindowApplyRoundedCorners(frame));
+    if (SUCCEEDED(supported)) {
+        DwmGetWindowAttribute(frame, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
+        utassert(preference == DWMWCP_DONOTROUND);
+    }
+    DestroyWindow(frame);
+
+    HWND popup = CreateWindowExW(0, L"STATIC", L"Menu shape test", WS_POPUP, 0, 0, 300, 180, nullptr, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    utassert(popup != nullptr);
+    if (popup) {
+        RoundPopupMenu(popup);
+        HRGN clip = CreateRectRgn(0, 0, 0, 0);
+        utassert(GetWindowRgn(popup, clip) != ERROR);
+        utassert(!PtInRegion(clip, 0, 0) && PtInRegion(clip, 150, 90));
+        SetWindowPos(popup, nullptr, 0, 0, 440, 260, SWP_NOACTIVATE | SWP_NOZORDER);
+        RoundPopupMenu(popup);
+        GetWindowRgn(popup, clip);
+        utassert(PtInRegion(clip, 430, 250));
+        utassert(!PtInRegion(clip, 0, 0));
+        DeleteObject(clip);
+        DestroyWindow(popup);
+    }
+}
+#endif

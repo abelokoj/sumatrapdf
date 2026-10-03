@@ -2,7 +2,24 @@
 
 ## Unreleased
 
-- Added optional cpdf-backed PDF bookmark editing with title, page, hierarchy and order controls, preserving existing destinations and styles. First use offers a size-labelled, verified download or a local executable; saving creates a separate PDF copy.
+- Reduced Settings opening work: dropdown choices load on first use, text measurements are reused across reopenings, and the completed form is laid out once during creation.
+- Added horizontal toolbar scrolling, left and right arrows and a scrollable command dropdown, keeping tools in a single row. Arrow and pinned-tool clicks remain usable when the toolbar shares the title bar.
+- Added a hand tool for dragging the page and a lasso for selecting, moving, resizing and deleting PDF annotations, with undo support. Hand dragging stops on release or capture loss, and switching tools clears pending selections.
+- Let completed laser strokes remain until their configured timeout when another tool is selected, and kept touch scrolling and zoom available with palm rejection enabled.
+- Allowed PDF editing commands to be pinned to the main toolbar, alongside independent pen color and width presets. Right-click a tool to pin it, or a pinned button to remove it.
+- Added independent text and page-background colors for the current document, with color pickers and a reset to theme colors.
+- Replaced tab fades with clear separators and added a scrollable open-file dropdown beside the navigation arrows. Its visible row count defaults to ten and can be changed in Settings.
+- Made all configured recent documents reachable through a right-hand scrollbar and preserved the portable app's last session during shutdown.
+- Added adjustable scrollbar width for app-owned scrolling controls and rounded native popup menus.
+- Distinguished completed deck installation from source-definition coverage, retaining green `✓` marks and explaining missing definitions. Practice actions and feedback share a row when space permits.
+- Preserved explicit reference-preview destinations and added edge and corner resizing.
+
+- Made Settings scrolling and resizing more responsive by reusing field measurements and unchanged clipping regions. Fine wheel movements are retained, and scrolling over a closed field scrolls the form without changing its value.
+- Kept Settings presets and added custom numeric values, matching units and installed font names, with validation before saving.
+- Used the green `✓` character for installed dictionaries and decks, learned words and successful practice feedback.
+- Applied native rounded corners to app windows and dialogs where Windows supports them, with rounded fields, selectors, lists, buttons and learning panels.
+
+- Added optional cpdf-backed PDF bookmark editing with title, page, hierarchy and order controls, preserving existing destinations and styles. First use offers a size-labeled, verified download or a local executable; saving creates a separate PDF copy.
 - Compacted the home header with the green logo beside a bold title, measured action buttons and reduced vertical spacing above recent documents.
 - Narrowed Settings to fit its form, added clear section headings and wrapping help text, and kept OK/Cancel visible while scrolling. Large text and narrow windows use stacked fields.
 

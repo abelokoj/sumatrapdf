@@ -58,7 +58,7 @@ inline Str ResolveUiFontName(Str preference, bool semibold = false) {
         first = 4;
     }
     if (first < 0) {
-        return {};
+        return str::EqI(preference, StrL("system")) ? Str{} : preference;
     }
     Str families[] = {StrL("Manrope"),        StrL("Manrope Semibold"),
                       StrL("Pretendard Std"), StrL("Pretendard Std SemiBold"),

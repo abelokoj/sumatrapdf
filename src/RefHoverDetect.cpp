@@ -18,6 +18,50 @@ bool ShouldSearchNextPage(RectF mediabox, float destY) {
     return mediabox.dy > 0.f && destY >= mediabox.dy * kLatePageStartRatio;
 }
 
+RectF RefHoverDestinationRegion(RectF mediabox, float destX, float destY) {
+    if (mediabox.dx <= 0.f || mediabox.dy <= 0.f) {
+        return {};
+    }
+    float x = isfinite(destX) ? destX : mediabox.x;
+    float y = isfinite(destY) ? destY : mediabox.y;
+    x = limitValue(x, mediabox.x, mediabox.Right() - std::min(1.f, mediabox.dx));
+    y = limitValue(y, mediabox.y, mediabox.Bottom() - std::min(1.f, mediabox.dy));
+    return {x, y, mediabox.Right() - x, mediabox.Bottom() - y};
+}
+
+bool RefHoverShouldResolveDestY(RectF mediabox, float destY) {
+    return !isfinite(destY) || destY < mediabox.y || destY >= mediabox.Bottom();
+}
+
+int RefHoverEdgeHit(Rect window, Point cursor, int grip) {
+    if (!window.Contains(cursor)) {
+        return HTNOWHERE;
+    }
+    grip = std::max(1, std::min(grip, std::min(window.dx, window.dy) / 2));
+    bool left = cursor.x < window.x + grip;
+    bool right = cursor.x >= window.Right() - grip;
+    bool top = cursor.y < window.y + grip;
+    bool bottom = cursor.y >= window.Bottom() - grip;
+    if (top) {
+        return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
+    }
+    if (bottom) {
+        return left ? HTBOTTOMLEFT : right ? HTBOTTOMRIGHT : HTBOTTOM;
+    }
+    return left ? HTLEFT : right ? HTRIGHT : HTCLIENT;
+}
+
+RectF RefHoverSizedRegion(RectF page, RectF region, Size content, float zoom) {
+    if (!isfinite(zoom) || zoom <= 0.f || content.dx <= 0 || content.dy <= 0 || page.dx <= 0.f || page.dy <= 0.f) {
+        return {};
+    }
+    region.x = limitValue(region.x, page.x, page.Right() - std::min(1.f, page.dx));
+    region.y = limitValue(region.y, page.y, page.Bottom() - std::min(1.f, page.dy));
+    region.dx = std::min((float)content.dx / zoom, page.Right() - region.x);
+    region.dy = std::min((float)content.dy / zoom, page.Bottom() - region.y);
+    return region;
+}
+
 static bool IsAsciiAlnum(WCHAR c) {
     return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9');
 }

@@ -98,7 +98,7 @@ static constexpr int kRefHoverHideMinMs = 250;
 // alive. Lets the cursor cross the gap between the link and the popup without
 // the popup vanishing. Cancelled by a new RefHoverSchedule / RefHoverHide.
 void RefHoverScheduleHide(RefHoverState* s, HWND hwndCanvas, int delayMs) {
-    if (!s) {
+    if (!s || s->resizing) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
@@ -120,7 +120,7 @@ void RefHoverOnHideTimer(RefHoverState* s, HWND hwndCanvas) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverHideTimerID);
-    if (!s->hwndPopup || !HwndIsVisible(s->hwndPopup)) {
+    if (!s->hwndPopup || !HwndIsVisible(s->hwndPopup) || s->resizing) {
         return;
     }
     POINT pt;

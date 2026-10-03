@@ -553,6 +553,9 @@ bool DisplayModel::InPresentation() const {
 void DisplayModel::GetDisplayState(FileState* fs) {
     Str fileNameA = engine->FilePath();
     SetFileStatePath(fs, fileNameA);
+    SetColorText(fs->pageTextColor, pageTextColor == kColorUnset ? Str{} : SerializeColorTemp(pageTextColor));
+    SetColorText(fs->pageBackgroundColor,
+                 pageBackgroundColor == kColorUnset ? Str{} : SerializeColorTemp(pageBackgroundColor));
 
     fs->useDefaultState = !gSettings->rememberStatePerDocument;
 

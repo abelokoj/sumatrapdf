@@ -11,11 +11,14 @@
 #include "DocController.h"
 #include "EngineBase.h"
 #include "RefHover.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 
 static int gClassRegistered = 0;
 
 static bool PopupClientToPagePt(RefHoverState* s, int clientX, int clientY, PointF& ptOut) {
-    if (!s || !s->hitEngine || s->displayed.destPage <= 0) {
+    if (!s || !s->hitEngine || s->displayed.destPage <= 0 || s->renderInFlight) {
         return false;
     }
     float zoom = s->displayed.baseZoom * s->displayed.userZoom;
@@ -23,13 +26,16 @@ static bool PopupClientToPagePt(RefHoverState* s, int clientX, int clientY, Poin
         return false;
     }
     int border = DpiScale(kRefHoverBorder);
+    if (clientX < border || clientY < border) {
+        return false;
+    }
     // When a column-wrap continuation is stitched below displayed.region in
     // the bitmap (see RefHoverRender.cpp's StackPixmapsVertically), a click
     // there falls outside what displayed.region maps to — the formula below
     // would silently produce a page point in the wrong place. Reject clicks
     // past the primary crop's rendered height rather than mis-hit-test.
     float regionPixH = s->displayed.region.dy * zoom;
-    if ((float)(clientY - border) > regionPixH) {
+    if ((float)(clientY - border) >= regionPixH || (float)(clientX - border) >= s->displayed.region.dx * zoom) {
         return false;
     }
     ptOut.x = s->displayed.region.x + ((float)(clientX - border) / zoom);
@@ -61,7 +67,37 @@ static IPageDestination* LaunchLinkAtPopupPt(RefHoverState* s, int clientX, int 
 }
 
 static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    RefHoverState* state = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (msg == WM_NCCALCSIZE) {
+        return 0;
+    }
+    if (msg == WM_NCHITTEST) {
+        return RefHoverEdgeHit(HwndWindowRect(hwnd), {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, DpiScale(8));
+    }
+    if (msg == WM_GETMINMAXINFO) {
+        auto info = (MINMAXINFO*)lp;
+        info->ptMinTrackSize = {DpiScale(160), DpiScale(100)};
+        return 0;
+    }
+    if (msg == WM_ENTERSIZEMOVE && state) {
+        state->resizing = true;
+        KillTimer(state->hwndCanvas, kRefHoverHideTimerID);
+        return 0;
+    }
+    if (msg == WM_EXITSIZEMOVE && state) {
+        state->resizing = false;
+        RefHoverResizePopup(state);
+        SetTimer(state->hwndCanvas, kRefHoverHideTimerID, 300, nullptr);
+        return 0;
+    }
+    if (msg == WM_SIZE && state && state->resizing) {
+        RefHoverResizePopup(state);
+        return 0;
+    }
     if (msg == WM_SETCURSOR) {
+        if (LOWORD(lp) != HTCLIENT) {
+            return DefWindowProc(hwnd, msg, wp, lp);
+        }
         RefHoverState* s = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         POINT p;
         if (s && GetCursorPos(&p)) {
@@ -142,7 +178,7 @@ bool RefHoverPopupCreate(RefHoverState* s, HWND hwndCanvas) {
     if (!RegisterClassIfNeeded()) {
         return false;
     }
-    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kRefHoverClass, nullptr, WS_POPUP | WS_BORDER, 0, 0, 10, 10,
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kRefHoverClass, nullptr, WS_POPUP | WS_THICKFRAME, 0, 0, 10, 10,
                                 hwndCanvas, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!hwnd) {
         return false;
@@ -243,6 +279,22 @@ bool RefHoverRerenderDisplayedRegion(RefHoverState* s, EngineBase* engine, int p
     req.region = region;
     RefHoverRequestRender(s, engine, req);
     return true;
+}
+
+bool RefHoverResizePopup(RefHoverState* s) {
+    if (!s || !s->hwndPopup || !s->bmp || !s->hitEngine || s->displayed.destPage <= 0) {
+        return false;
+    }
+    Rect client = HwndClientRect(s->hwndPopup);
+    int border = DpiScale(kRefHoverBorder);
+    Size content{client.dx - border * 2, client.dy - border * 2};
+    RectF page = s->hitEngine->PageMediabox(s->displayed.destPage);
+    RectF region =
+        RefHoverSizedRegion(page, s->displayed.region, content, s->displayed.baseZoom * s->displayed.userZoom);
+    if (region.dx <= 0.f || region.dy <= 0.f || region == s->displayed.region) {
+        return false;
+    }
+    return RefHoverRerenderDisplayedRegion(s, s->hitEngine, s->displayed.destPage, region);
 }
 
 // Re-render the popup at adjusted zoom in response to a mouse-wheel event.
@@ -374,3 +426,31 @@ void RefHoverOnWheel(RefHoverState* s, EngineBase* engine, UINT msg, WPARAM wp) 
     }
     RefHoverWheelScroll(s, engine, delta);
 }
+
+#if IS_DEBUG
+void RefHoverPopup_UnitTests() {
+    HWND canvas =
+        CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 600, 500, nullptr, nullptr, GetInstance(), nullptr);
+    RefHoverState state;
+    utassert(RefHoverPopupCreate(&state, canvas));
+    SetWindowPos(state.hwndPopup, nullptr, 100, 100, 400, 300, SWP_NOZORDER | SWP_NOACTIVATE);
+    Rect window = HwndWindowRect(state.hwndPopup);
+    utassert((GetWindowLongPtrW(state.hwndPopup, GWL_STYLE) & WS_THICKFRAME) != 0);
+    LRESULT hit = SendMessageW(state.hwndPopup, WM_NCHITTEST, 0, MAKELPARAM(window.Right() - 1, window.Bottom() - 1));
+    utassert(hit == HTBOTTOMRIGHT);
+    MINMAXINFO info{};
+    SendMessageW(state.hwndPopup, WM_GETMINMAXINFO, 0, (LPARAM)&info);
+    utassert(info.ptMinTrackSize.x >= DpiScale(160) && info.ptMinTrackSize.y >= DpiScale(100));
+    SendMessageW(state.hwndPopup, WM_ENTERSIZEMOVE, 0, 0);
+    utassert(state.resizing);
+    state.displayed.destPage = 2;
+    int generation = state.renderGen;
+    RefHoverScheduleHide(&state, canvas, 300);
+    utassert(state.displayed.destPage == 2 && state.renderGen == generation);
+    SendMessageW(state.hwndPopup, WM_EXITSIZEMOVE, 0, 0);
+    utassert(!state.resizing);
+    DestroyWindow(state.hwndPopup);
+    KillTimer(canvas, kRefHoverHideTimerID);
+    DestroyWindow(canvas);
+}
+#endif

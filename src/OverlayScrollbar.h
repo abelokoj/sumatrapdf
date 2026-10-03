@@ -52,6 +52,17 @@ struct OverlayScrollbar {
     int dragStartY = 0;      // mouse Y (or X for horz) when drag started
     int dragStartPos = 0;    // nPos when drag started
     bool mouseOverThumb = false;
+    bool nativeAdapter = false;
+    bool syncingNative = false;
+    bool sendingNative = false;
+    bool nativeSyncValid = false;
+    SCROLLINFO nativeInfo{};
+    Rect nativeBounds{};
+    Rect nativeClip{};
+    int nativeWidth = 0;
+    bool nativeShown = false;
+    Color nativeTrack = 0;
+    Color nativeThumb = 0;
 
     // repeat-scroll state (for held arrow/track clicks)
     UINT repeatScrollCode = 0;    // SB_LINEUP, SB_PAGEDOWN, etc.; 0 = not repeating
@@ -79,3 +90,8 @@ void OverlayScrollbarNotifyScroll(OverlayScrollbar* sb);
 void OverlayScrollbarSetMode(OverlayScrollbar* sb, OverlayScrollbar::Mode mode);
 
 bool IsOverlayScrollbarVisible(OverlayScrollbar* sb);
+
+void InstallAppScrollbar(HWND hwnd);
+void RemoveAppScrollbar(HWND hwnd);
+int AppScrollbarTrackPos(HWND hwnd, int fallback);
+int AppScrollbarInset(HWND hwnd);

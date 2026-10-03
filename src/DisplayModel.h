@@ -161,6 +161,8 @@ struct DisplayModel : DocController {
 
     // controller-specific data (easier to save here than on MainWindow)
     Kind engineType = nullptr;
+    Color pageTextColor = kColorUnset;
+    Color pageBackgroundColor = kColorUnset;
 
     Synchronizer* pdfSync = nullptr;
 

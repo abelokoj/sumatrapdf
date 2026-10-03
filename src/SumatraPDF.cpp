@@ -1772,6 +1772,12 @@ void ControllerCallbackHandler::UpdateScrollbars(DisplayModel* dm, Size canvas) 
 
     bool hideScrollbar = ScrollbarsAreHidden();
     bool useOverlay = ScrollbarsUseOverlay();
+    if (useOverlay || hideScrollbar) {
+        RemoveAppScrollbar(win->hwndCanvas);
+    } else {
+        InstallAppScrollbar(win->hwndCanvas);
+        OverlayScrollbarShow(win->overlayScrollV, false);
+    }
     SCROLLINFO si{};
     si.cbSize = sizeof(si);
     si.fMask = SIF_ALL;
@@ -1882,6 +1888,7 @@ void ControllerCallbackHandler::UpdateScrollbars(DisplayModel* dm, Size canvas) 
             win->overlayScrollV =
                 OverlayScrollbarCreate(win->hwndCanvas, OverlayScrollbar::Type::Vert, ScrollbarsOverlayMode());
         }
+        OverlayScrollbarSetMode(win->overlayScrollV, ScrollbarsOverlayMode());
         if (showVScroll && showScrollbar) {
             OverlayScrollbarShow(win->overlayScrollV, true);
             OverlayScrollbarSetInfo(win->overlayScrollV, &si, TRUE);
@@ -2687,6 +2694,11 @@ static void ReplaceDocumentInCurrentTab(LoadArgs* args, DocController* ctrl, Fil
                 dm->SetUniformPageWidth(fs->uniformPageWidth);
                 dm->SetTrimEmptyMargins(fs->trimEmptyMargins);
                 dm->SetFreePan(fs->freePan);
+            }
+            FileState* colorState = fs ? fs : FileHistoryFindByPath(win->ctrl->GetFilePath());
+            if (colorState) {
+                dm->pageTextColor = GetParsedColor(colorState->pageTextColor, kColorUnset);
+                dm->pageBackgroundColor = GetParsedColor(colorState->pageBackgroundColor, kColorUnset);
             }
             // migrate in place only. SaveSettings() here would rebuild
             // gInitialSessionData and free the TabState a lazily restored
@@ -6254,6 +6266,9 @@ void CloseWindow(MainWindow* win, bool quitIfLast, bool forceClose) {
     if (lastWindow) {
         ScheduleSaveSettings();
         FlushScheduledSaveSettings();
+        if (quitIfLast) {
+            gDontSaveSettings = true;
+        }
     }
     // hide the window before tearing down (closing seems slightly faster that way)
     if (!lastWindow || quitIfLast) {
@@ -9532,7 +9547,7 @@ static bool FrameOnKeydown(MainWindow* win, WPARAM key, LPARAM lp) {
         return true;
     }
 
-    if (AnnotationPlacementOnKeyDown(win, key)) {
+    if (AnnotationLassoOnKeyDown(win, key) || AnnotationPlacementOnKeyDown(win, key)) {
         return true;
     }
 
@@ -13687,6 +13702,18 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         case CmdToggleLaserPointer:
             // the cursor itself is the feedback, so no notification
             ToggleLaserPointer(win);
+            break;
+
+        case CmdHandTool:
+            SetHandTool(win, !win->handTool);
+            ToolbarUpdateStateForWindow(win, true);
+            if (win->handTool) RevealToolbarTool(win, cmdId);
+            break;
+
+        case CmdAnnotationLasso:
+            ToggleAnnotationLasso(win);
+            ToolbarUpdateStateForWindow(win, true);
+            if (win->annotationLasso.active) RevealToolbarTool(win, cmdId);
             break;
 
         case CmdToggleHoverPreview:

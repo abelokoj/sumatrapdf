@@ -2,11 +2,18 @@
    License: GPLv3 */
 
 #include "base/Base.h"
+#include <commctrl.h>
+#include <richedit.h>
 #include "gui/Dpi.h"
 #include "base/Win.h"
 
+#include "Settings.h"
+#include "AppSettings.h"
 #include "Theme.h"
 #include "OverlayScrollbar.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 
 constexpr const WCHAR* kOverlayScrollbarClass = L"SUMATRA_OVERLAY_SCROLLBAR";
 
@@ -22,6 +29,21 @@ static UINT_PTR gMouseTrackTimer = 0;
 static Point gLastMousePos = {-1, -1};
 static constexpr UINT_PTR kMouseTrackTimerID = 100;
 static constexpr int kMouseTrackIntervalMs = 50;
+static constexpr UINT_PTR kNativeScrollbarSubclass = 0x736272;
+static constexpr UINT_PTR kNativeScrollbarTimer = 0x736273;
+static constexpr WCHAR kNativeScrollbarProperty[] = L"SumatraAppScrollbar";
+static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force = false);
+
+static Rect NativeScrollbarClip(HWND hwnd) {
+    Rect clip = HwndWindowRect(hwnd);
+    HWND parent = (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) ? GetParent(hwnd) : nullptr;
+    while (parent) {
+        clip = clip.Intersect(HwndMapRectToWindow(HwndClientRect(parent), parent, nullptr));
+        if (!(GetWindowLongPtrW(parent, GWL_STYLE) & WS_CHILD)) break;
+        parent = GetParent(parent);
+    }
+    return clip;
+}
 
 // Derive scrollbar colors from current theme
 static Color ThemeTrackColor() {
@@ -59,7 +81,11 @@ static bool IsActive(OverlayScrollbar* sb) {
 }
 
 static int ScaledWidth(OverlayScrollbar* sb, bool thick) {
-    return thick ? sb->thickWidth : sb->thinWidth;
+    sb->thickWidth = GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner));
+    sb->thinWidth = std::max(UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), 6), sb->thickWidth / 3);
+    int width = thick ? sb->thickWidth : sb->thinWidth;
+    if (sb->nativeAdapter) width = std::max(width, DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner)));
+    return width;
 }
 
 static bool IsVert(OverlayScrollbar* sb) {
@@ -69,6 +95,11 @@ static bool IsVert(OverlayScrollbar* sb) {
 // Get the track rect in client coords of the scrollbar window
 static Rect GetTrackRect(OverlayScrollbar* sb) {
     Rect rc = HwndClientRect(sb->hwnd);
+    if (sb->nativeAdapter) {
+        int width = std::min(rc.dx, GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner)));
+        rc.x += (rc.dx - width) / 2;
+        rc.dx = width;
+    }
     int arrowSize = 0;
     int gap = 0;
     if (IsThick(sb)) {
@@ -127,7 +158,52 @@ static Rect GetArrowBottomRect(OverlayScrollbar* sb) {
     return {rc.dx - arrowSize, 0, arrowSize, rc.dy};
 }
 
+static void ScrollRichEditTo(HWND hwnd, int target) {
+    SCROLLINFO info{sizeof(info), SIF_ALL};
+    GetScrollInfo(hwnd, SB_VERT, &info);
+    // Rich Edit lays out long documents lazily, so nMax can still describe
+    // only the first part of the text. EM_LINESCROLL clamps at the last line.
+    target = std::max(info.nMin, target);
+    int current = (int)SendMessageW(hwnd, EM_GETFIRSTVISIBLELINE, 0, 0);
+    int count = (int)SendMessageW(hwnd, EM_GETLINECOUNT, 0, 0);
+    int low = 0, high = std::max(0, count - 1);
+    // EM_SETSCROLLPOS truncates coordinates to 16 bits. Locate the actual
+    // wrapped line using 32-bit character positions, including mixed heights.
+    while (low < high) {
+        int middle = low + (high - low + 1) / 2;
+        LRESULT character = SendMessageW(hwnd, EM_LINEINDEX, middle, 0);
+        POINT pos{};
+        SendMessageW(hwnd, EM_POSFROMCHAR, (WPARAM)&pos, character);
+        if (pos.y + info.nPos <= target)
+            low = middle;
+        else
+            high = middle - 1;
+    }
+    SendMessageW(hwnd, EM_LINESCROLL, 0, low - current);
+}
+
 static void SendScrollMsg(OverlayScrollbar* sb, UINT scrollMsg, WPARAM wp) {
+    if (sb->nativeAdapter) {
+        sb->sendingNative = true;
+        defer {
+            sb->sendingNative = false;
+        };
+        WCHAR klass[32]{};
+        GetClassNameW(sb->hwndOwner, klass, dimofi(klass));
+        bool track = LOWORD(wp) == SB_THUMBTRACK || LOWORD(wp) == SB_THUMBPOSITION;
+        if (track && _wcsicmp(klass, L"RICHEDIT50W") == 0) {
+            ScrollRichEditTo(sb->hwndOwner, sb->nTrackPos);
+        } else if (track && _wcsicmp(klass, L"EDIT") == 0) {
+            int first = (int)SendMessageW(sb->hwndOwner, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageW(sb->hwndOwner, EM_LINESCROLL, 0, sb->nTrackPos - first);
+        } else if (track && _wcsicmp(klass, L"LISTBOX") == 0) {
+            SendMessageW(sb->hwndOwner, LB_SETTOPINDEX, sb->nTrackPos, 0);
+        } else {
+            SendMessageW(sb->hwndOwner, scrollMsg, wp, 0);
+        }
+        SyncNativeScrollbar(sb);
+        return;
+    }
     SendMessageW(sb->hwndOwner, scrollMsg, wp, 0);
 }
 
@@ -140,6 +216,12 @@ static UINT ScrollMsgForType(OverlayScrollbar* sb) {
 // width, whatever width the scrollbar is drawn at right now
 static Rect GetScrollbarScreenRect(OverlayScrollbar* sb) {
     Rect ownerRc = HwndWindowRect(sb->hwndOwner);
+    if (sb->nativeAdapter) {
+        ownerRc = HwndMapRectToWindow(HwndClientRect(sb->hwndOwner), sb->hwndOwner, nullptr);
+        if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL) {
+            ownerRc.dx += DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner));
+        }
+    }
     int scrollW = ScaledWidth(sb, true);
     if (IsVert(sb)) {
         return {ownerRc.x + ownerRc.dx - scrollW, ownerRc.y, scrollW, ownerRc.dy};
@@ -248,7 +330,7 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
     u8 alpha = kAlphaThin;
     if (thick) {
         // non-default themes define exact colors, so draw thick scrollbar fully opaque
-        alpha = IsCurrentThemeDefault() ? kAlphaThick : 255;
+        alpha = !sb->nativeAdapter && IsCurrentThemeDefault() ? kAlphaThick : 255;
     }
 
     auto fillRect = [&](Rect r, Color color) {
@@ -811,12 +893,7 @@ OverlayScrollbar* OverlayScrollbarCreate(HWND hwndOwner, OverlayScrollbar::Type 
     sb->hwndOwner = hwndOwner;
     sb->type = type;
     sb->mode = mode;
-    sb->thinWidth = DpiScale(4);
-    sb->thickWidth = DpiScale(16);
-    int sysWidth = DpiGetSystemMetrics(IsVert(sb) ? SM_CXVSCROLL : SM_CYHSCROLL);
-    if (sysWidth > 0) {
-        sb->thickWidth = sysWidth;
-    }
+    ScaledWidth(sb, true);
     DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
     DWORD style = WS_POPUP;
 
@@ -939,6 +1016,13 @@ void OverlayScrollbarUpdatePos(OverlayScrollbar* sb) {
     }
 
     Rect ownerRc = HwndWindowRect(sb->hwndOwner);
+    Rect ownerWindow = ownerRc;
+    if (sb->nativeAdapter) {
+        ownerRc = HwndMapRectToWindow(HwndClientRect(sb->hwndOwner), sb->hwndOwner, nullptr);
+        if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL) {
+            ownerRc.dx += DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner));
+        }
+    }
 
     int scrollW = ScaledWidth(sb, IsThick(sb));
     int x, y, w, h;
@@ -989,7 +1073,26 @@ void OverlayScrollbarUpdatePos(OverlayScrollbar* sb) {
     } else {
         swpFlags |= SWP_NOZORDER;
     }
-    SetWindowPos(sb->hwnd, insertAfter, x, y, w, h, swpFlags);
+    Rect previousBounds = HwndWindowRect(sb->hwnd);
+    if (!sb->nativeAdapter || previousBounds != Rect{x, y, w, h} || (swpFlags & SWP_SHOWWINDOW)) {
+        SetWindowPos(sb->hwnd, insertAfter, x, y, w, h, swpFlags);
+    }
+    if (sb->nativeAdapter) {
+        Rect visible = ownerRc.Intersect(NativeScrollbarClip(sb->hwndOwner));
+        Rect stripe{x, y, w, h};
+        visible = visible.Intersect(stripe);
+        HRGN region = CreateRectRgn(visible.x - x, visible.y - y, visible.Right() - x, visible.Bottom() - y);
+        HRGN ownerRegion = CreateRectRgn(0, 0, 0, 0);
+        if (GetWindowRgn(sb->hwndOwner, ownerRegion) != ERROR) {
+            OffsetRgn(ownerRegion, ownerWindow.x - x, ownerWindow.y - y);
+            CombineRgn(region, region, ownerRegion, RGN_AND);
+        }
+        DeleteObject(ownerRegion);
+        HRGN previous = CreateRectRgn(0, 0, 0, 0);
+        bool same = GetWindowRgn(sb->hwnd, previous) != ERROR && EqualRgn(previous, region);
+        DeleteObject(previous);
+        if (same || !SetWindowRgn(sb->hwnd, region, true)) DeleteObject(region);
+    }
 }
 
 // Hide the scrollbar window without stealing activation from other windows.
@@ -1053,3 +1156,172 @@ void OverlayScrollbarSetMode(OverlayScrollbar* sb, OverlayScrollbar::Mode mode) 
 bool IsOverlayScrollbarVisible(OverlayScrollbar* sb) {
     return sb && IsVisible(sb);
 }
+
+int AppScrollbarTrackPos(HWND hwnd, int fallback) {
+    auto* sb = (OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty);
+    return sb && (sb->isDragging || sb->sendingNative) ? sb->nTrackPos : fallback;
+}
+
+int AppScrollbarInset(HWND hwnd) {
+    if (!GetPropW(hwnd, kNativeScrollbarProperty)) return 0;
+    int dpi = DpiGetForHwnd(hwnd);
+    int native = DpiGetSystemMetrics(SM_CXVSCROLL, dpi);
+    return std::max(0, GetAppScrollbarWidth(dpi) - native);
+}
+
+static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
+    if (sb->syncingNative) return;
+    sb->syncingNative = true;
+    defer {
+        sb->syncingNative = false;
+    };
+    SCROLLINFO info{sizeof(info), SIF_ALL};
+    bool range = GetScrollInfo(sb->hwndOwner, SB_VERT, &info) && info.nMax - info.nMin + 1 > (int)info.nPage;
+    bool show = range && HwndIsVisible(sb->hwndOwner) && (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL);
+    Rect bounds = HwndWindowRect(sb->hwndOwner);
+    Rect clip = NativeScrollbarClip(sb->hwndOwner);
+    int width = GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner));
+    Color track = ThemeTrackColor(), thumb = ThemeThumbColor();
+    const SCROLLINFO& before = sb->nativeInfo;
+    if (!force && sb->nativeSyncValid && before.nMin == info.nMin && before.nMax == info.nMax &&
+        before.nPage == info.nPage && before.nPos == info.nPos && sb->nativeBounds == bounds &&
+        sb->nativeClip == clip && sb->nativeWidth == width && sb->nativeShown == show && sb->nativeTrack == track &&
+        sb->nativeThumb == thumb) {
+        return;
+    }
+    bool repaint = sb->nativeSyncValid && (sb->nativeTrack != track || sb->nativeThumb != thumb ||
+                                           sb->nativeWidth != width || sb->nativeBounds.Size() != bounds.Size());
+    sb->nativeSyncValid = true;
+    sb->nativeInfo = info;
+    sb->nativeBounds = bounds;
+    sb->nativeClip = clip;
+    sb->nativeWidth = width;
+    sb->nativeShown = show;
+    sb->nativeTrack = track;
+    sb->nativeThumb = thumb;
+    OverlayScrollbarSetInfo(sb, &info, show);
+    OverlayScrollbarShow(sb, show);
+    if (show) {
+        OverlayScrollbarUpdatePos(sb);
+        if (repaint) PaintScrollbar(sb);
+    }
+}
+
+static LRESULT CALLBACK NativeScrollbarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* sb = (OverlayScrollbar*)data;
+    if (msg == WM_NCDESTROY) {
+        KillTimer(hwnd, kNativeScrollbarTimer);
+        RemovePropW(hwnd, kNativeScrollbarProperty);
+        RemoveWindowSubclass(hwnd, NativeScrollbarProc, id);
+        OverlayScrollbarDestroy(sb);
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    if (msg == WM_TIMER && wp == kNativeScrollbarTimer) {
+        SyncNativeScrollbar(sb);
+        return 0;
+    }
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    if ((OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty) != sb) return result;
+    if (msg == WM_SIZE || msg == WM_SETTEXT || msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_KEYDOWN ||
+        msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW || msg == WM_NCPAINT || msg == EM_SETSCROLLPOS ||
+        msg == LB_SETTOPINDEX || msg == EM_LINESCROLL) {
+        SyncNativeScrollbar(sb, msg == WM_WINDOWPOSCHANGED);
+    }
+    return result;
+}
+
+void InstallAppScrollbar(HWND hwnd) {
+    if (!hwnd || GetPropW(hwnd, kNativeScrollbarProperty)) return;
+    auto* sb = OverlayScrollbarCreate(hwnd, OverlayScrollbar::Type::Vert, OverlayScrollbar::Mode::Thick);
+    sb->nativeAdapter = true;
+    if (!SetPropW(hwnd, kNativeScrollbarProperty, sb) ||
+        !SetWindowSubclass(hwnd, NativeScrollbarProc, kNativeScrollbarSubclass, (DWORD_PTR)sb)) {
+        RemovePropW(hwnd, kNativeScrollbarProperty);
+        OverlayScrollbarDestroy(sb);
+        return;
+    }
+    SetTimer(hwnd, kNativeScrollbarTimer, 200, nullptr);
+    SyncNativeScrollbar(sb);
+}
+
+void RemoveAppScrollbar(HWND hwnd) {
+    auto* sb = (OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty);
+    if (!sb) return;
+    KillTimer(hwnd, kNativeScrollbarTimer);
+    RemovePropW(hwnd, kNativeScrollbarProperty);
+    RemoveWindowSubclass(hwnd, NativeScrollbarProc, kNativeScrollbarSubclass);
+    OverlayScrollbarDestroy(sb);
+}
+
+#if IS_DEBUG
+bool OverlayScrollbar_UnitTestsNative() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    gSettings->scrollbarWidth = 28;
+    HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 300, 200, nullptr, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr);
+    HWND edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 10, 10, 250,
+                                100, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    bool ok = parent && edit;
+    if (edit) {
+        str::Builder text;
+        for (int i = 0; i < 2000; i++) text.Append(StrL("Practice word\r\n"));
+        SendMessageW(edit, EM_SETLIMITTEXT, 100000, 0);
+        SetWindowTextW(edit, CWStrTemp(ToWStrTemp(ToStrTemp(text))));
+        InstallAppScrollbar(edit);
+        auto* sb = (OverlayScrollbar*)GetPropW(edit, kNativeScrollbarProperty);
+        ok &= sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd);
+        utassert(sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd));
+        if (sb) {
+            sb->nTrackPos = 1200;
+            SendScrollMsg(sb, WM_VSCROLL, MAKEWPARAM(SB_THUMBTRACK, sb->nTrackPos));
+            ok &= SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0) == 1200;
+            utassert(SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0) == 1200);
+            sb->sendingNative = true;
+            sb->nTrackPos = 150000;
+            ok &= AppScrollbarTrackPos(edit, 7) == 150000;
+            sb->sendingNative = false;
+            ok &= AppScrollbarTrackPos(edit, 7) == 7;
+            ok &= AppScrollbarInset(edit) == std::max(0, GetAppScrollbarWidth(DpiGetForHwnd(edit)) -
+                                                             DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(edit)));
+            MoveWindow(edit, 10, 170, 250, 100, false);
+            OverlayScrollbarUpdatePos(sb);
+            HRGN region = CreateRectRgn(0, 0, 0, 0);
+            RECT clipped{};
+            ok &= GetWindowRgn(sb->hwnd, region) != ERROR;
+            utassert(GetWindowRgn(sb->hwnd, region) != ERROR);
+            GetRgnBox(region, &clipped);
+            ok &= clipped.bottom <= 30;
+            utassert(clipped.bottom <= 30);
+            DeleteObject(region);
+        }
+    }
+    HMODULE richModule = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (richModule) {
+        HWND rich = CreateWindowExW(0, MSFTEDIT_CLASS, L"", WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 10,
+                                    10, 250, 100, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ok &= rich != nullptr;
+        if (rich) {
+            str::Builder text;
+            for (int i = 0; i < 10000; i++) text.Append(StrL("Dictionary definition\r\n"));
+            SendMessageW(rich, EM_EXLIMITTEXT, 0, 1000000);
+            SetWindowTextW(rich, CWStrTemp(ToWStrTemp(ToStrTemp(text))));
+            InstallAppScrollbar(rich);
+            auto* sb = (OverlayScrollbar*)GetPropW(rich, kNativeScrollbarProperty);
+            ok &= sb && !HwndIsVisible(sb->hwnd);
+            if (sb) {
+                sb->nTrackPos = 80000;
+                SendScrollMsg(sb, WM_VSCROLL, MAKEWPARAM(SB_THUMBTRACK, sb->nTrackPos));
+                int firstLine = (int)SendMessageW(rich, EM_GETFIRSTVISIBLELINE, 0, 0);
+                ok &= firstLine > 1000;
+                utassert(firstLine > 1000);
+            }
+        }
+    }
+    if (parent) DestroyWindow(parent);
+    if (richModule) FreeLibrary(richModule);
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    return ok;
+}
+#endif

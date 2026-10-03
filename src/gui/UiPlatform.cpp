@@ -32,6 +32,11 @@ int UiHScrollbarDy() {
     return DpiGetSystemMetrics(SM_CYHSCROLL);
 }
 
+int (*gUiScrollbarWidth)(int dpi) = nullptr;
+int UiScrollbarWidth(int dpi) {
+    return gUiScrollbarWidth ? gUiScrollbarWidth(dpi) : DpiScaleByDpi(dpi, 20);
+}
+
 int UiEdgeDx() {
     return DpiGetSystemMetrics(SM_CXEDGE);
 }

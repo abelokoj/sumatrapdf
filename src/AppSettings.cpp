@@ -612,6 +612,10 @@ static void SyncInitialSessionData() {
 
 static void RememberSessionState() {
     Vec<SessionData*>* sessionState = gSettings->sessionData;
+    // A late shutdown save must retain the snapshot taken before the final close.
+    if (len(gWindows) == 0 && SettingsRememberOpenedFiles()) {
+        return;
+    }
     FreeSessionDataVec(sessionState);
 
     if (!SettingsRememberOpenedFiles()) {
@@ -678,6 +682,98 @@ static void RememberSessionState() {
         VecAppend(*sessionState, windowState);
     }
 }
+
+#if IS_DEBUG
+bool AppSettings_UnitTestsSession() {
+    Settings* saved = gSettings;
+    Vec<FileState*>* savedHistory = FileHistoryStates();
+    Vec<MainWindow*> savedWindows = gWindows;
+    auto* savedInitial = gInitialSessionData;
+    bool savedEmbedded = gMyWindowWasEmbedded;
+    gSettings = NewSettings({});
+    FileHistorySetStates(gSettings->fileStates);
+    VecReset(gWindows);
+    gInitialSessionData = nullptr;
+    gMyWindowWasEmbedded = false;
+    Str fixture = str::Dup(GetTempFilePathTemp(StrL("sumatra-session")));
+    bool ok = len(fixture) > 0;
+    {
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        WindowTab home(&win);
+        home.type = WindowTab::Type::About;
+        auto* homeInfo = new TabInfo();
+        homeInfo->userData = (UINT_PTR)&home;
+        win.tabsCtrl->InsertTab(0, homeInfo, false);
+        WindowTab first(&win);
+        WindowTab second(&win);
+        WindowTab* tabs[] = {&first, &second};
+        for (int i = 0; i < dimofi(tabs); i++) {
+            auto* fs = NewFileState(fmt("C:\\Reading\\Session-%d.pdf", i));
+            str::ReplaceWithCopy(&fs->pageNo, fmt("%d", i + 7));
+            str::ReplaceWithCopy(&fs->zoom, StrL("175"));
+            fs->scrollPos = {20, 30};
+            fs->showToc = true;
+            tabs[i]->SetFilePath(fs->filePath);
+            tabs[i]->tabState = NewTabState(fs);
+            DeleteFileState(fs);
+            auto* info = new TabInfo();
+            info->userData = (UINT_PTR)tabs[i];
+            win.tabsCtrl->InsertTab(i + 1, info, false);
+        }
+        win.tabsCtrl->SetSelected(2);
+        VecAppend(gWindows, &win);
+        RememberSessionState();
+        ok &= len(*gSettings->sessionData) == 1;
+        VecReset(gWindows);
+        RememberSessionState(); // late save after the final window was destroyed
+        Str encoded = SerializeSettings(gSettings, {});
+        ok &= file::WriteFile(fixture, encoded);
+        str::Free(encoded);
+        Str persisted = file::ReadFile(fixture);
+        Settings* reopened = NewSettings(persisted);
+        str::Free(persisted);
+        ok &= reopened->restoreSession && len(*reopened->sessionData) == 1;
+        if (len(*reopened->sessionData) == 1) {
+            auto* session = (*reopened->sessionData)[0];
+            ok &= session->tabIndex == 2 && len(*session->tabStates) == 2;
+            if (len(*session->tabStates) == 2) {
+                auto* state = (*session->tabStates)[1];
+                ok &= str::Eq(state->filePath, second.filePath) && str::Eq(state->pageNo, StrL("8"));
+                ok &= str::Eq(state->zoom, StrL("175")) && state->showToc;
+                ok &= state->scrollPos.x == 20 && state->scrollPos.y == 30;
+            }
+        }
+        DeleteSettings(reopened);
+        // A deliberate empty home session must clear the previous documents.
+        win.tabsCtrl->RemoveAllTabs();
+        auto* info = new TabInfo();
+        info->userData = (UINT_PTR)&home;
+        win.tabsCtrl->InsertTab(0, info, false);
+        VecAppend(gWindows, &win);
+        RememberSessionState();
+        ok &= len(*gSettings->sessionData) == 0;
+        VecReset(gWindows);
+        VecAppend(*gSettings->sessionData, NewSessionData());
+        gSettings->rememberOpenedFiles = false;
+        RememberSessionState();
+        ok &= len(*gSettings->sessionData) == 0;
+        win.tabsCtrl->RemoveAllTabs();
+        DeleteTabState(first.tabState);
+        DeleteTabState(second.tabState);
+        first.tabState = second.tabState = nullptr;
+    }
+    if (fixture) file::Delete(fixture);
+    str::Free(fixture);
+    DeleteSettings(gSettings);
+    gSettings = saved;
+    FileHistorySetStates(savedHistory);
+    gWindows = savedWindows;
+    gInitialSessionData = savedInitial;
+    gMyWindowWasEmbedded = savedEmbedded;
+    return ok;
+}
+#endif
 
 // called whenever global preferences change or a file is
 // added or removed from the file history (in order to keep
@@ -1186,6 +1282,11 @@ int UiScalePxForDpi(int dpi, int logicalPx) {
 
 int UiScalePx(int logicalPx) {
     return UiScalePxForDpi(DpiGet(), logicalPx);
+}
+
+int GetAppScrollbarWidth(int dpi) {
+    int width = gSettings ? gSettings->scrollbarWidth : 20;
+    return UiScalePxForDpi(dpi, limitValue(width, 8, 40));
 }
 
 int UiFontSizePxForDpi(int dpi, int designPx) {

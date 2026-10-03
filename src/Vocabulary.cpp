@@ -160,6 +160,11 @@ static VocabularyDeck* FindDeck(const Vec<VocabularyDeck*>& decks, Str id) {
         if (str::Eq(d->id, id)) return d;
     return nullptr;
 }
+static void CopyDeckInstall(VocabularyDeck* target, const VocabularyDeck* source) {
+    target->installedTotal = source->installedTotal;
+    target->missingDefinitions.Reset();
+    for (Str word : source->missingDefinitions) target->missingDefinitions.Append(word);
+}
 static void StringField(str::Builder& out, const char* key, Str value, bool comma = true) {
     out.Append(fmt("\"%s\":\"%s\"%s", Str(key), Str(json::EscapeStrTemp(value)), comma ? StrL(",") : StrL("")));
 }
@@ -175,8 +180,13 @@ static Str Serialize(const VocabularyData& state) {
         StringField(out, "name", d->name);
         StringField(out, "description", d->description);
         StringField(out, "source", d->source);
-        StringField(out, "license", d->license, false);
-        out.AppendChar('}');
+        StringField(out, "license", d->license);
+        out.Append(fmt("\"installedTotal\":%d,\"missingDefinitions\":[", d->installedTotal));
+        for (int i = 0; i < len(d->missingDefinitions); i++) {
+            if (i) out.AppendChar(',');
+            out.Append(fmt("\"%s\"", Str(json::EscapeStrTemp(d->missingDefinitions[i]))));
+        }
+        out.Append(StrL("]}"));
     }
     out.Append(StrL("],\"words\":["));
     first = true;
@@ -357,6 +367,17 @@ static void ReadVocab(VocabReader* r, json::Value* v) {
         ReadString(&d->source, v, 2048, r);
     else if (str::Eq(key, StrL("license")))
         ReadString(&d->license, v, 32000, r);
+    else if (str::Eq(key, StrL("installedTotal")))
+        d->installedTotal = (int)Integer(v, kMaxVocabWords);
+    else if (str::Eq(key, StrL("missingDefinitions"))) {
+        Str missing = v->type == json::Type::String ? CleanWord(v->value) : Str{};
+        if (!len(missing) || len(d->missingDefinitions) >= kMaxVocabWords) {
+            r->invalid = true;
+            v->stop = true;
+            return;
+        }
+        if (d->missingDefinitions.Find(missing) < 0) d->missingDefinitions.Append(missing);
+    }
 }
 static bool ParseVocab(Str bytes, VocabReader& r) {
     if (len(bytes) > kMaxVocabBytes || !json::Parse(bytes, MkFunc1(ReadVocab, &r)) || r.invalid || r.version != 1)
@@ -420,9 +441,10 @@ bool VocabularyLoad() {
     for (auto* w : reader.parsed.words) VecAppend(data->words, w);
     VecReset(reader.parsed.words);
     for (auto* d : reader.parsed.decks) {
-        if (FindDeck(data->decks, d->id))
+        if (auto* existing = FindDeck(data->decks, d->id)) {
+            CopyDeckInstall(existing, d);
             delete d;
-        else
+        } else
             VecAppend(data->decks, d);
     }
     VecReset(reader.parsed.decks);
@@ -670,6 +692,8 @@ int VocabularyInstallDeck(Str id) {
         Split(&deck->words, Str(deck->builtinWords), StrL("\n"), true);
     }
     int added = 0;
+    StrVec missing;
+    bool complete = true;
     for (int i = 0; i < len(deck->words); i++) {
         Str word = deck->words[i];
         Str definition;
@@ -681,13 +705,42 @@ int VocabularyInstallDeck(Str id) {
             dictionary = meanings[0].dictionaryId;
         }
         if (!len(definition)) definition = DictionaryPlainText(VocabularyBuiltinMeaning(word));
-        bool existed = FindWord(data->words, word, dictionary) != nullptr;
-        if (len(definition) && VocabularyAdd(word, definition, dictionary, {}, {}, 0, id) && !existed) added++;
+        VocabularyWord* existing = FindWord(data->words, word, dictionary);
+        bool existed = existing != nullptr;
+        if (len(definition)) {
+            if (existing && len(existing->definition)) {
+                AttachDeck(existing, id);
+            } else if (VocabularyAdd(word, definition, dictionary, {}, {}, 0, id)) {
+                if (!existed) added++;
+            } else {
+                complete = false;
+            }
+        } else if (!len(error)) {
+            missing.Append(word);
+        } else {
+            complete = false;
+        }
         FreeOfflineMeanings(meanings);
         str::Free(error);
     }
     data->batch = false;
-    if (!VocabularySave()) return -1;
+    VocabularyDeck previous;
+    CopyDeckInstall(&previous, deck);
+    if (complete) {
+        int total = 0;
+        VocabularyDeckInstalled(id, nullptr, &total);
+        deck->installedTotal = total;
+        deck->missingDefinitions.Reset();
+        for (Str word : missing) deck->missingDefinitions.Append(word);
+    }
+    if (!VocabularySave()) {
+        CopyDeckInstall(deck, &previous);
+        return -1;
+    }
+    if (!complete) {
+        Fail(StrL("Some source words could not be checked or saved. Retry installing this deck."));
+        return -1;
+    }
     return added;
 }
 bool VocabularyExport(Str path) {
@@ -709,6 +762,16 @@ static void SortDeckWords(Vec<WStr>& words) {
         words[unique++] = word;
     }
     words.len = unique;
+}
+static int CountDeckWords(const Vec<WStr>& expected, const Vec<WStr>& available) {
+    int count = 0, required = 0, saved = 0;
+    while (required < len(expected) && saved < len(available)) {
+        int comparison = CmpDeckWord(expected[required], available[saved]);
+        if (comparison == 0) count++;
+        if (comparison <= 0) required++;
+        if (comparison >= 0) saved++;
+    }
+    return count;
 }
 bool VocabularyDeckInstalled(Str id, int* count, int* total) {
     if (count) *count = 0;
@@ -739,20 +802,18 @@ bool VocabularyDeckInstalled(Str id, int* count, int* total) {
     SortDeckWords(available);
     int installed = len(available);
     if (deck->builtin) {
-        installed = 0;
-        int required = 0, saved = 0;
         // Sorted unique indices make membership counting linear and preserve Unicode case matching.
-        while (required < len(expected) && saved < len(available)) {
-            int comparison = CmpDeckWord(expected[required], available[saved]);
-            if (comparison == 0) installed++;
-            if (comparison <= 0) required++;
-            if (comparison >= 0) saved++;
-        }
+        installed = CountDeckWords(expected, available);
     }
     int wanted = deck->builtin ? len(expected) : len(available);
     if (count) *count = installed;
     if (total) *total = wanted;
-    return wanted > 0 && installed >= wanted;
+    if (wanted > 0 && installed >= wanted) return true;
+    if (!deck->builtin || installed == 0 || deck->installedTotal != wanted) return false;
+    // An installed source pack can contain terms for which its dictionaries have no definition.
+    for (Str word : deck->missingDefinitions) VecAppend(available, ToWStrTemp(word));
+    SortDeckWords(available);
+    return CountDeckWords(expected, available) == wanted;
 }
 template <typename T>
 static void SwapLists(Vec<T>& a, Vec<T>& b) {
@@ -806,9 +867,10 @@ bool VocabularyImport(Str path, bool merge) {
     }
     VecReset(imported.parsed.words);
     for (auto* deck : imported.parsed.decks) {
-        if (FindDeck(target.decks, deck->id))
+        if (auto* existing = FindDeck(target.decks, deck->id)) {
+            if (!existing->installedTotal) CopyDeckInstall(existing, deck);
             delete deck;
-        else
+        } else
             VecAppend(target.decks, deck);
     }
     VecReset(imported.parsed.decks);
@@ -1193,11 +1255,67 @@ static void DeckInstalledTests() {
     utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
     utassert(count == 0 && total == 0);
 }
+static void DeckInstallationTests() {
+    VocabularyData isolated;
+    isolated.loaded = isolated.test = true;
+    isolated.path = str::Dup(GetTempFilePathTemp(StrL("vocabulary-install-status")));
+    VocabularyData* saved = data;
+    data = &isolated;
+    defer {
+        data = saved;
+        file::Delete(isolated.path);
+    };
+    auto* deck = new VocabularyDeck;
+    deck->id = str::Dup(StrL("partial-install-test"));
+    deck->name = str::Dup(StrL("Installation test"));
+    deck->builtin = true;
+    deck->builtinWords = "abhor\nzz-missing-source-definition-test";
+    VecAppend(isolated.decks, deck);
+    auto* savedWord = VocabularyAdd(StrL("abhor"), StrL("Keep this definition."), StrL("wmkeyboard-vocab-en"),
+                                    StrL("Keep this context."), StrL("source.pdf"), 11, deck->id);
+    utassert(savedWord != nullptr);
+    int count = 0, total = 0;
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    HANDLE locked = CreateFileW(CWStrTemp(isolated.path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    utassert(locked != INVALID_HANDLE_VALUE);
+    if (locked != INVALID_HANDLE_VALUE) {
+        utassert(VocabularyInstallDeck(deck->id) < 0);
+        utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+        CloseHandle(locked);
+    }
+    utassert(VocabularyInstallDeck(deck->id) >= 0);
+    // Completing a source pack is different from having a definition for every source word.
+    utassert(VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 1 && total == 2);
+    utassert(str::Eq(savedWord->context, StrL("Keep this context.")));
+    utassert(savedWord->page == 11 && str::Eq(savedWord->definition, StrL("Keep this definition.")));
+    Str serialized = Serialize(isolated);
+    VocabReader restored;
+    utassert(ParseVocab(serialized, restored));
+    str::Free(serialized);
+    auto* restoredDeck = FindDeck(restored.parsed.decks, deck->id);
+    utassert(restoredDeck && restoredDeck->installedTotal == 2 && len(restoredDeck->missingDefinitions) == 1);
+    if (!restoredDeck) return;
+    restoredDeck->builtin = true;
+    restoredDeck->builtinWords = deck->builtinWords;
+    restored.parsed.loaded = restored.parsed.batch = restored.parsed.test = true;
+    data = &restored.parsed;
+    utassert(VocabularyDeckInstalled(restoredDeck->id, &count, &total));
+    utassert(count == 1 && total == 2);
+    StrVec ids;
+    for (const auto* word : data->words) ids.Append(word->id);
+    for (Str id : ids) utassert(VocabularyRemove(id));
+    utassert(!VocabularyDeckInstalled(restoredDeck->id, &count, &total));
+    utassert(VocabularyUndoRemove());
+    utassert(VocabularyDeckInstalled(restoredDeck->id, &count, &total));
+}
 void Vocabulary_UnitTests() {
     RemoveFailureTests();
     RemoveUndoTests();
     RemoveUndoLimitTests();
     DeckInstalledTests();
+    DeckInstallationTests();
     VocabularyData isolated;
     isolated.loaded = true;
     isolated.test = true;

@@ -99,6 +99,8 @@ struct PageRenderRequest {
     AbortCookie* abortCookie = nullptr;
     u32 darkModeEpoch = 0;
     bool grayscale = false;
+    Color pageTextColor = kColorUnset;
+    Color pageBackgroundColor = kColorUnset;
     u64 timestamp = 0;
 
     // set by render thread before calling renderFinishedCb

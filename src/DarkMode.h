@@ -15,6 +15,8 @@ bool DarkModeIsActive();
 Color DarkModeDialogBgColor();
 
 void DarkModeInit();
+void WindowCornersInit();
+bool WindowApplyRoundedCorners(HWND);
 // push the current theme's palette into darkmodelib
 void DarkModeApplyThemeColors();
 void DarkModeRememberTreeViewStyle();

@@ -3,6 +3,9 @@
 
 #include "base/Base.h"
 #include "base/Win.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "gui/Dpi.h"
 
 #include "gui/UIModels.h"
@@ -17,6 +20,22 @@
 // https://docs.microsoft.com/en-us/windows/win32/controls/combo-boxes
 
 static Kind kindDropDown = "dropdown";
+
+// Native combo boxes redraw their edit and list after every inserted item.
+// Populate them in one transaction, retaining a deliberately hidden control.
+struct DropDownUpdate {
+    HWND hwnd;
+    bool visible;
+    explicit DropDownUpdate(HWND window)
+        : hwnd(window), visible((GetWindowLongPtrW(window, GWL_STYLE) & WS_VISIBLE) != 0) {
+        SendMessageW(hwnd, WM_SETREDRAW, FALSE, 0);
+    }
+    ~DropDownUpdate() {
+        SendMessageW(hwnd, WM_SETREDRAW, TRUE, 0);
+        if (!visible) ShowWindow(hwnd, SW_HIDE);
+        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+    }
+};
 
 DropDown::DropDown() {
     kind = kindDropDown;
@@ -49,7 +68,11 @@ static void ReplaceDropDownItems(HWND hwnd, StrVec& items) {
 // leaves all of it selected. Any relayout around us - the find bar's "n / m"
 // slot widening as the count comes in - would then wipe out what the user is
 // typing, so put the caret back where it was (issue #6068).
-static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
+    auto* drop = (DropDown*)data;
+    if (drop && (msg == CB_SHOWDROPDOWN && wp || msg == WM_MOUSEWHEEL ||
+                 (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_DOWN || wp == VK_HOME || wp == VK_END || wp == VK_F4))))
+        drop->EnsureItems();
     if (msg == WM_SETFONT) {
         LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
         EditSetDefaultMargins(CbEditHwnd(hwnd));
@@ -71,6 +94,8 @@ void DropDown::OnCommand(ControlBase::CommandEvent* ev) {
         return;
     }
     auto code = HIWORD(ev->wparam);
+    if (code == CBN_DROPDOWN) EnsureItems();
+    if (code == CBN_EDITCHANGE && itemsPending) pendingSelection = -1;
     if (code == CBN_EDITCHANGE && onTextChanged.IsValid()) {
         onTextChanged.Call();
         ev->didHandle = true;
@@ -181,6 +206,7 @@ HWND DropDown::Create(const CreateArgs& args) {
     onCommand = MkMethod1<DropDown, ControlBase::CommandEvent*, &DropDown::OnCommand>(this);
     onMessageReflect = MkMethod1<DropDown, ControlBase::MessageReflectEvent*, &DropDown::OnMessageReflect>(this);
     colorSwatches = args.colorSwatches;
+    deferItems = args.deferItems;
     CreateControlArgs cargs;
     cargs.parent = args.parent;
     cargs.isRtl = args.isRtl;
@@ -205,9 +231,7 @@ HWND DropDown::Create(const CreateArgs& args) {
 
     // SetDropDownItems(hwnd, items);
     EditSetDefaultMargins(CbEditHwnd(hwnd));
-    if (CbEditHwnd(hwnd)) {
-        SetWindowSubclass(hwnd, DropDownProc, 0, 0);
-    }
+    SetWindowSubclass(hwnd, DropDownProc, 0, (DWORD_PTR)this);
     CbSetCurrentSelection(hwnd, -1);
     CbSetMinVisible(hwnd, 10);
     if (colorSwatches) {
@@ -240,6 +264,7 @@ bool DropDown::IsFocused() const {
 }
 
 void DropDown::SetItems(StrVec& newItems) {
+    DropDownUpdate update(hwnd);
     items.Reset();
     VecReset(itemColors);
     int n = len(newItems);
@@ -247,8 +272,38 @@ void DropDown::SetItems(StrVec& newItems) {
         Str s = newItems[i];
         items.Append(s);
     }
-    SetDropDownItems(hwnd, items);
+    itemsPending = deferItems;
+    pendingSelection = -1;
+    if (itemsPending)
+        CbResetContent(hwnd);
+    else
+        SetDropDownItems(hwnd, items);
     CbSetCurrentSelection(hwnd, -1);
+}
+
+void DropDown::SetText(Str text) {
+    pendingSelection = -1;
+    HwndBase::SetText(text);
+}
+
+void DropDown::EnsureItems() {
+    if (!itemsPending) return;
+    DropDownUpdate update(hwnd);
+    Str text = str::Dup(GetTextTemp());
+    int start = 0, end = 0;
+    CbEditGetSelection(hwnd, start, end);
+    bool previous = suppressNotify;
+    suppressNotify = true;
+    int selection = pendingSelection;
+    itemsPending = false;
+    SetDropDownItems(hwnd, items);
+    if (selection >= 0)
+        CbSetCurrentSelection(hwnd, selection);
+    else
+        HwndBase::SetText(text);
+    CbEditSelectText(hwnd, start, end);
+    str::Free(text);
+    suppressNotify = previous;
 }
 
 // Rebuild the list under a user who is still typing, e.g. the find history
@@ -256,6 +311,8 @@ void DropDown::SetItems(StrVec& newItems) {
 // CB_RESETCONTENT it starts with and the CbSetCurrentSelection(-1) it ends
 // with empty a CBS_DROPDOWN edit.
 void DropDown::SetItemsKeepText(StrVec& newItems) {
+    EnsureItems();
+    DropDownUpdate update(hwnd);
     Str cur = str::Dup(GetTextTemp());
     int selStart = 0, selEnd = 0;
     CbEditGetSelection(hwnd, selStart, selEnd);
@@ -357,11 +414,24 @@ bool CbIsDropped(DropDown* dd) {
 }
 
 int CbGetCurrentSelection(DropDown* dd) {
+    if (dd && dd->itemsPending) return dd->pendingSelection;
     return CbGetCurrentSelection(HwndOf(dd));
 }
 
 void CbSetCurrentSelection(DropDown* dd, int n) {
     if (!dd) {
+        return;
+    }
+    if (dd->itemsPending) {
+        bool previous = dd->suppressNotify;
+        dd->suppressNotify = true;
+        CbResetContent(dd->hwnd);
+        dd->pendingSelection = n;
+        if (n >= 0 && n < len(dd->items)) {
+            CbAddString(dd->hwnd, dd->items[n]);
+            CbSetCurrentSelection(dd->hwnd, 0);
+        }
+        dd->suppressNotify = previous;
         return;
     }
     if (n < 0) {
@@ -395,3 +465,33 @@ void CbEditSetModified(DropDown* dd, bool on) {
 bool CbEditIsModified(DropDown* dd) {
     return CbEditIsModified(HwndOf(dd));
 }
+
+#if IS_DEBUG
+void DropDown_UnitTestsDeferred() {
+    HWND parent =
+        CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPED, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
+    for (bool editable : {false, true}) {
+        DropDown drop;
+        DropDown::CreateArgs args;
+        args.parent = parent;
+        args.font = GetPlatformFont((HFONT)GetStockObject(DEFAULT_GUI_FONT));
+        args.isEditable = editable;
+        args.deferItems = true;
+        drop.Create(args);
+        StrVec items;
+        for (const char* label : {"First", "Second", "Third"}) items.Append(Str(label));
+        drop.SetItems(items);
+        CbSetCurrentSelection(&drop, 2);
+        utassert(drop.itemsPending && CbGetCurrentSelection(&drop) == 2);
+        utassert(CbGetItemsCount(drop.hwnd) == 1 && str::Eq(drop.GetTextTemp(), StrL("Third")));
+        if (editable) drop.SetText(StrL("Custom value"));
+        drop.EnsureItems();
+        utassert(!drop.itemsPending && CbGetItemsCount(drop.hwnd) == 3);
+        utassert(str::Eq(drop.GetTextTemp(), editable ? StrL("Custom value") : StrL("Third")));
+        utassert(CbGetCurrentSelection(&drop) == (editable ? -1 : 2));
+        utassert(!IsWindowVisible(parent));
+        DestroyWindow(drop.hwnd);
+    }
+    DestroyWindow(parent);
+}
+#endif

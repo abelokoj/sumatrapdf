@@ -354,8 +354,10 @@ enum {
     CmdVocabularyHome = 548,
     CmdExportStudyNotes = 549,
     CmdEditBookmarks = 550,
+    CmdAnnotationLasso = 551,
+    CmdHandTool = 552,
 
-    CmdLast = 550,
+    CmdLast = 552,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

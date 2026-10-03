@@ -443,6 +443,10 @@ struct WindowBase : HwndBase {
 
 bool PreTranslateMessage(MSG& msg);
 
+HRGN RoundedControlRegion(HWND hwnd, Size size);
+void RoundControlCorners(HWND hwnd);
+void RoundChildControls(HWND hwnd);
+
 // Base of the controls that a layout positions: the win32 controls (Static,
 // Button, Edit, ...) and custom HWND hosts. Virtual-only controls (TabsCtrl,
 // VirtListBox, ...) derive from VirtCtrl instead.
@@ -890,6 +894,7 @@ struct DropDown : ControlBase {
         PlatformFont* font = nullptr;
         bool isRtl = false;
         bool isEditable = false;
+        bool deferItems = false; // materialize the native list when it is first used
         // draw a color swatch to the left of each item (annotation color lists)
         bool colorSwatches = false;
         // TODO: model or items
@@ -901,6 +906,9 @@ struct DropDown : ControlBase {
     StrVec items;
     Vec<Color> itemColors; // parallel to items when colorSwatches
     bool colorSwatches = false;
+    bool deferItems = false;
+    bool itemsPending = false;
+    int pendingSelection = -1;
     SelectionChangedHandler onSelectionChanged;
     TextChangedHandler onTextChanged;
     SelectionChangedHandler onCloseUp;
@@ -922,6 +930,8 @@ struct DropDown : ControlBase {
     void SetFocus() override;
 
     void SetItems(StrVec& newItems);
+    void EnsureItems();
+    void SetText(Str);
     void SetItemsKeepText(StrVec& newItems);
     void SetItemsSeqStrings(SeqStrings items);
     void SetCursorId(LPWSTR);

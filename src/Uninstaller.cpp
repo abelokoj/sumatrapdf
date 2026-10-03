@@ -20,6 +20,7 @@
 #include "AppTools.h"
 #include "Translations.h"
 #include "Version.h"
+#include "DarkMode.h"
 
 #include "RegistryPreview.h"
 #include "RegistrySearchFilter.h"
@@ -224,6 +225,7 @@ static void CreateUninstallerWindow() {
     DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
     const auto* winCls = kInstallerWindowClassName;
     gHwndFrame = CreateWindowW(winCls, CWStrTemp(title), dwStyle, x, y, dx, dy, nullptr, nullptr, h, nullptr);
+    WindowApplyRoundedCorners(gHwndFrame);
 
     DpiSetFromHwnd(gHwndFrame);
     DpiScale(dx, dy);
@@ -548,6 +550,7 @@ static void InitSelfDelete() {
 }
 
 int RunUninstaller() {
+    WindowCornersInit();
     gLogRegistryCalls = true;
     Str uninstallerLogPath;
     trans::SetCurrentLangByCode(trans::DetectUserLang());

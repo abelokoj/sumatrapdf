@@ -1951,6 +1951,209 @@ void ControlBase::AttachDlgItem(UINT id, HWND parent) {
     Attach(wnd);
 }
 
+static bool IsRoundedControl(HWND hwnd) {
+    if (!(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD)) {
+        return false;
+    }
+    WCHAR cls[80]{};
+    GetClassNameW(hwnd, cls, dimof(cls));
+    if (wcscmp(cls, WC_EDITW) == 0) {
+        WCHAR parentClass[80]{};
+        GetClassNameW(GetParent(hwnd), parentClass, dimof(parentClass));
+        return wcscmp(parentClass, WC_COMBOBOXW) != 0;
+    }
+    if (wcscmp(cls, WC_COMBOBOXW) == 0 || wcscmp(cls, WC_LISTBOXW) == 0 || wcscmp(cls, WC_TREEVIEWW) == 0 ||
+        wcscmp(cls, WC_LISTVIEWW) == 0 || wcscmp(cls, PROGRESS_CLASSW) == 0 || wcscmp(cls, L"RICHEDIT50W") == 0 ||
+        wcscmp(cls, L"RichEdit20W") == 0) {
+        return true;
+    }
+    if (wcscmp(cls, WC_STATICW) == 0) {
+        auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        auto type = style & SS_TYPEMASK;
+        return (style & WS_BORDER) || type == SS_BLACKFRAME || type == SS_GRAYFRAME || type == SS_WHITEFRAME ||
+               type == SS_ETCHEDFRAME;
+    }
+    if (wcscmp(cls, WC_BUTTONW) == 0) {
+        auto type = GetWindowLongPtrW(hwnd, GWL_STYLE) & BS_TYPEMASK;
+        return type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON || type == BS_OWNERDRAW;
+    }
+    return false;
+}
+
+static int RoundedControlDiameter(HWND hwnd, Size size) {
+    int diameter = DpiScaleByDpi(DpiGetForHwnd(hwnd), 8);
+    HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    LOGFONTW lf{};
+    if (font && GetObjectW(font, sizeof(lf), &lf)) {
+        diameter = std::max(diameter, std::abs((int)lf.lfHeight) / 3);
+    }
+    return std::clamp(diameter, 1, std::max(1, std::min(size.dx, size.dy)));
+}
+
+HRGN RoundedControlRegion(HWND hwnd, Size size) {
+    if (!hwnd || !IsRoundedControl(hwnd) || size.dx <= 0 || size.dy <= 0) {
+        return nullptr;
+    }
+    int diameter = RoundedControlDiameter(hwnd, size);
+    return CreateRoundRectRgn(0, 0, size.dx + 1, size.dy + 1, diameter, diameter);
+}
+
+struct RoundedControlState {
+    Size size;
+    int diameter = 0;
+    bool updating = false;
+};
+
+static constexpr UINT kWmDpiChangedAfterParent = 0x02e3;
+
+static void UpdateControlCorners(HWND hwnd, RoundedControlState* state) {
+    if (state->updating) {
+        return;
+    }
+    Size size = HwndWindowRect(hwnd).Size();
+    int diameter = RoundedControlDiameter(hwnd, size);
+    if (size.dx == state->size.dx && size.dy == state->size.dy && diameter == state->diameter) {
+        return;
+    }
+    state->size = size;
+    state->diameter = diameter;
+    HRGN region = RoundedControlRegion(hwnd, size);
+    if (!region) {
+        return;
+    }
+    state->updating = true;
+    if (!SetWindowRgn(hwnd, region, FALSE)) {
+        DeleteObject(region);
+    }
+    state->updating = false;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+#if IS_DEBUG
+static int roundedPaintCount = 0;
+#endif
+static void PaintControlCorners(HWND hwnd, HDC dc, RoundedControlState* state) {
+#if IS_DEBUG
+    roundedPaintCount++;
+#endif
+    if (!dc || state->size.dx < 2 || state->size.dy < 2) {
+        return;
+    }
+    // Keep native text, arrows and scrollbars, replacing only their outer frame.
+    HWND parent = GetParent(hwnd);
+    WCHAR cls[80]{};
+    GetClassNameW(hwnd, cls, dimof(cls));
+    UINT colorMessage = WM_CTLCOLORSTATIC;
+    if (wcscmp(cls, WC_EDITW) == 0 || wcscmp(cls, L"RICHEDIT50W") == 0 || wcscmp(cls, L"RichEdit20W") == 0) {
+        colorMessage = (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_READONLY) ? WM_CTLCOLORSTATIC : WM_CTLCOLOREDIT;
+    } else if (wcscmp(cls, WC_COMBOBOXW) == 0 || wcscmp(cls, WC_LISTBOXW) == 0) {
+        colorMessage = WM_CTLCOLORLISTBOX;
+    } else if (wcscmp(cls, WC_BUTTONW) == 0) {
+        colorMessage = WM_CTLCOLORBTN;
+    }
+    int saved = SaveDC(dc);
+    auto brush = (HBRUSH)SendMessageW(parent, colorMessage, (WPARAM)dc, (LPARAM)hwnd);
+    if (!brush) {
+        SetDCBrushColor(dc, gColsListBox[kColListBg]);
+        brush = (HBRUSH)GetStockObject(DC_BRUSH);
+    }
+    int width = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_CLIENTEDGE) ? 2 : 1;
+    int dx = state->size.dx, dy = state->size.dy;
+    RECT strips[] = {{0, 0, dx, width}, {0, dy - width, dx, dy}, {0, 0, width, dy}, {dx - width, 0, dx, dy}};
+    for (auto& strip : strips) {
+        FillRect(dc, &strip, brush);
+    }
+    Color border = gColsEdit[kColEditBottomBorder];
+    if (GetFocus() == hwnd || (GetFocus() && IsChild(hwnd, GetFocus()))) {
+        border = gColsBtnDefault[kColBtnBorder];
+    }
+    GfxHdc gfx(dc);
+    gfx.FillRoundedRect({0, 0, state->size.dx, state->size.dy}, state->diameter, kColorTransparent, border);
+    if (saved) RestoreDC(dc, saved);
+}
+
+static LRESULT CALLBACK RoundedControlProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* state = (RoundedControlState*)data;
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, RoundedControlProc, id);
+        delete state;
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    if (msg == WM_SIZE || msg == WM_SETFONT || msg == kWmDpiChangedAfterParent) {
+        UpdateControlCorners(hwnd, state);
+    }
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_THEMECHANGED) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    if ((msg == WM_PAINT || msg == WM_NCPAINT) && IsWindowVisible(hwnd)) {
+        HDC dc = GetWindowDC(hwnd);
+        PaintControlCorners(hwnd, dc, state);
+        if (dc) ReleaseDC(hwnd, dc);
+    } else if (msg == WM_PRINT && (lp & PRF_NONCLIENT)) {
+        PaintControlCorners(hwnd, (HDC)wp, state);
+    }
+    return result;
+}
+
+void RoundControlCorners(HWND hwnd) {
+    if (!hwnd || !IsRoundedControl(hwnd)) {
+        return;
+    }
+    GuiColorsInitIfNeeded();
+    DWORD_PTR data = 0;
+    if (GetWindowSubclass(hwnd, RoundedControlProc, (UINT_PTR)RoundedControlProc, &data)) {
+        UpdateControlCorners(hwnd, (RoundedControlState*)data);
+        return;
+    }
+    auto* state = new RoundedControlState();
+    if (!SetWindowSubclass(hwnd, RoundedControlProc, (UINT_PTR)RoundedControlProc, (DWORD_PTR)state)) {
+        delete state;
+        return;
+    }
+    UpdateControlCorners(hwnd, state);
+}
+
+static BOOL CALLBACK RoundChildControl(HWND hwnd, LPARAM) {
+    RoundControlCorners(hwnd);
+    return TRUE;
+}
+
+void RoundChildControls(HWND hwnd) {
+    if (!hwnd || GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+        return;
+    }
+    auto module = (HINSTANCE)GetClassLongPtrW(hwnd, GCLP_HMODULE);
+    if (module != GetInstance() && !HwndBaseFromHwnd(hwnd)) {
+        auto proc = (void*)GetWindowLongPtrW(hwnd, DWLP_DLGPROC);
+        MEMORY_BASIC_INFORMATION info{};
+        if (!proc || !VirtualQuery(proc, &info, sizeof(info)) || info.AllocationBase != GetInstance()) {
+            return;
+        }
+    }
+    EnumChildWindows(hwnd, RoundChildControl, 0);
+}
+
+#if IS_DEBUG
+bool RoundedControl_UnitTestHidden() {
+    HWND parent =
+        CreateWindowExW(0, WC_STATICW, L"", WS_POPUP, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
+    if (!parent) return false;
+    HWND combo = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN, 10, 10, 180, 180, parent,
+                                 nullptr, GetInstance(), nullptr);
+    if (!combo) {
+        DestroyWindow(parent);
+        return false;
+    }
+    RoundControlCorners(combo);
+    int before = roundedPaintCount;
+    SendMessageW(combo, WM_NCPAINT, 1, 0);
+    bool skipped = roundedPaintCount == before;
+    DestroyWindow(parent);
+    return skipped;
+}
+#endif
+
 HWND ControlBase::CreateControl(const CreateControlArgs& args) {
     ReportIf(len(args.className) == 0);
     // TODO: validate that className is one of the known controls?
@@ -1999,6 +2202,7 @@ HWND ControlBase::CreateControl(const CreateControlArgs& args) {
     if (args.text) {
         SetText(args.text);
     }
+    RoundControlCorners(hwnd);
     return hwnd;
 }
 

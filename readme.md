@@ -83,15 +83,20 @@ Run the installer to install the application, or run the standalone portable EXE
 - Compact dictionary and library controls, with dictionary and deck tools that expand when needed. Practice keeps setup out of the way and emphasizes checking or advancing your answer.
 - Undo the last 20 word removals during the session, preserving definitions, PDF context, deck memberships and review history.
 - Persistent activity, review-method and voice labels, with help explaining SM-2, Leitner and learned status.
+- Green `✓` marks for completed deck installation, with separate counts for words whose source definitions are unavailable. Check/Next, Back and answer feedback share a compact row where space permits.
 
 ### ✍️ Pen and presentation tools
 
 - Initial ballpoint, fountain, brush, pencil and highlighter profiles with settings that can be expanded or hidden.
 - Pin favorite annotation presets, including different colors and widths of the same pen.
+- Pin PDF editing tools to the main toolbar; right-click a tool to pin it and a pinned button to remove it.
+- Select annotations with a freehand lasso, then drag to move or resize them, use arrow keys to adjust their position, or press Delete. Undo and redo retain the PDF annotation data.
+- Use the hand tool to drag the page while keeping drawing tools inactive.
 - Default pen thickness **0.1–16 pt in 0.1 pt steps**, with configurable bounds and increments.
 - Native PDF ink preserves fractional widths and pen-profile metadata for editing and erasing after saving and reopening, including on another Enhanced installation.
-- Stroke/highlighter-only erasing, touch suppression while writing, coalesced stylus input and bounded repainting for responsiveness.
+- Stroke/highlighter-only erasing, touch rejection for annotation input, coalesced stylus input and bounded repainting for responsiveness. Touch scrolling and zoom remain available while a pen tool is selected.
 - Temporary laser pointer with **solid trail, hollow trail or single dot**, and preset and custom colors.
+- Completed laser strokes remain for the selected duration after switching tools.
 
 ### 🎨 Interface and reading improvements
 
@@ -99,13 +104,18 @@ Run the installer to install the application, or run the standalone portable EXE
 - Pretty-style welcome page, document search, Resume last and recent-document cards.
 - Compact home header with the green logo beside the bold app name and more space for recent files.
 - Content-sized Settings with wrapping fields and help text, and an OK/Cancel footer that stays visible while scrolling.
+- Settings presets also accept custom values. Choices load on first use, reopening reuses text measurements, and app-owned fields, panels and menus use consistent rounded corners.
+- Independent text and page-background colors for the current PDF, with color pickers and a reset to the selected theme.
+- Clear tab separators and a scrollable open-file dropdown with ten visible entries by default; its visible count and scrollbar width are adjustable.
+- A right scrollbar for recent documents and portable session restoration after closing the app.
 - [Edit PDF bookmarks](docs/cpdf-bookmarks.md) with an optional cpdf download, or use your own executable. Change titles, pages, hierarchy and order, then save a separate PDF copy. The tool is not bundled; the download prompt shows its size and license.
 - Rounded toolbar groups, expandable controls, twelve Pretty theme presets and right-side day, night and document-inversion actions.
+- Scroll crowded toolbars left or right with the wheel or navigation arrows, or choose a tool from the scrollable dropdown.
 - Rounded Lucide core icons and bundled **Manrope, Pretendard Std and Public Sans**, alongside System font selection.
 - Main Appearance controls for interface and sidebar text, icon size, thumbnail size, recent-document count and minimum tab width; scrolling tab overflow.
 - Sharper enlarged recent thumbnails and theme-aware control and icon refresh.
 - Inline custom zoom entry and 25-percentage-point default zoom steps above 100%.
-- Reference hover previews built on upstream functionality, with configurable delay and document-cache fixes.
+- Reference hover previews built on upstream functionality, with configurable delay, document-cache fixes and draggable edges and corners for resizing.
 
 Dictionary and vocabulary learning, the temporary laser, pen profiles, pinned presets and bundled interface-font selection are Enhanced additions. Existing upstream features such as native annotations, text search, document inversion and reference previews are retained and extended; they are not presented as entirely new inventions.
 
