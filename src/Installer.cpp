@@ -487,7 +487,8 @@ static TempStr FormatMoveAsideDialogContentTemp(Str fileName, Str path) {
                           "antivirus, Controlled Folder Access, a restrictive file ACL, or a leftover lock "
                           "that only a reboot clears.\n\n"
                           "What to try:\n"
-                          "• Temporarily exclude the install folder from antivirus / Controlled Folder Access\n"
+                          "• Check Windows Security Protection history for a blocked file\n"
+                          "• If a threat was detected, keep protection enabled and contact the publisher\n"
                           "• Reboot, then run the installer again before opening SumatraPDF\n"
                           "• Or install to a folder your account can write to (Options)\n\n"
                           "The installer keeps retrying every few seconds. Click Abort to cancel.\n\n"
@@ -499,7 +500,7 @@ static TempStr FormatMoveAsideDialogContentTemp(Str fileName, Str path) {
                       "The install folder is protected (for example Program Files) or access was denied.\n\n"
                       "What to try:\n"
                       "• Run the installer again and accept the administrator (UAC) prompt\n"
-                      "• Temporarily exclude the install folder from antivirus / Controlled Folder Access\n"
+                      "• Check Windows Security Protection history; do not bypass a threat detection\n"
                       "• Or install to a folder your account can write to (Options)\n"
                       "• If it still fails when elevated: reboot, then install before opening SumatraPDF\n\n"
                       "The installer keeps retrying every few seconds. Click Abort to cancel.\n\n"
@@ -539,8 +540,9 @@ static void NotifyMoveAsideFailed(Str fileName, Str path, bool userAborted) {
             }
         } else if (elevated) {
             NotifyFailed(fmt(Tr("Could not update %s: access denied (antivirus, Controlled Folder Access, or "
-                                "file ACL). Exclude the install folder, reboot and retry, or choose a different "
-                                "folder. See https://www.sumatrapdfreader.org/docs/Installation")
+                                "file ACL). Check Windows Security Protection history. If a threat was detected, "
+                                "keep protection enabled and contact the publisher. "
+                                "See https://www.sumatrapdfreader.org/docs/Installation")
                                  .s,
                              fileName));
         } else {
@@ -1003,8 +1005,8 @@ static bool CopySelfToDir(Str destDir) {
     if (lastErr == ERROR_ACCESS_DENIED) {
         NotifyFailed(
             Tr("Couldn't copy SumatraPDFEnhanced.exe to the installation directory (access denied). "
-               "Temporarily disable antivirus or Controlled Folder Access for this folder, "
-               "run the installer as administrator, or choose a different install folder. "
+               "Check Windows Security Protection history. If a threat was detected, keep protection enabled "
+               "and contact the publisher. Otherwise, check the folder permissions. "
                "See https://www.sumatrapdfreader.org/docs/Installation"));
     } else if (lastErr == ERROR_SHARING_VIOLATION || lastErr == ERROR_LOCK_VIOLATION) {
         NotifyFailed(

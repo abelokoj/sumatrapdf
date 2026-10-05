@@ -74,13 +74,13 @@ static bool IsFullRange(Vec<PageRange>& ranges) {
     return isFull;
 }
 
-static void BenchLoadRender(EngineBase* engine, int pagenum) {
+static bool BenchLoadRender(EngineBase* engine, int pagenum) {
     auto t = TimeGet();
     bool ok = engine->BenchLoadPage(pagenum);
 
     if (!ok) {
         logf("Error: failed to load page %d\n", pagenum);
-        return;
+        return false;
     }
     double timeMs = TimeSinceInMs(t);
     logf("pageload   %3d: %.2f ms\n", pagenum, timeMs);
@@ -91,14 +91,15 @@ static void BenchLoadRender(EngineBase* engine, int pagenum) {
 
     if (!rendered) {
         logf("Error: failed to render page %d\n", pagenum);
-        return;
+        return false;
     }
     FreePixmap(rendered);
     timeMs = TimeSinceInMs(t);
     logf("pagerender %3d: %.2f ms\n", pagenum, timeMs);
+    return true;
 }
 
-static void BenchChmLoadOnly(Str filePath) {
+static bool BenchChmLoadOnly(Str filePath) {
     auto total = TimeGet();
     logf("Starting: %s\n", filePath);
 
@@ -106,7 +107,7 @@ static void BenchChmLoadOnly(Str filePath) {
     ChmModel* chmModel = ChmModel::Create(filePath, nullptr);
     if (!chmModel) {
         logf("Error: failed to load %s\n", filePath);
-        return;
+        return false;
     }
 
     double timeMs = TimeSinceInMs(t);
@@ -120,11 +121,13 @@ static void BenchChmLoadOnly(Str filePath) {
     delete chmModel;
 
     logf("Finished (in %.2f ms): %s\n", TimeSinceInMs(total), filePath);
+    return true;
 }
 
-static void BenchFile(Str path, Str pagesSpec) {
+static bool BenchFile(Str path, Str pagesSpec) {
     if (!file::Exists(path)) {
-        return;
+        logf("Error: file %s doesn't exist\n", path);
+        return false;
     }
 
     // ad-hoc: if enabled times layout instead of rendering and does layout
@@ -133,12 +136,12 @@ static void BenchFile(Str path, Str pagesSpec) {
 
     FileType kind = GuessFileType(path, true);
     if (kind == FileType::Unknown) {
-        return;
+        logf("Error: unknown file type %s\n", path);
+        return false;
     }
 
     if (ChmModel::IsSupportedFileType(kind) && !gSettings->chmUI.useFixedPageUI) {
-        BenchChmLoadOnly(path);
-        return;
+        return BenchChmLoadOnly(path);
     }
 
     auto total = TimeGet();
@@ -148,7 +151,7 @@ static void BenchFile(Str path, Str pagesSpec) {
     EngineBase* engine = CreateEngineFromFile(path, nullptr, true);
     if (!engine) {
         logf("Error: failed to load %s\n", path);
-        return;
+        return false;
     }
 
     double timeMs = TimeSinceInMs(t);
@@ -157,6 +160,10 @@ static void BenchFile(Str path, Str pagesSpec) {
     EnsureFullLayout(engine);
     int pages = engine->PageCount();
     logf("page count: %d\n", pages);
+    bool ok = pages > 0;
+    if (!ok) {
+        logf("Error: no pages in %s\n", path);
+    }
 
     // build the table of contents: this is what the UI does on open and
     // it exercises the document's ToC parsing (e.g. MobiDoc), which the
@@ -167,18 +174,22 @@ static void BenchFile(Str path, Str pagesSpec) {
 
     if (len(pagesSpec) == 0) {
         for (int i = 1; i <= pages; i++) {
-            BenchLoadRender(engine, i);
+            ok = BenchLoadRender(engine, i) && ok;
         }
-    }
-
-    ReportIf(pagesSpec && !IsBenchPagesInfo(pagesSpec));
-    Vec<PageRange> ranges;
-    if (ParsePageRanges(pagesSpec, ranges)) {
-        for (int i = 0; i < len(ranges); i++) {
-            for (int j = ranges[i].start; j <= ranges[i].end; j++) {
-                if (1 <= j && j <= pages) {
-                    BenchLoadRender(engine, j);
-                }
+    } else if (!str::EqI(pagesSpec, StrL("loadonly"))) {
+        Vec<PageRange> ranges;
+        if (!ParsePageRanges(pagesSpec, ranges)) {
+            logf("Error: invalid page range %s\n", pagesSpec);
+            ok = false;
+        }
+        for (const PageRange& range : ranges) {
+            if (range.start > pages || (range.end != INT_MAX && range.end > pages)) {
+                logf("Error: page range %s exceeds %d pages\n", pagesSpec, pages);
+                ok = false;
+            }
+            int last = std::min(range.end, pages);
+            for (int j = range.start; j <= last; j++) {
+                ok = BenchLoadRender(engine, j) && ok;
             }
         }
     }
@@ -186,6 +197,7 @@ static void BenchFile(Str path, Str pagesSpec) {
     SafeEngineRelease(&engine);
 
     logf("Finished (in %.2f ms): %s\n", TimeSinceInMs(total), path);
+    return ok;
 }
 
 static bool IsFileToBench(Str path) {
@@ -210,26 +222,34 @@ static void CollectFilesToBench(Str dir, StrVec& files) {
     }
 }
 
-static void BenchDir(Str dir) {
+static bool BenchDir(Str dir) {
     StrVec files;
     CollectFilesToBench(dir, files);
-    for (int i = 0; i < len(files); i++) {
-        BenchFile(files[i], {});
+    bool ok = len(files) > 0;
+    if (!ok) {
+        logf("Error: no supported files in %s\n", dir);
     }
+    for (int i = 0; i < len(files); i++) {
+        ok = BenchFile(files[i], {}) && ok;
+    }
+    return ok;
 }
 
-void BenchFileOrDir(StrVec& pathsToBench) {
+bool BenchFileOrDir(StrVec& pathsToBench) {
     int n = len(pathsToBench) / 2;
+    bool ok = n > 0 && len(pathsToBench) % 2 == 0;
     for (int i = 0; i < n; i++) {
         Str path = pathsToBench[2 * i];
         if (file::Exists(path)) {
-            BenchFile(path, pathsToBench[(2 * i) + 1]);
+            ok = BenchFile(path, pathsToBench[(2 * i) + 1]) && ok;
         } else if (dir::Exists(path)) {
-            BenchDir(path);
+            ok = BenchDir(path) && ok;
         } else {
-            logf("Error: file or dir %s doesn't exist", path);
+            logf("Error: file or dir %s doesn't exist\n", path);
+            ok = false;
         }
     }
+    return ok;
 }
 
 static bool IsBlacklistedForStressTest(Str filePath) {

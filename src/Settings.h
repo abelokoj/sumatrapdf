@@ -962,6 +962,10 @@ struct Settings {
     // (the default) means the standard layout. Buttons you added yourself
     // (see Shortcuts) still come last
     Str toolbarCustomLayout;
+    // hidden toolbar command names separated by spaces; PageInfo hides the
+    // page number group. Pinned annotation presets are independent. Use
+    // the toolbar dropdown to show or hide items
+    Str toolbarHiddenItems;
     // font name for bookmarks and favorites tree views. automatic means
     // Windows default
     Str treeFontName;
@@ -2372,6 +2376,7 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, documentColorsFollowTheme), SettingType::String, (intptr_t)"off"},
     {offsetof(Settings, tocDy), SettingType::Int, 0, true},
     {offsetof(Settings, toolbarCustomLayout), SettingType::String, (intptr_t)""},
+    {offsetof(Settings, toolbarHiddenItems), SettingType::String, (intptr_t)""},
     {offsetof(Settings, toolbarShowReadAloud), SettingType::Bool, false},
     {offsetof(Settings, toolbarSize), SettingType::Int, 18},
     {offsetof(Settings, treeFontName), SettingType::String, (intptr_t)"automatic"},
@@ -2468,7 +2473,7 @@ static const FieldInfo gSettingsFields[] = {
 };
 static const StructInfo gSettingsInfo = {
     sizeof(Settings),
-    176,
+    177,
     gSettingsFields,
     "\0\0DefaultDisplayMode\0DefaultZoom\0DisableJavaScript\0AllowExternalImages\0EnableTeXEnhancements\0EscToExit\0Ful"
     "lPathInTitle\0InverseSearchCmdLine\0LazyLoading\0MainWindowBackground\0NoHomeTab\0HomePageSortByFrequentlyRead\0Ho"
@@ -2483,15 +2488,15 @@ static const StructInfo gSettingsInfo = {
     "aveMemory\0PaddingAfterLastPage\0IgnoreDestinationZoom\0HighlightLinkDestination\0CitationHoverDelay\0ReadAloudVoi"
     "ceId\0ReadAloudSpeed\0ReadingAutoScrollSpeed\0ReadingBar\0FastScrollOverScrollbar\0PreventSleepInFullscreen\0MinTa"
     "bWidth\0TabWidth\0Theme\0HelpTheme\0LastLightTheme\0LastDarkTheme\0DocumentColorsFollowTheme\0TocDy\0ToolbarCustom"
-    "Layout\0ToolbarShowReadAloud\0ToolbarSize\0TreeFontName\0TreeFontSize\0InterfaceScale\0UIFontFamily\0UIFontSize\0D"
-    "isableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionTo"
-    "olbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI"
-    "\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0Tr"
-    "anslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDef"
-    "aults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0L"
-    "aserLifetimeSeconds\0LaserWidth\0PinnedAnnotationTools\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPassw"
-    "ords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0HelpWindowPos\0FileStates\0SessionData"
-    "\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
+    "Layout\0ToolbarHiddenItems\0ToolbarShowReadAloud\0ToolbarSize\0TreeFontName\0TreeFontSize\0InterfaceScale\0UIFontF"
+    "amily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0Selection"
+    "Toolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0Co"
+    "micBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0\0A"
+    "IChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0ExternalViewers\0\0Forward"
+    "Search\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWi"
+    "dth\0PenWidthStep\0LaserLifetimeSeconds\0LaserWidth\0PinnedAnnotationTools\0\0Themes\0\0TabGroups\0\0CustomScreenD"
+    "PI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0HelpWindowPos\0Fil"
+    "eStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0\0",
     "\0\0default layout of pages. valid values: automatic, single page, facing, book view, continuous, continuous "
     "facing, continuous book view, page aspect. page aspect (3.7+): first open of a PDF, XPS, DjVu or PostScript file "
     "uses page 1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered "
@@ -2589,39 +2594,41 @@ static const StructInfo gSettingsInfo = {
     "bookmarks (table of contents) part, in screen pixels\0the toolbar's built-in buttons, in the order you want them, "
     "e.g. CmdOpenFile CmdPrint PageInfo | CmdFindFirst. Leave a button out to hide it. | is a separator and PageInfo "
     "is the page number box. Empty (the default) means the standard layout. Buttons you added yourself (see Shortcuts) "
-    "still come last\0if true, the toolbar has a Read Aloud button (with a drop-down for voice, speed and what to "
-    "read). Read Aloud is still reachable from the Read Aloud menu when this is false\0size of the toolbar icons in "
-    "pixels at 100% display scaling (8-64); the toolbar itself is a few pixels taller\0font name for bookmarks and "
-    "favorites tree views. automatic means Windows default\0font size for bookmarks and favorites tree views, in "
-    "pixels; 0 means the Windows default. Not scaled by the display scaling\0overall interface scale, from 50 to 250 "
-    "percent; document zoom is independent\0interface font: system, Manrope, Pretendard Std or Public Sans\0overrides "
-    "the font size used for menus, toolbar and dialogs, in pixels; 0 means the Windows default. Not scaled by the "
-    "display scaling\0if true, render MuPDF-based documents (PDF, XPS, DjVu, EPUB etc.) without anti-aliasing, giving "
-    "sharper but jagged edges\0CAD/engineering PDF line rendering: off, auto (enhance if a CAD drawing is detected) or "
-    "on\0if true, disables auto-linking of URLs and email addresses found in PDF text\0if true, use the Windows system "
-    "colors for the document background and text. Overrides other color settings\0if true, documents are opened in "
-    "tabs instead of new windows\0if true, a small floating toolbar with selection actions (copy, read aloud, "
-    "highlight etc.) pops up after selecting text. Set to false to disable it\0which built-in buttons the selection "
-    "toolbar has and in what order, e.g. CmdCopySelection | CmdCreateAnnotHighlight. | or Separator inserts a "
-    "separator. Leave a button out to hide it. Empty (the default) is the standard set. SelectionHandlers with "
-    "SelectToolbarNameOrSvg still come last\0if true, Ctrl+Tab and Ctrl+Shift+Tab show the tab switcher in most "
-    "recently used order instead of tab-strip order\0if true, Ctrl+Tab and Ctrl+Shift+Tab immediately switch to the "
-    "next / previous tab in tab-strip order (the behavior before version 3.6) instead of showing the tab "
-    "switcher\0sequence of zoom levels when zooming in/out; values must lie between 8.33 and 1000000 (the largest one "
-    "becomes the maximum zoom, which is 6400 by default)\0how much a single zoom in / zoom out step changes the zoom, "
-    "as a percentage of the current zoom level. If 0 or negative, zooming steps through ZoomLevels "
-    "instead\0\0customization options for PDF, XPS, DjVu and PostScript UI\0\0customization options for the ebook UI "
-    "(EPUB, MOBI, FB2, PDB and plain text)\0\0customization options for Comic Book UI\0\0customization options for "
-    "image files UI\0\0customization options for CHM UI. UseFixedPageUI switches to the PDF-style view; FontName "
-    "applies to that view\0\0customization options for Markdown UI. If UseFixedPageUI is true, MuPDF is used; "
-    "otherwise WebView2 browser view is used when available\0\0customization options for HTML UI. If UseFixedPageUI is "
-    "true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0settings for the Claude Code chat "
-    "sidebar\0\0settings for the Grok Build chat sidebar\0\0settings for the OpenAI Codex chat sidebar\0\0settings for "
-    "the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 = use default); shared by Claude Code, Grok "
-    "Build, and OpenAI Codex (internal)\0\0remembered destination language for selection translation; empty uses OS UI "
-    "language\0remembered source language for selection translation; empty means Auto\0remembered engine for Translate "
-    "Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or Antigravity\0\0default values for annotations "
-    "in PDF documents\0\0list of additional external viewers for various file types. See [docs for more "
+    "still come last\0hidden toolbar command names separated by spaces; PageInfo hides the page number group. Pinned "
+    "annotation presets are independent. Use the toolbar dropdown to show or hide items\0if true, the toolbar has a "
+    "Read Aloud button (with a drop-down for voice, speed and what to read). Read Aloud is still reachable from the "
+    "Read Aloud menu when this is false\0size of the toolbar icons in pixels at 100% display scaling (8-64); the "
+    "toolbar itself is a few pixels taller\0font name for bookmarks and favorites tree views. automatic means Windows "
+    "default\0font size for bookmarks and favorites tree views, in pixels; 0 means the Windows default. Not scaled by "
+    "the display scaling\0overall interface scale, from 50 to 250 percent; document zoom is independent\0interface "
+    "font: system, Manrope, Pretendard Std or Public Sans\0overrides the font size used for menus, toolbar and "
+    "dialogs, in pixels; 0 means the Windows default. Not scaled by the display scaling\0if true, render MuPDF-based "
+    "documents (PDF, XPS, DjVu, EPUB etc.) without anti-aliasing, giving sharper but jagged edges\0CAD/engineering PDF "
+    "line rendering: off, auto (enhance if a CAD drawing is detected) or on\0if true, disables auto-linking of URLs "
+    "and email addresses found in PDF text\0if true, use the Windows system colors for the document background and "
+    "text. Overrides other color settings\0if true, documents are opened in tabs instead of new windows\0if true, a "
+    "small floating toolbar with selection actions (copy, read aloud, highlight etc.) pops up after selecting text. "
+    "Set to false to disable it\0which built-in buttons the selection toolbar has and in what order, e.g. "
+    "CmdCopySelection | CmdCreateAnnotHighlight. | or Separator inserts a separator. Leave a button out to hide it. "
+    "Empty (the default) is the standard set. SelectionHandlers with SelectToolbarNameOrSvg still come last\0if true, "
+    "Ctrl+Tab and Ctrl+Shift+Tab show the tab switcher in most recently used order instead of tab-strip order\0if "
+    "true, Ctrl+Tab and Ctrl+Shift+Tab immediately switch to the next / previous tab in tab-strip order (the behavior "
+    "before version 3.6) instead of showing the tab switcher\0sequence of zoom levels when zooming in/out; values must "
+    "lie between 8.33 and 1000000 (the largest one becomes the maximum zoom, which is 6400 by default)\0how much a "
+    "single zoom in / zoom out step changes the zoom, as a percentage of the current zoom level. If 0 or negative, "
+    "zooming steps through ZoomLevels instead\0\0customization options for PDF, XPS, DjVu and PostScript "
+    "UI\0\0customization options for the ebook UI (EPUB, MOBI, FB2, PDB and plain text)\0\0customization options for "
+    "Comic Book UI\0\0customization options for image files UI\0\0customization options for CHM UI. UseFixedPageUI "
+    "switches to the PDF-style view; FontName applies to that view\0\0customization options for Markdown UI. If "
+    "UseFixedPageUI is true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0customization "
+    "options for HTML UI. If UseFixedPageUI is true, MuPDF is used; otherwise WebView2 browser view is used when "
+    "available\0\0settings for the Claude Code chat sidebar\0\0settings for the Grok Build chat sidebar\0\0settings "
+    "for the OpenAI Codex chat sidebar\0\0settings for the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 "
+    "= use default); shared by Claude Code, Grok Build, and OpenAI Codex (internal)\0\0remembered destination language "
+    "for selection translation; empty uses OS UI language\0remembered source language for selection translation; empty "
+    "means Auto\0remembered engine for Translate Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or "
+    "Antigravity\0\0default values for annotations in PDF documents\0\0list of additional external viewers for various "
+    "file types. See [docs for more "
     "information](https://www.sumatrapdfreader.org/docs/Customize-external-viewers)\0\0customization options for how "
     "forward search results are shown (used from LaTeX editors)\0\0these override the default settings in the Print "
     "dialog\0\0options for fullscreen mode\0\0list of handlers for selected text, shown in context menu when text "

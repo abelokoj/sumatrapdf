@@ -1762,6 +1762,12 @@ const globalPrefs: Field[] = [
       "the standard layout. Buttons you added yourself (see Shortcuts) still come last",
   ).ver("3.7"),
   field(
+    "ToolbarHiddenItems",
+    Str,
+    "",
+    "hidden toolbar command names separated by spaces; PageInfo hides the page number group. Pinned annotation presets are independent. Use the toolbar dropdown to show or hide items",
+  ),
+  field(
     "ToolbarShowReadAloud",
     Bool,
     false,
@@ -2101,6 +2107,7 @@ const globalPrefsLayout = [
   "HelpTheme",
   "DocumentColorsFollowTheme",
   "ToolbarCustomLayout",
+  "ToolbarHiddenItems",
   "TreeFontName",
   "EngineeringDrawingEnhance",
   "SelectionToolbarLayout",

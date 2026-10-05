@@ -101,7 +101,7 @@ Run the installer to install the application, or run the standalone portable EXE
 
 - Initial ballpoint, fountain, brush, pencil and highlighter profiles with settings that can be expanded or hidden.
 - Pin favorite annotation presets, including different colors and widths of the same pen.
-- Pin PDF editing tools to the main toolbar; right-click a tool to pin it and a pinned button to remove it.
+- Pin PDF editing tools to the main toolbar; right-click a tool to pin it and a pinned button to remove it. Pinned pens show their own profile icon and preset color.
 - Select annotations with a freehand lasso, then drag to move or resize them, use arrow keys to adjust their position, or press Delete. Undo and redo retain the PDF annotation data.
 - Use the hand tool to drag the page while keeping drawing tools inactive.
 - Default pen thickness **0.1–16 pt in 0.1 pt steps**, with configurable bounds and increments.
@@ -123,11 +123,13 @@ Run the installer to install the application, or run the standalone portable EXE
 - [Edit PDF bookmarks](docs/cpdf-bookmarks.md) with an optional cpdf download, or use your own executable. Change titles, pages, hierarchy and order, then save a separate PDF copy. The tool is not bundled; the download prompt shows its size and license.
 - Rounded toolbar groups, expandable controls, twelve Pretty theme presets and right-side day, night and document-inversion actions.
 - Scroll crowded toolbars left or right with the wheel or navigation arrows, or choose a tool from the scrollable dropdown.
+- Use **Show or hide toolbar items** in the toolbar dropdown to save your preferred visibility, independently of pinned presets.
+- Compact, rounded pen and laser palettes wrap their controls and scroll when needed, keeping final actions and instructions reachable.
 - Rounded Lucide core icons and bundled **Manrope, Pretendard Std and Public Sans**, alongside System font selection.
 - Main Appearance controls for interface and sidebar text, icon size, thumbnail size, recent-document count and minimum tab width; scrolling tab overflow.
 - Sharper enlarged recent thumbnails and theme-aware control and icon refresh.
 - Inline custom zoom entry and 25-percentage-point default zoom steps above 100%.
-- Reference hover previews built on upstream functionality, with configurable delay, document-cache fixes and draggable edges and corners for resizing.
+- Reference hover previews built on upstream functionality, with configurable delay, document-cache fixes and draggable edges and corners for resizing. Previews follow document inversion and current-file foreground/background colors.
 
 Dictionary and vocabulary learning, the temporary laser, pen profiles, pinned presets and bundled interface-font selection are Enhanced additions. Existing upstream features such as native annotations, text search, document inversion and reference previews are retained and extended; they are not presented as entirely new inventions.
 

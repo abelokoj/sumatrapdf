@@ -15,8 +15,12 @@ struct MenuDef {
 
 void FreeAllMenuDrawInfos();
 void FreeMenuOwnerDrawInfo(MenuOwnerDrawInfo*);
-void MarkMenuOwnerDraw(HMENU, bool isMenuBar = false);
-void FreeMenuOwnerDrawInfoData(HMENU);
+enum class MenuDrawScope {
+    Tree,
+    Level
+};
+void MarkMenuOwnerDraw(HMENU, bool isMenuBar = false, MenuDrawScope = MenuDrawScope::Tree);
+void FreeMenuOwnerDrawInfoData(HMENU, MenuDrawScope = MenuDrawScope::Tree);
 void MenuCustomDrawMesureItem(HWND, MEASUREITEMSTRUCT*);
 void MenuCustomDrawItem(HWND, DRAWITEMSTRUCT*);
 

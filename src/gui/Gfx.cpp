@@ -166,6 +166,7 @@ void GfxHdc::FillRoundedRect(const Rect& r, int radius, Color fill, Color border
     if (r.IsEmpty()) {
         return;
     }
+    radius = std::min(radius, std::max(0, std::min(r.dx, r.dy) - 1));
     if (radius <= 0) {
         FillRect(r, fill);
         DrawRect(r, border);

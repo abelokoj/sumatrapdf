@@ -590,7 +590,8 @@ static void ApplyLearningPositions(LearningWindow* w) {
         bool edit = _wcsicmp(klass, L"EDIT") == 0 || IsRichDetails(child);
         if (!edit && _wcsicmp(klass, kChoiceListClass) != 0 && id != lcFeedback) continue;
         int dx = next[id].right - next[id].left, dy = next[id].bottom - next[id].top;
-        HRGN region = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, UiScalePx(12), UiScalePx(12));
+        int diameter = std::min(2 * GetAppCornerRadius(DpiGetForHwnd(child), 6), std::min(dx, dy));
+        HRGN region = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, diameter, diameter);
         if (!SetWindowRgn(child, region, FALSE)) DeleteObject(region);
         if (edit && (GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE)) {
             int line = (int)SendMessageW(child, EM_GETFIRSTVISIBLELINE, 0, 0);
@@ -3830,6 +3831,16 @@ void VocabularyDialog_UnitTests() {
     window.ready = true;
     LayoutLearning(&window);
     HWND details = Control(&window, lcDetails);
+    Rect detailsRect = HwndWindowRect(details);
+    int cornerDiameter =
+        std::min(2 * GetAppCornerRadius(DpiGetForHwnd(details), 6), std::min(detailsRect.dx, detailsRect.dy));
+    HRGN expectedCorners =
+        CreateRoundRectRgn(0, 0, detailsRect.dx + 1, detailsRect.dy + 1, cornerDiameter, cornerDiameter);
+    HRGN actualCorners = CreateRectRgn(0, 0, 0, 0);
+    utassert(GetWindowRgn(details, actualCorners) != ERROR);
+    utassert(EqualRgn(expectedCorners, actualCorners));
+    DeleteObject(expectedCorners);
+    DeleteObject(actualCorners);
     SendMessageW(Control(&window, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Search your vocabulary…");
     int cueWidth = LearningInputWidth(&window, lcQuery, 1000, 32);
     utassert(cueWidth >= EditPreferredWidth(Control(&window, lcQuery), StrL("Search your vocabulary…"), 96, 1000));

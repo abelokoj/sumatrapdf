@@ -57,7 +57,7 @@ void RefHoverSchedule(RefHoverState* s, HWND hwndCanvas, int delayMs, Point scre
 
     bool sameSrc = s->displayed.srcPage == srcPage && s->displayed.srcRect == srcRect;
     if (HwndIsVisible(s->hwndPopup) && s->displayed.destPageRaw == destPage && s->displayed.destX == destX &&
-        s->displayed.destY == destY && sameSrc) {
+        s->displayed.destY == destY && sameSrc && RefHoverColorsCurrent(s)) {
         return;
     }
     s->pending.screenPt = screenPt;

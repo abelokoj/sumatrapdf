@@ -38,6 +38,7 @@ static void RegisterHostClass(WStr className) {
 }
 
 static void PaintHost(VirtHost* host, HWND hwnd) {
+    if (host->rounded) host->ClipToRoundedRect(host->cornerRadius, HwndWindowRect(hwnd).Size());
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hwnd, &ps);
     Rect rc = HwndClientRect(hwnd);
@@ -62,6 +63,10 @@ static void PaintHost(VirtHost* host, HWND hwnd) {
         if (host->onPaint.IsValid()) {
             host->onPaint.Call(&ev);
         }
+        if (host->rounded && host->cornerBorder != kColorUnset) {
+            int diameter = UiCornerDiameter(DpiGetForHwnd(hwnd), host->cornerRadius);
+            gfx->FillRoundedRect(rc, diameter, kColorTransparent, host->cornerBorder);
+        }
         delete gfx;
     }
     EndPaint(hwnd, &ps);
@@ -85,6 +90,11 @@ static LRESULT CALLBACK WndProcVirtHost(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     DpiScope dpiScope(hwnd);
 
     switch (msg) {
+        case WM_NCDESTROY:
+            host->native = nullptr;
+            if (host->vroot) host->vroot->hwnd = nullptr;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            break;
         case WM_MOUSEACTIVATE:
             if (host->noActivate) {
                 if (host->isPopup) {
@@ -101,6 +111,7 @@ static LRESULT CALLBACK WndProcVirtHost(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             break;
         case WM_SIZE: {
             Size size{LOWORD(lp), HIWORD(lp)};
+            if (host->rounded) host->ClipToRoundedRect(host->cornerRadius, HwndWindowRect(hwnd).Size());
             host->onSizeChanged.Call(size);
             host->Relayout();
             return 0;
@@ -178,6 +189,7 @@ VirtHost* VirtHost::Create(const CreateArgs& args) {
     host->bgColor = args.bgColor;
     host->noActivate = args.noActivate;
     host->isPopup = args.isPopup;
+    host->rounded = args.isPopup;
     host->userData = args.userData;
 
     Size sz = args.initialSize;
@@ -218,14 +230,19 @@ void VirtHost::SetLayout(ILayout* l) {
 }
 
 void VirtHost::Relayout() {
-    if (!layout || !native) {
+    if (!layout || !native || relayouting) {
         return;
     }
-    Rect rc = ClientRect();
-    if (rc.dx <= 0 || rc.dy <= 0) {
-        return;
+    relayouting = true;
+    // Native scrollbar changes can send WM_SIZE during layout. Finish the
+    // current pass before adjusting the tree to the updated client area.
+    for (int pass = 0; pass < 3; pass++) {
+        Rect rc = ClientRect();
+        if (rc.dx <= 0 || rc.dy <= 0) break;
+        LayoutTreeToSize(native, layout, rc.Size(), &vroot);
+        if (rc.Size() == ClientRect().Size()) break;
     }
-    LayoutTreeToSize(native, layout, rc.Size(), &vroot);
+    relayouting = false;
 }
 
 Size VirtHost::SetLayoutSizedToContent(ILayout* l) {
@@ -280,20 +297,30 @@ bool VirtHost::IsVisible() const {
 }
 
 void VirtHost::ClipToRoundedRect(int radius, Size sz) {
+    rounded = true;
+    cornerRadius = radius;
     int dx = std::max(sz.dx, 1);
     int dy = std::max(sz.dy, 1);
-    int r = DpiScale(radius);
-    HRGN rgn = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, r, r);
-    if (!SetWindowRgn(native, rgn, TRUE)) {
+    int diameter = std::min(UiCornerDiameter(DpiGetForHwnd(native), radius), std::min(dx, dy));
+    if (clipSize == Size{dx, dy} && clipDiameter == diameter) return;
+    HRGN rgn = CreateRoundRectRgn(0, 0, dx + 1, dy + 1, diameter, diameter);
+    if (!rgn) return;
+    if (!SetWindowRgn(native, rgn, FALSE)) {
         DeleteObject(rgn);
+        return;
     }
+    clipSize = {dx, dy};
+    clipDiameter = diameter;
+    Invalidate(false);
 }
 
 void VirtHost::Invalidate(bool erase) {
+    if (!native) return;
     HwndInvalidate(native, erase);
 }
 
 void VirtHost::Repaint() {
+    if (!native) return;
     HwndInvalidate(native, true);
     UpdateWindow(native);
 }
@@ -315,10 +342,12 @@ bool VirtHost::ContainsScreenPoint(Point pt) const {
 }
 
 void VirtHost::SetTimer(int id, int delayMs) {
+    if (!native) return;
     ::SetTimer(native, (UINT_PTR)id, (UINT)delayMs, nullptr);
 }
 
 void VirtHost::KillTimer(int id) {
+    if (!native) return;
     ::KillTimer(native, (UINT_PTR)id);
 }
 

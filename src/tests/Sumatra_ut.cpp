@@ -86,6 +86,8 @@ bool Canvas_UnitTestLaserWidth();
 bool Canvas_UnitTestToolNavigation();
 bool Canvas_UnitTestLassoGeometry();
 bool Installer_UnitTestsIdentity();
+void LibsumatrapdfIntegrityTests();
+void UninstallerSelfDeleteTests();
 void VocabularyDialog_UnitTests();
 void StudyExport_UnitTests();
 void EnhancedUpdate_UnitTests();
@@ -103,6 +105,7 @@ bool HomePage_UnitTestsCompactHeader();
 bool SettingsDialog_UnitTestsSizing();
 bool RoundedControl_UnitTestHidden();
 void WindowCorners_UnitTests();
+void MenuOwnerDraw_UnitTests();
 void TabsCtrl_UnitTests();
 void RefHoverPopup_UnitTests();
 bool OverlayScrollbar_UnitTestsNative();
@@ -601,6 +604,26 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
+    WCHAR learningOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_LEARNING_UI_ONLY", learningOnly, dimof(learningOnly))) {
+        VocabularyDialog_UnitTests();
+        return utassert_print_results();
+    }
+    WCHAR securityOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SECURITY_TESTS_ONLY", securityOnly, dimof(securityOnly))) {
+        LibsumatrapdfIntegrityTests();
+        UninstallerSelfDeleteTests();
+        return utassert_print_results();
+    }
+    WCHAR popupsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_TOOLBAR_POPUPS_ONLY", popupsOnly, dimof(popupsOnly))) {
+        MenuOwnerDraw_UnitTests();
+        WindowCorners_UnitTests();
+        RefHoverTest();
+        RefHoverPopup_UnitTests();
+        ToolbarLayout_UnitTests();
+        return utassert_print_results();
+    }
     WCHAR settingsOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_SETTINGS_TIMING_ONLY", settingsOnly, dimof(settingsOnly))) {
         utassert(RoundedControl_UnitTestHidden());
@@ -666,6 +689,8 @@ int RunAppUnitTests(bool forAi) {
     utassert(Canvas_UnitTestToolNavigation());
     utassert(Canvas_UnitTestLassoGeometry());
     utassert(Installer_UnitTestsIdentity());
+    LibsumatrapdfIntegrityTests();
+    UninstallerSelfDeleteTests();
     VocabularyDialog_UnitTests();
     StudyExport_UnitTests();
     EnhancedUpdate_UnitTests();
@@ -682,6 +707,7 @@ int RunAppUnitTests(bool forAi) {
     utassert(SettingsDialog_UnitTestsSizing());
     utassert(RoundedControl_UnitTestHidden());
     WindowCorners_UnitTests();
+    MenuOwnerDraw_UnitTests();
     TabsCtrl_UnitTests();
     RefHoverPopup_UnitTests();
     utassert(OverlayScrollbar_UnitTestsNative());

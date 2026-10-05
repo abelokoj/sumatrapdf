@@ -1,6 +1,9 @@
 /* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/File.h"
 #include "base/Timer.h"
 
@@ -463,11 +466,13 @@ static void RelaunchMaybeElevatedFromTempDirectory(Flags* cli) {
         // deny writers for as long as the path is a launch target
         HANDLE hLock = CreateFileW(CWStrTemp(sysTempPath), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hLock == INVALID_HANDLE_VALUE) {
+            log(StrL("  failed to lock temporary uninstaller, uninstalling in place\n"));
+            return;
+        }
         logf("LaunchProcessWithCmdLine('%s' '%s')\n", sysTempPath, cl);
         HANDLE hElev = LaunchProcessWithCmdLine(sysTempPath, cl);
-        if (hLock != INVALID_HANDLE_VALUE) {
-            CloseHandle(hLock);
-        }
+        CloseHandle(hLock);
         if (!hElev) {
             logf("LaunchProcessWithCmdLine() failed to launch '%s' '%s'\n", sysTempPath, cl);
             LogLastError();
@@ -494,6 +499,7 @@ static void RelaunchMaybeElevatedFromTempDirectory(Flags* cli) {
     if (!h) {
         logf("LaunchProcessWithCmdLine() failed to launch '%s' '%s'\n", installerTempPath, cl);
         LogLastError();
+        return;
     } else {
         logf("LaunchProcessWithCmdLine() launched '%s' '%s' ok!\n", installerTempPath, cl);
     }
@@ -509,37 +515,66 @@ static TempStr GetSystem32PathTemp(Str exeName) {
     return path::JoinTemp(ToUtf8Temp(sysDir), exeName);
 }
 
-// A process can't delete its own executable: Windows keeps the image file open
-// for as long as it runs, and even a POSIX-semantics unlink
-// (FileDispositionInfoEx) is refused with ERROR_ACCESS_DENIED. Something else
-// has to do it once we've exited.
-//
-// That something used to be a batch file written to the per-user temp directory
-// and run with cmd.exe. When the uninstaller is elevated that's an escalation:
-// a non-elevated process can rewrite the script between our write and cmd.exe
-// reading it, and its contents then run as admin. 699acf313 closed that by
-// scheduling the delete for the next reboot instead, which is safe but means
-// the uninstaller is still sitting there afterwards.
-//
-// Put the commands on cmd.exe's command line instead. There's no intermediate
-// file for anyone to tamper with, cmd.exe comes from System32 by absolute path
-// so PATH can't redirect it, and the file goes away seconds after we exit
-// rather than at the next boot. Same code path elevated or not.
+static bool IsSafeShellPath(Str path) {
+    if (!path::IsAbsolute(path)) {
+        return false;
+    }
+    for (int i = 0; i < len(path); i++) {
+        char c = path.s[i];
+        if (c == '%' || c == '"' || c == '\r' || c == '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static TempStr SelfDeleteCmd(Str cmdExe, Str pingExe, Str exePath) {
+    if (!IsSafeShellPath(cmdExe) || !IsSafeShellPath(pingExe) || !IsSafeShellPath(exePath)) {
+        return {};
+    }
+    return fmt("\"%s\" /D /V:OFF /S /C \"\"%s\" -n 3 127.0.0.1 >nul & del /F /Q \"%s\"\"", cmdExe, pingExe, exePath);
+}
+
+#if IS_DEBUG
+void UninstallerSelfDeleteTests() {
+    Str cmdExe = StrL(R"(C:\Windows\System32\cmd.exe)");
+    Str pingExe = StrL(R"(C:\Windows\System32\ping.exe)");
+    Str exePath = StrL(R"(C:\Users\A&B (test)!\Temp\SumatraEnhanced-Uninstaller.exe)");
+    TempStr command = SelfDeleteCmd(cmdExe, pingExe, exePath);
+    TempStr expected =
+        fmt("\"%s\" /D /V:OFF /S /C \"\"%s\" -n 3 127.0.0.1 >nul & del /F /Q \"%s\"\"", cmdExe, pingExe, exePath);
+    utassert(str::Eq(command, expected));
+    utassert(len(SelfDeleteCmd(cmdExe, pingExe, StrL(R"(C:\Users\%TEMP%\uninstall.exe)"))) == 0);
+    utassert(len(SelfDeleteCmd(cmdExe, pingExe, StrL("C:\\a\" & whoami & \"\\uninstall.exe"))) == 0);
+    utassert(len(SelfDeleteCmd(cmdExe, pingExe, StrL("C:\\a\n\\uninstall.exe"))) == 0);
+    utassert(len(SelfDeleteCmd(cmdExe, pingExe, {})) == 0);
+    utassert(len(SelfDeleteCmd(cmdExe, StrL("ping.exe"), exePath)) == 0);
+    utassert(len(SelfDeleteCmd(StrL("cmd.exe"), pingExe, exePath)) == 0);
+}
+#endif
+
+// A running image cannot delete itself. Run trusted system commands after exit;
+// paths containing percent expansions must instead be deleted at reboot.
 static void InitSelfDelete() {
+    if (gIsDebugBuild) {
+        return;
+    }
     log(StrL("InitSelfDelete()\n"));
     TempStr exePath = GetSelfExePathTemp();
     TempStr cmdExe = GetSystem32PathTemp(StrL("cmd.exe"));
-    if (str::IsEmptyOrWhiteSpace(cmdExe)) {
-        log(StrL("InitSelfDelete(): couldn't find cmd.exe\n"));
+    TempStr pingExe = GetSystem32PathTemp(StrL("ping.exe"));
+    TempStr cmdLine = SelfDeleteCmd(cmdExe, pingExe, exePath);
+    if (len(cmdLine) == 0) {
+        log(StrL("InitSelfDelete(): unsafe shell path, scheduling delete for next reboot\n"));
+        MoveFileExW(CWStrTemp(exePath), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
         return;
     }
     // ping, not timeout: timeout.exe exits immediately with "Input redirection
     // is not supported" whenever stdin isn't a console, which is exactly what a
     // child of a windowless process gets - the del then ran while we were still
     // running and failed. 3 pings to loopback is ~2s, enough for us to exit.
-    TempStr cmdLine = fmt("\"%s\" /C ping -n 3 127.0.0.1 >nul & del \"%s\"", cmdExe, exePath);
     logf("InitSelfDelete(): '%s'\n", cmdLine);
-    HANDLE h = LaunchProcessInDir(cmdLine, {}, CREATE_NO_WINDOW);
+    HANDLE h = LaunchProcessInDir(cmdLine, path::GetDirTemp(cmdExe), CREATE_NO_WINDOW);
     if (!h) {
         logf("InitSelfDelete(): failed to launch, scheduling delete for next reboot\n");
         LogLastError();
@@ -610,6 +645,7 @@ int RunUninstaller() {
     if (gCli->silent) {
         UninstallerThread();
         ret = success ? 0 : 1;
+        InitSelfDelete();
         goto Exit;
     }
 

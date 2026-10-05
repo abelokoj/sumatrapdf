@@ -505,8 +505,9 @@ static bool GetSelectionEndPoint(MainWindow* win, Point& out) {
 
 // the card itself; the buttons on it are virtual controls painted on top
 static void PaintToolbar(SelectionToolbar*, VirtHostPaintEvent* ev) {
-    int cornerRadius = DpiScale(kCornerRadius);
-    ev->gfx->FillRoundedRect(ev->clientRect, cornerRadius, SelBarBg(), SelBarBorderColor());
+    int cornerRadius = UiCornerDiameter(DpiGetForHwnd(ev->host->native), kCornerRadius);
+    ev->host->cornerBorder = SelBarBorderColor();
+    ev->gfx->FillRoundedRect(ev->clientRect, cornerRadius, SelBarBg(), kColorTransparent);
 }
 
 // union of the on-screen parts of the selection, in canvas coordinates;

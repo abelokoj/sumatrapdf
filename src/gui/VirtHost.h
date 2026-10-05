@@ -71,6 +71,12 @@ struct VirtHost {
     Color bgColor = kColorUnset;
     bool noActivate = false;
     bool isPopup = false;
+    bool relayouting = false;
+    bool rounded = false;
+    int cornerRadius = 6;
+    Color cornerBorder = kColorUnset;
+    Size clipSize;
+    int clipDiameter = -1;
     void* userData = nullptr;
 
     // fills the background; the host fills it with bgColor when this is not set
@@ -142,6 +148,8 @@ int UiTooltipDelayMs();
 int UiHScrollbarDy();
 extern int (*gUiScrollbarWidth)(int dpi);
 int UiScrollbarWidth(int dpi);
+extern int (*gUiCornerRadius)(int dpi, int designRadius);
+int UiCornerDiameter(int dpi, int designRadius);
 // width of the 3d border the OS draws around a sunken control
 int UiEdgeDx();
 // show a cursor; does nothing for CursorId::None

@@ -7,7 +7,11 @@
 #include "base/Win.h"
 
 #include "gui/UIModels.h"
+#include "gui/Gfx.h"
 
+#include "Settings.h"
+#include "AppSettings.h"
+#include "Theme.h"
 #include "DocController.h"
 #include "EngineBase.h"
 #include "RefHover.h"
@@ -66,6 +70,18 @@ static IPageDestination* LaunchLinkAtPopupPt(RefHoverState* s, int clientX, int 
     return LaunchLinkAtPagePt(s, pagePt);
 }
 
+static void RefHoverRoundPopup(HWND hwnd) {
+    Size size = HwndWindowRect(hwnd).Size();
+    if (size.dx <= 0 || size.dy <= 0) return;
+    int diameter = std::min(2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), std::min(size.dx, size.dy));
+    HRGN region = CreateRoundRectRgn(0, 0, size.dx + 1, size.dy + 1, diameter, diameter);
+    if (!region) return;
+    HRGN previous = CreateRectRgn(0, 0, 0, 0);
+    bool same = GetWindowRgn(hwnd, previous) != ERROR && EqualRgn(previous, region);
+    DeleteObject(previous);
+    if (same || !SetWindowRgn(hwnd, region, TRUE)) DeleteObject(region);
+}
+
 static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     RefHoverState* state = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (msg == WM_NCCALCSIZE) {
@@ -90,8 +106,9 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         SetTimer(state->hwndCanvas, kRefHoverHideTimerID, 300, nullptr);
         return 0;
     }
-    if (msg == WM_SIZE && state && state->resizing) {
-        RefHoverResizePopup(state);
+    if (msg == WM_SIZE) {
+        RefHoverRoundPopup(hwnd);
+        if (state && state->resizing) RefHoverResizePopup(state);
         return 0;
     }
     if (msg == WM_SETCURSOR) {
@@ -112,7 +129,9 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
 
-        HBRUSH hbg = CreateSolidBrush(MkRgb(255, 252, 200));
+        Color background =
+            state && state->pageBackground != kColorUnset ? state->pageBackground : ThemeWindowControlBackgroundColor();
+        HBRUSH hbg = CreateSolidBrush(background);
         HdcFillRect(hdc, HwndClientRect(hwnd), hbg);
         DeleteObject(hbg);
 
@@ -131,6 +150,9 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
         }
 
+        GfxHdc gfx(hdc);
+        gfx.FillRoundedRect(HwndClientRect(hwnd), 2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), kColorTransparent,
+                            ThemeEdgeColor());
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -273,6 +295,7 @@ bool RefHoverRerenderDisplayedRegion(RefHoverState* s, EngineBase* engine, int p
     }
     s->displayed.destPage = page;
     s->displayed.region = region;
+    s->displayed.continuationRegion = {};
     RefHoverState::RenderRequest req;
     req.pageNo = page;
     req.zoom = zoom;
@@ -435,6 +458,11 @@ void RefHoverPopup_UnitTests() {
     utassert(RefHoverPopupCreate(&state, canvas));
     SetWindowPos(state.hwndPopup, nullptr, 100, 100, 400, 300, SWP_NOZORDER | SWP_NOACTIVATE);
     Rect window = HwndWindowRect(state.hwndPopup);
+    HRGN corners = CreateRectRgn(0, 0, 0, 0);
+    utassert(GetWindowRgn(state.hwndPopup, corners) != ERROR);
+    utassert(!PtInRegion(corners, 0, 0));
+    utassert(PtInRegion(corners, window.dx / 2, window.dy / 2));
+    DeleteObject(corners);
     utassert((GetWindowLongPtrW(state.hwndPopup, GWL_STYLE) & WS_THICKFRAME) != 0);
     LRESULT hit = SendMessageW(state.hwndPopup, WM_NCHITTEST, 0, MAKELPARAM(window.Right() - 1, window.Bottom() - 1));
     utassert(hit == HTBOTTOMRIGHT);

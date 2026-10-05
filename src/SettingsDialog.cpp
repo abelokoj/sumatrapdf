@@ -36,6 +36,7 @@
 #include "WindowTab.h"
 #include "RenderCache.h"
 #include "PdfDarkMode.h"
+#include "RefHover.h"
 #include <commdlg.h>
 
 #if IS_DEBUG
@@ -823,6 +824,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
                 dm->pageTextColor = colors[0];
                 dm->pageBackgroundColor = colors[1];
                 dm->RepaintDisplay();
+                if (window->AsFixed() == dm) RefHoverRefreshColors(window->refHover);
             }
         }
     }
@@ -1651,6 +1653,14 @@ static void SettingsOpeningTests() {
 }
 
 bool SettingsDialog_UnitTestsSizing() {
+    RenderCache* savedCache = gRenderCache;
+    if (!savedCache) gRenderCache = new RenderCache();
+    defer {
+        if (!savedCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     RefreshUiFonts();

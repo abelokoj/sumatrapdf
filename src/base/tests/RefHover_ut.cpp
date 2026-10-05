@@ -1090,7 +1090,10 @@ static void PreviewResizeEdges() {
     utassert(resized.Right() <= kPageW && resized.Bottom() <= kPageH);
 }
 
+void RefHoverRender_UnitTests();
+
 void RefHoverTest() {
+    RefHoverRender_UnitTests();
     ExplicitDestCoordinates();
     PreviewResizeEdges();
     TwoColumnNumericLeftEntryNotHijacked();

@@ -69,7 +69,14 @@ bool WindowApplyRoundedCorners(HWND hwnd) {
     return SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference)));
 }
 
+static void RoundPopupMenu(HWND hwnd);
+
 static LRESULT CALLBACK WindowCornersHook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HCBT_CREATEWND) {
+        WCHAR name[32]{};
+        GetClassNameW((HWND)wp, name, dimof(name));
+        if (wcscmp(name, L"#32768") == 0) RoundPopupMenu((HWND)wp);
+    }
     if (code == HCBT_ACTIVATE) {
         WindowApplyRoundedCorners((HWND)wp);
         RoundChildControls((HWND)wp);
@@ -77,10 +84,10 @@ static LRESULT CALLBACK WindowCornersHook(int code, WPARAM wp, LPARAM lp) {
     return CallNextHookEx(nullptr, code, wp, lp);
 }
 
-static void RoundPopupMenu(HWND hwnd) {
+static void ApplyMenuRegion(HWND hwnd) {
     Size size = HwndWindowRect(hwnd).Size();
     if (size.dx <= 0 || size.dy <= 0) return;
-    int diameter = UiScalePxForDpi(DpiGetForHwnd(hwnd), 12);
+    int diameter = std::min(2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), std::min(size.dx, size.dy));
     HRGN rounded = CreateRoundRectRgn(0, 0, size.dx + 1, size.dy + 1, diameter, diameter);
     if (!rounded) return;
     HRGN previous = CreateRectRgn(0, 0, 0, 0);
@@ -89,10 +96,44 @@ static void RoundPopupMenu(HWND hwnd) {
     if (same || !SetWindowRgn(hwnd, rounded, TRUE)) DeleteObject(rounded);
 }
 
+static void PaintMenuBorder(HWND hwnd) {
+    Size size = HwndWindowRect(hwnd).Size();
+    HDC dc = GetWindowDC(hwnd);
+    if (!dc) return;
+    GfxHdc gfx(dc);
+    gfx.FillRoundedRect({0, 0, size.dx, size.dy}, 2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), kColorTransparent,
+                        ThemeEdgeColor());
+    ReleaseDC(hwnd, dc);
+}
+
+static LRESULT CALLBACK MenuRoundSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR) {
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, MenuRoundSubclass, id);
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    static thread_local bool applying = false;
+    if (!applying && (msg == WM_WINDOWPOSCHANGED || msg == WM_NCPAINT || msg == WM_PAINT || msg == WM_SHOWWINDOW ||
+                      msg == WM_DPICHANGED)) {
+        applying = true;
+        ApplyMenuRegion(hwnd);
+        if (msg == WM_NCPAINT || msg == WM_PAINT) PaintMenuBorder(hwnd);
+        applying = false;
+    }
+    return result;
+}
+
+static void RoundPopupMenu(HWND hwnd) {
+    constexpr UINT_PTR kMenuRoundSubclassId = 1;
+    SetWindowSubclass(hwnd, MenuRoundSubclass, kMenuRoundSubclassId, 0);
+    ApplyMenuRegion(hwnd);
+}
+
 static LRESULT CALLBACK MenuCornersHook(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0) {
         auto* message = (CWPRETSTRUCT*)lp;
-        if (message->message == WM_WINDOWPOSCHANGED || message->message == WM_SHOWWINDOW) {
+        if (message->message == WM_NCCREATE || message->message == WM_WINDOWPOSCHANGED ||
+            message->message == WM_SHOWWINDOW) {
             WCHAR name[32]{};
             GetClassNameW(message->hwnd, name, dimof(name));
             if (wcscmp(name, L"#32768") == 0) RoundPopupMenu(message->hwnd);
@@ -102,6 +143,7 @@ static LRESULT CALLBACK MenuCornersHook(int code, WPARAM wp, LPARAM lp) {
 }
 
 void WindowCornersInit() {
+    gUiCornerRadius = GetAppCornerRadius;
     // Common dialogs and message boxes also pass through the owning UI thread.
     static thread_local HHOOK hook = nullptr;
     if (!hook) {
@@ -305,7 +347,92 @@ void DarkModeApplyToFrameAfterThemeChange(MainWindow* win) {
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
 
+struct MenuCornerProbe {
+    int phase = 0;
+    int popupCount = 0;
+    bool clipped = true;
+    bool restored = true;
+};
+
+static BOOL CALLBACK ProbeMenuCorners(HWND hwnd, LPARAM arg) {
+    WCHAR name[32]{};
+    GetClassNameW(hwnd, name, dimof(name));
+    if (wcscmp(name, L"#32768") != 0 || !IsWindowVisible(hwnd)) return TRUE;
+    auto* probe = (MenuCornerProbe*)arg;
+    probe->popupCount++;
+    Size size = HwndWindowRect(hwnd).Size();
+    HRGN clip = CreateRectRgn(0, 0, 0, 0);
+    probe->clipped &=
+        GetWindowRgn(hwnd, clip) != ERROR && !PtInRegion(clip, 0, 0) && PtInRegion(clip, size.dx / 2, size.dy / 2);
+    int diameter = std::min(2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), std::min(size.dx, size.dy));
+    HRGN expected = CreateRoundRectRgn(0, 0, size.dx + 1, size.dy + 1, diameter, diameter);
+    probe->clipped &= EqualRgn(clip, expected) != FALSE;
+    DeleteObject(expected);
+    SetWindowRgn(hwnd, nullptr, FALSE);
+    SendMessageW(hwnd, WM_NCPAINT, 1, 0);
+    probe->restored &= GetWindowRgn(hwnd, clip) != ERROR && !PtInRegion(clip, 0, 0);
+    DeleteObject(clip);
+    return TRUE;
+}
+
+static BOOL CALLBACK FindTestMenu(HWND hwnd, LPARAM arg) {
+    WCHAR name[32]{};
+    GetClassNameW(hwnd, name, dimof(name));
+    if (wcscmp(name, L"#32768") != 0 || !IsWindowVisible(hwnd)) return TRUE;
+    *(HWND*)arg = hwnd;
+    return FALSE;
+}
+
+static void CALLBACK ProbeMenuTimer(HWND owner, UINT, UINT_PTR id, DWORD) {
+    auto* probe = (MenuCornerProbe*)GetWindowLongPtrW(owner, GWLP_USERDATA);
+    if (probe->phase < 2) {
+        HWND menu = nullptr;
+        EnumThreadWindows(GetCurrentThreadId(), FindTestMenu, (LPARAM)&menu);
+        if (menu) {
+            PostMessageW(menu, WM_KEYDOWN, probe->phase == 0 ? VK_DOWN : VK_RIGHT, 0);
+        }
+        probe->phase++;
+        return;
+    }
+    EnumThreadWindows(GetCurrentThreadId(), ProbeMenuCorners, (LPARAM)probe);
+    KillTimer(owner, id);
+    EndMenu();
+}
+
+static void NativeMenuCornerTest() {
+    WindowCornersInit();
+    HWND owner = CreateWindowExW(0, L"STATIC", L"Native menu test", WS_OVERLAPPEDWINDOW, 0, 0, 300, 200, nullptr,
+                                 nullptr, GetModuleHandleW(nullptr), nullptr);
+    utassert(owner != nullptr);
+    if (!owner) return;
+    HMENU menu = CreatePopupMenu();
+    HMENU sub = CreatePopupMenu();
+    AppendMenuW(sub, MF_STRING, 1, L"Command");
+    AppendMenuW(menu, MF_POPUP | MF_STRING, (UINT_PTR)sub, L"Submenu");
+    MenuCornerProbe probe;
+    SetWindowLongPtrW(owner, GWLP_USERDATA, (LONG_PTR)&probe);
+    UINT_PTR timer = SetTimer(owner, 1, 40, ProbeMenuTimer);
+    utassert(timer != 0);
+    if (timer) {
+        TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY, 10, 10, owner, nullptr);
+        KillTimer(owner, timer);
+        utassert(probe.popupCount >= 2);
+        utassert(probe.clipped);
+        utassert(probe.restored);
+    }
+    DestroyMenu(menu);
+    DestroyWindow(owner);
+}
+
 void WindowCorners_UnitTests() {
+    Settings* savedSettings = gSettings;
+    if (!gSettings) gSettings = NewSettings({});
+    defer {
+        if (!savedSettings) {
+            DeleteSettings(gSettings);
+            gSettings = nullptr;
+        }
+    };
     utassert(!WindowApplyRoundedCorners(nullptr));
     HWND frame = CreateWindowExW(0, L"STATIC", L"Corner test", WS_OVERLAPPEDWINDOW, 0, 0, 300, 200, nullptr, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);
@@ -348,10 +475,38 @@ void WindowCorners_UnitTests() {
                                  GetModuleHandleW(nullptr), nullptr);
     utassert(popup != nullptr);
     if (popup) {
+        int savedScale = gSettings->interfaceScale;
+        int savedFontSize = gSettings->uIFontSize;
+        gSettings->interfaceScale = 100;
+        gSettings->uIFontSize = 18;
         RoundPopupMenu(popup);
+        // Native menus can replace their window region during non-client painting.
+        SetWindowRgn(popup, nullptr, FALSE);
+        SendMessageW(popup, WM_NCPAINT, 1, 0);
         HRGN clip = CreateRectRgn(0, 0, 0, 0);
         utassert(GetWindowRgn(popup, clip) != ERROR);
         utassert(!PtInRegion(clip, 0, 0) && PtInRegion(clip, 150, 90));
+        int popupDpi = DpiGetForHwnd(popup);
+        int normalRadius = GetAppCornerRadius(popupDpi, 6);
+        gSettings->interfaceScale = 150;
+        gSettings->uIFontSize = 28;
+        ApplyMenuRegion(popup);
+        GetWindowRgn(popup, clip);
+        int enlargedRadius = GetAppCornerRadius(popupDpi, 6);
+        utassert(enlargedRadius >= normalRadius * 2);
+        Size popupSize = HwndWindowRect(popup).Size();
+        int expectedDiameter = std::min(2 * enlargedRadius, std::min(popupSize.dx, popupSize.dy));
+        HRGN expected =
+            CreateRoundRectRgn(0, 0, popupSize.dx + 1, popupSize.dy + 1, expectedDiameter, expectedDiameter);
+        utassert(EqualRgn(clip, expected));
+        DeleteObject(expected);
+        SetWindowPos(popup, nullptr, 0, 0, 18, 14, SWP_NOACTIVATE | SWP_NOZORDER);
+        ApplyMenuRegion(popup);
+        GetWindowRgn(popup, clip);
+        expectedDiameter = std::min(2 * enlargedRadius, 14);
+        expected = CreateRoundRectRgn(0, 0, 19, 15, expectedDiameter, expectedDiameter);
+        utassert(EqualRgn(clip, expected));
+        DeleteObject(expected);
         SetWindowPos(popup, nullptr, 0, 0, 440, 260, SWP_NOACTIVATE | SWP_NOZORDER);
         RoundPopupMenu(popup);
         GetWindowRgn(popup, clip);
@@ -359,6 +514,9 @@ void WindowCorners_UnitTests() {
         utassert(!PtInRegion(clip, 0, 0));
         DeleteObject(clip);
         DestroyWindow(popup);
+        gSettings->interfaceScale = savedScale;
+        gSettings->uIFontSize = savedFontSize;
     }
+    NativeMenuCornerTest();
 }
 #endif

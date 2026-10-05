@@ -639,6 +639,7 @@ void GfxDirect2D::FillRoundedRect(const Rect& r, int radius, Color fill, Color b
     if (!target || r.IsEmpty()) {
         return;
     }
+    radius = std::min(radius, std::max(0, std::min(r.dx, r.dy) - 1));
     if (radius <= 0) {
         FillRect(r, fill);
         DrawRect(r, border);

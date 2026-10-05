@@ -5381,6 +5381,7 @@ void UpdateDocumentColors() {
     }
 
     RerenderEverything();
+    for (MainWindow* win : gWindows) RefHoverRefreshColors(win->refHover);
 }
 
 void UpdateFixedPageScrollbarsVisibility() {
@@ -14180,10 +14181,11 @@ static void MenuBarAsPopupMenu(MainWindow* win, Rect btnRect) {
         AppendMenuW(popup, MF_POPUP | MF_STRING, (UINT_PTR)mii.hSubMenu, subMenuName);
     }
 
-    MarkMenuOwnerDraw(popup);
+    MarkMenuOwnerDraw(popup, false, MenuDrawScope::Level);
     TrackCaptionPopupMenu(win, popup, btnRect);
-    FreeMenuOwnerDrawInfoData(popup);
+    FreeMenuOwnerDrawInfoData(popup, MenuDrawScope::Level);
 
+    count = GetMenuItemCount(popup);
     while (count > 0) {
         --count;
         RemoveMenu(popup, count, MF_BYPOSITION);
@@ -16735,7 +16737,7 @@ static HRESULT CALLBACK LoadLibsumatrapdfDialogCallback(HWND /*hwnd*/, UINT msg,
 static bool gSingleExe = true;
 
 static HMODULE gLibsumatrapdfDll = nullptr;
-// Last LoadLibrary(Ex) failure for libsumatrapdf.dll (0 if none / size mismatch skip).
+// Last validation or LoadLibrary failure for libsumatrapdf.dll (0 on success).
 static DWORD gLibsumatrapdfLastLoadError = 0;
 
 static void FreeLibsumatrapdfDll() {
@@ -16816,17 +16818,65 @@ static void LogLibsumatrapdfFileStateAfterLoadFail(Str path, DWORD err) {
     }
 }
 
-// Load libsumatrapdf.dll from path only if the file size matches expectedSize (the
-// embedded/installer copy). Skips mismatched leftover DLLs from other builds.
+// Compare the locked candidate with the embedded payload before executing it.
+// The caller keeps the deny-write/delete handle open through LoadLibrary.
+static DWORD CheckEmbeddedDll(HANDLE file, i64 expectedSize) {
+    LARGE_INTEGER fileSize{};
+    if (!GetFileSizeEx(file, &fileSize)) {
+        return GetLastError();
+    }
+    if (expectedSize <= 0 || expectedSize != GetEmbeddedLibsumatrapdfSize() || fileSize.QuadPart != expectedSize) {
+        return ERROR_INVALID_DATA;
+    }
+    int embeddedSize = 0;
+    u8* embedded = GetEmbeddedFileData(StrL("libsumatrapdf.dll"), &embeddedSize);
+    defer {
+        free(embedded);
+    };
+    if (!embedded || embeddedSize != expectedSize) {
+        return ERROR_INVALID_DATA;
+    }
+    LARGE_INTEGER start{};
+    if (!SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) {
+        return GetLastError();
+    }
+    u8 bytes[64 * 1024];
+    int offset = 0;
+    while (offset < embeddedSize) {
+        DWORD wanted = (DWORD)std::min((int)sizeof(bytes), embeddedSize - offset);
+        DWORD got = 0;
+        if (!ReadFile(file, bytes, wanted, &got, nullptr)) {
+            return GetLastError();
+        }
+        if (got != wanted || !MemEq(bytes, embedded + offset, (int)got)) {
+            return ERROR_INVALID_DATA;
+        }
+        offset += (int)got;
+    }
+    return ERROR_SUCCESS;
+}
+
+static bool IsLibsumatrapdfBlockedError(DWORD err) {
+    return err == ERROR_VIRUS_INFECTED || err == ERROR_VIRUS_DELETED || IsLibsumatrapdfAppControlError(err);
+}
+
+// Load only an exact copy of the embedded DLL, locked against replacement.
 // useLoadLibraryEx: LoadLibraryExW with LOAD_WITH_ALTERED_SEARCH_PATH (helps
 // when AV hooks plain LoadLibrary, and for dependency search next to the DLL).
 static bool LoadLibsumatrapdfFromFile(Str path, i64 expectedSize, bool useLoadLibraryEx = false) {
-    i64 realSize = file::GetSize(path);
-    if (realSize != expectedSize) {
-        if (realSize >= 0) {
-            logf("LoadLibsumatrapdfFromFile: skip '%s' (size %lld, expected %lld)\n", path, (long long)realSize,
-                 (long long)expectedSize);
-        }
+    HANDLE file = file::OpenReadOnly(path);
+    if (file == INVALID_HANDLE_VALUE) {
+        gLibsumatrapdfLastLoadError = GetLastError();
+        return false;
+    }
+    defer {
+        CloseHandle(file);
+    };
+    DWORD validationError = CheckEmbeddedDll(file, expectedSize);
+    if (validationError != ERROR_SUCCESS) {
+        gLibsumatrapdfLastLoadError = validationError;
+        logf("LoadLibsumatrapdfFromFile: reject '%s' (validation err=%u)\n", path, validationError);
+        SetLastError(validationError);
         return false;
     }
     const WCHAR* wpath = CWStrTemp(path);
@@ -16860,25 +16910,86 @@ static bool LoadLibsumatrapdfFromFile(Str path, i64 expectedSize, bool useLoadLi
     return true;
 }
 
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+void LibsumatrapdfIntegrityTests() {
+    DWORD savedError = gLibsumatrapdfLastLoadError;
+    defer {
+        gLibsumatrapdfLastLoadError = savedError;
+    };
+    TempStr fixture = GetTempFilePathTemp(StrL("dll-integrity"));
+    defer {
+        file::Delete(fixture);
+    };
+    char bytes[64]{};
+    utassert(file::WriteFile(fixture, Str(bytes, sizeof(bytes))));
+    utassert(!LoadLibsumatrapdfFromFile(fixture, sizeof(bytes)));
+    utassert(gLibsumatrapdfLastLoadError == ERROR_INVALID_DATA);
+
+    int embeddedSize = 0;
+    u8* embedded = GetEmbeddedFileData(StrL("libsumatrapdf.dll"), &embeddedSize);
+    defer {
+        free(embedded);
+    };
+    // Static builds do not have a DLL payload to validate.
+    if (!HasEmbeddedLibsumatrapdf()) {
+        return;
+    }
+    utassert(embedded && embeddedSize > 0);
+    if (!embedded || embeddedSize <= 0) {
+        return;
+    }
+    utassert(file::WriteFile(fixture, Str((char*)embedded, embeddedSize)));
+    HANDLE locked = file::OpenReadOnly(fixture);
+    utassert(locked != INVALID_HANDLE_VALUE);
+    if (locked == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    utassert(CheckEmbeddedDll(locked, embeddedSize) == ERROR_SUCCESS);
+    utassert(CheckEmbeddedDll(locked, embeddedSize + 1) == ERROR_INVALID_DATA);
+    HANDLE writer = CreateFileW(CWStrTemp(fixture), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    DWORD writerError = GetLastError();
+    utassert(writer == INVALID_HANDLE_VALUE && writerError == ERROR_SHARING_VIOLATION);
+    file::Close(writer);
+    CloseHandle(locked);
+
+    // Same length, changed contents: validation only, never LoadLibrary.
+    embedded[embeddedSize / 2] ^= 1;
+    utassert(file::WriteFile(fixture, Str((char*)embedded, embeddedSize)));
+    locked = file::OpenReadOnly(fixture);
+    utassert(locked != INVALID_HANDLE_VALUE);
+    if (locked != INVALID_HANDLE_VALUE) {
+        utassert(CheckEmbeddedDll(locked, embeddedSize) == ERROR_INVALID_DATA);
+        CloseHandle(locked);
+    }
+    utassert(IsLibsumatrapdfBlockedError(ERROR_VIRUS_INFECTED));
+    utassert(IsLibsumatrapdfBlockedError(ERROR_VIRUS_DELETED));
+    utassert(IsLibsumatrapdfBlockedError(ERROR_ACCESS_DISABLED_BY_POLICY));
+    utassert(!IsLibsumatrapdfBlockedError(ERROR_SHARING_VIOLATION));
+}
+#endif
+
 // LoadLibraryW with short retry, optional longer AV-race backoff, then
 // LoadLibraryExW. justWritten: we extracted the DLL moments ago (AV most active).
 // Missing / wrong-size files fail immediately — no Sleep. Sleeps are only for real
 // LoadLibrary failures (AV race). Otherwise portable startup pays ~1s every launch
 // when the DLL is not next to the exe (issue #5849).
 static bool LoadLibsumatrapdfFromFileRobust(Str path, i64 expectedSize, bool justWritten = false) {
-    i64 realSize = file::GetSize(path);
-    if (realSize != expectedSize) {
-        return false;
-    }
-
     if (LoadLibsumatrapdfFromFile(path, expectedSize)) {
         return true;
+    }
+    if (!IsLibsumatrapdfAvRaceError(gLibsumatrapdfLastLoadError)) {
+        return false;
     }
 
     logf("LoadLibsumatrapdfFromFileRobust: retry after 1s '%s'\n", path);
     Sleep(1000);
     if (LoadLibsumatrapdfFromFile(path, expectedSize)) {
         return true;
+    }
+    if (!IsLibsumatrapdfAvRaceError(gLibsumatrapdfLastLoadError)) {
+        return false;
     }
 
     // Longer backoff when AV may still be scanning a just-written DLL
@@ -16893,6 +17004,9 @@ static bool LoadLibsumatrapdfFromFileRobust(Str path, i64 expectedSize, bool jus
                 return true;
             }
             err = gLibsumatrapdfLastLoadError;
+            if (!IsLibsumatrapdfAvRaceError(err)) {
+                return false;
+            }
         }
     }
 
@@ -16901,7 +17015,7 @@ static bool LoadLibsumatrapdfFromFileRobust(Str path, i64 expectedSize, bool jus
         return true;
     }
 
-    if (justWritten || IsLibsumatrapdfAvRaceError(gLibsumatrapdfLastLoadError)) {
+    if (IsLibsumatrapdfAvRaceError(gLibsumatrapdfLastLoadError)) {
         logf("LoadLibsumatrapdfFromFileRobust: final AV-race LoadLibraryExW after 3s '%s'\n", path);
         Sleep(3000);
         return LoadLibsumatrapdfFromFile(path, expectedSize, true);
@@ -16909,8 +17023,7 @@ static bool LoadLibsumatrapdfFromFileRobust(Str path, i64 expectedSize, bool jus
     return false;
 }
 
-// Extract embedded libsumatrapdf.dll into dir (if size mismatches), then load with
-// retry / LoadLibraryExW. Used for single-exe portable layout.
+// Repair missing or mismatched cached DLLs only when extraction is permitted.
 static bool ExtractAndLoadLibsumatrapdfRobust(Str dir, bool extract) {
     if (len(dir) == 0) {
         return false;
@@ -16920,24 +17033,20 @@ static bool ExtractAndLoadLibsumatrapdfRobust(Str dir, bool extract) {
         return false;
     }
     TempStr path = path::JoinTemp(dir, StrL("libsumatrapdf.dll"));
-    i64 realSize = file::GetSize(path);
-    bool justWritten = false;
-    if (realSize != expectedSize) {
-        if (realSize >= 0) {
-            logf("ExtractAndLoadLibsumatrapdfRobust: overwriting '%s' (size %lld, expected %lld)\n", path,
-                 (long long)realSize, (long long)expectedSize);
-        }
-        if (!extract) {
-            // No DLL (or wrong build) here and we must not write — try next candidate.
-            return false;
-        }
-        if (!ExtractLibsumatrapdfToDir(dir)) {
-            logf("ExtractAndLoadLibsumatrapdfRobust: ExtractLibsumatrapdfToDir failed for '%s'\n", dir);
-            return false;
-        }
-        justWritten = true;
+    if (LoadLibsumatrapdfFromFileRobust(path, expectedSize)) {
+        return true;
     }
-    return LoadLibsumatrapdfFromFileRobust(path, expectedSize, justWritten);
+    DWORD err = gLibsumatrapdfLastLoadError;
+    if (!extract || (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND && err != ERROR_INVALID_DATA)) {
+        // Never replace a file that Windows has blocked, or one we cannot inspect.
+        return false;
+    }
+    if (!ExtractLibsumatrapdfToDir(dir)) {
+        gLibsumatrapdfLastLoadError = GetLastError();
+        logf("ExtractAndLoadLibsumatrapdfRobust: ExtractLibsumatrapdfToDir failed for '%s'\n", dir);
+        return false;
+    }
+    return LoadLibsumatrapdfFromFileRobust(path, expectedSize, true);
 }
 
 // Log as much as we can about a failed load; ends up in the debug report via gLogBuf.
@@ -17002,11 +17111,12 @@ static bool LoadLibsumatrapdf(bool showErrorDialog) {
 
     // Portable / single-exe: extract + robust load from build data dir, then
     // from the exe directory (in case AppData is blocked by AV).
-    if (gSingleExe) {
+    if (gSingleExe && !IsLibsumatrapdfBlockedError(gLibsumatrapdfLastLoadError)) {
         if (ExtractAndLoadLibsumatrapdfRobust(buildDir, true)) {
             return true;
         }
-        if (ExtractAndLoadLibsumatrapdfRobust(selfDir, true)) {
+        if (!IsLibsumatrapdfBlockedError(gLibsumatrapdfLastLoadError) &&
+            ExtractAndLoadLibsumatrapdfRobust(selfDir, true)) {
             return true;
         }
     }
@@ -17039,9 +17149,9 @@ Windows Application Control blocked the file (WDAC, AppLocker, or Smart App Cont
 
 Try:
 • Settings → Privacy & security → Windows Security → App & browser control: check Smart App Control and reputation-based protection
-• If this is a work or school PC, ask IT to allowlist SumatraPDF.exe and libsumatrapdf.dll
-• Unblock the files (right-click → Properties → Unblock) if they show "downloaded from the Internet"
-• Move the portable folder out of Downloads and try again, or install from the official website
+• Check Windows Security Protection history for any threat detection
+• Keep protection enabled and contact the publisher if a threat was detected
+• If this is a work or school PC, ask IT to review the blocked application
 
 For more information see <a href="%s">Failed to load libsumatrapdf.dll</a>.)",
             (int)err, kFailedToLoadURL());
@@ -17052,9 +17162,9 @@ For more information see <a href="%s">Failed to load libsumatrapdf.dll</a>.)",
 This is often caused by antivirus software blocking or quarantining libsumatrapdf.dll when SumatraPDF extracts it.
 
 Try:
-• Add an exclusion for the SumatraPDF folder and %%LocalAppData%%\SumatraPDF-data
-• Temporarily disable real-time antivirus protection, then start SumatraPDF again
-• Re-download SumatraPDF from the official website
+• Check Windows Security Protection history for the detection details
+• Keep antivirus protection enabled; do not restore or exclude a detected file
+• Contact the publisher or your IT administrator for a reviewed build
 
 For more information see <a href="%s">Failed to load libsumatrapdf.dll</a>.)",
             (int)err, kFailedToLoadURL());
@@ -18595,7 +18705,7 @@ int APIENTRY WinMain(_In_ HINSTANCE /*hInstance*/, _In_opt_ HINSTANCE /*hPrevIns
     }
 
     if (len(flags.pathsToBenchmark) > 0) {
-        BenchFileOrDir(flags.pathsToBenchmark);
+        exitCode = BenchFileOrDir(flags.pathsToBenchmark) ? 0 : 1;
     }
 
     if (flags.exitImmediately) {

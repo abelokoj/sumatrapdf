@@ -4,7 +4,7 @@
 struct Flags;
 struct MainWindow;
 
-void BenchFileOrDir(StrVec& pathsToBench);
+bool BenchFileOrDir(StrVec& pathsToBench);
 bool IsStressTesting();
 void StartStressTest(Flags* i, MainWindow* win);
 void OnStressTestTimer(MainWindow* win, int timerId);

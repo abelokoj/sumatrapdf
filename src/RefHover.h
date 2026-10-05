@@ -25,6 +25,8 @@ struct RefHoverState {
     ILinkHandler* linkHandler = nullptr;
     // currently shown rendered destination strip (owned)
     Pixmap* bmp = nullptr;
+    u32 colorKey = 0;
+    Color pageBackground = kColorUnset;
     // engine for the currently displayed page, AddRef'd while shown so the
     // popup can hit-test links under the cursor (hand cursor + click-to-open)
     EngineBase* hitEngine = nullptr;
@@ -115,6 +117,7 @@ struct RefHoverState {
         // Region of the page rendered into the popup bitmap, kept so the
         // wheel handlers can shift / scale it without re-running detection.
         RectF region;
+        RectF continuationRegion;
         // baseZoom matches the document's current page zoom on first show
         // so popup text height is comparable to page text. userZoom is the
         // multiplier driven by the user's mouse-wheel.
@@ -133,6 +136,7 @@ constexpr UINT_PTR kRefHoverHideTimerID = 10;
 
 RefHoverState* RefHoverCreate(HWND hwndCanvas);
 void RefHoverDestroy(RefHoverState* s);
+void RefHoverRefreshColors(RefHoverState* s);
 bool RefHoverIsInternalLink(IPageElement* el, DisplayModel* dm);
 bool RefHoverScheduleLink(RefHoverState* s, HWND hwndCanvas, DisplayModel* dm, int x, int y, IPageElement* el,
                           int delayMs);
@@ -231,6 +235,7 @@ constexpr int kRefHoverMaxLiveStates = 32;
 bool RefHoverIsLaunchLink(IPageDestination* dest);
 
 bool RefHoverIsLiveState(RefHoverState* s);
+bool RefHoverColorsCurrent(RefHoverState* s);
 void RefHoverRegisterLiveState(RefHoverState* s);
 void RefHoverUnregisterLiveState(RefHoverState* s);
 void RefHoverDropQueuedRender(RefHoverState* s);

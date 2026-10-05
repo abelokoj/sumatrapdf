@@ -37,6 +37,12 @@ int UiScrollbarWidth(int dpi) {
     return gUiScrollbarWidth ? gUiScrollbarWidth(dpi) : DpiScaleByDpi(dpi, 20);
 }
 
+int (*gUiCornerRadius)(int dpi, int designRadius) = nullptr;
+int UiCornerDiameter(int dpi, int designRadius) {
+    int radius = gUiCornerRadius ? gUiCornerRadius(dpi, designRadius) : DpiScaleByDpi(dpi, designRadius);
+    return 2 * radius;
+}
+
 int UiEdgeDx() {
     return DpiGetSystemMetrics(SM_CXEDGE);
 }

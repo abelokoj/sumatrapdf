@@ -1880,6 +1880,7 @@ static void BuildMenuZoom(HMENU m) {
     if (n <= 0) {
         return;
     }
+    FreeMenuOwnerDrawInfoData(m);
     MenuEmpty(m);
     TempStr title;
     int cmdId;
@@ -2023,14 +2024,14 @@ static void MenuUpdatePrintItem(MainWindow* win, HMENU menu, bool disableOnly = 
             printItem = AppendAccelKeyToMenuStringTemp(printItem, CmdPrint);
         }
         if (!filePrintAllowed || !disableOnly) {
-            WCHAR* ws = CWStrTemp(printItem);
-            ModifyMenuW(menu, CmdPrint, MF_BYCOMMAND | MF_STRING, (UINT_PTR)CmdPrint, ws);
+            MenuSetText(menu, CmdPrint, printItem);
         }
         MenuSetEnabled(menu, CmdPrint, filePrintEnabled && filePrintAllowed);
     }
 }
 
 static void RebuildFileMenu(WindowTab* tab, HMENU menu) {
+    FreeMenuOwnerDrawInfoData(menu);
     MenuEmpty(menu);
     auto* ctx = NewBuildMenuCtx(tab, Point{0, 0});
     AutoDelete delCtx(ctx);
@@ -2102,7 +2103,7 @@ static void MenuUpdateDisplayMode(MainWindow* win) {
     }
 }
 
-static void MenuUpdateStateForWindow(MainWindow* win) {
+static void MenuUpdateStateForWindow(MainWindow* win, HMENU openingMenu) {
     WindowTab* tab = win->CurrentTab();
 
     bool hasDocument = tab && tab->IsDocLoaded();
@@ -2137,10 +2138,11 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
         MenuSetEnabled(win->menu, CmdNavigateForward, tab->ctrl->CanNavigate(1));
     }
 
-    // TODO: is this check too expensive?
-    bool fileExists = tab && file::Exists(tab->filePath);
+    // Filesystem checks belong to File; opening View or the root must not wait for a network path.
+    bool checkFile = GetMenuItemID(openingMenu, 0) == menuDefFile[0].idOrSubmenu;
+    bool fileExists = tab && (checkFile ? file::Exists(tab->filePath) : hasDocument);
 
-    if (tab && tab->ctrl && !fileExists && dir::Exists(tab->filePath)) {
+    if (checkFile && tab && tab->ctrl && !fileExists && dir::Exists(tab->filePath)) {
         for (int id : disableIfDirectoryOrBrokenPDF) {
             MenuSetEnabled(win->menu, id, false);
         }
@@ -2672,6 +2674,9 @@ bool CommandUsesContextMenuPoint(int cmdId) {
 
 // so that we can do free everything at exit
 static Vec<MenuOwnerDrawInfo*> g_menuDrawInfos;
+#if IS_DEBUG
+static int gMenuDrawAllocations = 0;
+#endif
 
 void FreeAllMenuDrawInfos() {
     while (len(g_menuDrawInfos) != 0) {
@@ -2755,7 +2760,7 @@ static void DrawMenuText(Gfx* gfx, Str text, Rect rc, u32 flags, PlatformFont* f
     gfx->DrawLine({textX + before.dx, underlineY, ch.dx, 0}, col);
 }
 
-void FreeMenuOwnerDrawInfoData(HMENU hmenu) {
+void FreeMenuOwnerDrawInfoData(HMENU hmenu, MenuDrawScope scope) {
     MENUITEMINFOW mii{};
     mii.cbSize = sizeof(MENUITEMINFOW);
 
@@ -2771,14 +2776,15 @@ void FreeMenuOwnerDrawInfoData(HMENU hmenu) {
             mii.fType &= ~MFT_OWNERDRAW;
             SetMenuItemInfoW(hmenu, (uint)i, TRUE /* by position */, &mii);
         }
-        if (mii.hSubMenu != nullptr) {
+        if (scope == MenuDrawScope::Tree && mii.hSubMenu != nullptr) {
             FreeMenuOwnerDrawInfoData(mii.hSubMenu);
         }
     };
 }
-void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/) {
+void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/, MenuDrawScope scope) {
     // Native popup menus ignore UIFontSize; owner drawing applies the chosen font.
     if (IsMenuFontSizeDefault()) {
+        FreeMenuOwnerDrawInfoData(hmenu, scope);
         return;
     }
     // https://stackoverflow.com/questions/30353644/cmenu-border-color-on-mfc
@@ -2801,7 +2807,8 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/) {
     mi.cbSize = sizeof(MENUINFO);
     GetMenuInfo(hmenu, &mi);
     mi.hbrBack = hbrBrush;
-    mi.fMask = MIM_BACKGROUND | MIM_STYLE | MIM_APPLYTOSUBMENUS;
+    mi.fMask = MIM_BACKGROUND | MIM_STYLE;
+    if (scope == MenuDrawScope::Tree) mi.fMask |= MIM_APPLYTOSUBMENUS;
     SetMenuInfo(hmenu, &mi);
 
     WCHAR buf[1024];
@@ -2818,26 +2825,28 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/) {
         mii.cch = dimof(buf);
         BOOL ok = GetMenuItemInfoW(hmenu, (uint)i, TRUE /* by position */, &mii);
         ReportIf(!ok);
-        mii.fMask = MIIM_FTYPE | MIIM_DATA;
-        mii.fType |= MFT_OWNERDRAW;
-        if (mii.dwItemData != 0) {
-            auto modi = (MenuOwnerDrawInfo*)mii.dwItemData;
-            FreeMenuOwnerDrawInfo(modi);
+        bool hasData = (mii.fType & MFT_OWNERDRAW) && mii.dwItemData != 0;
+        auto* modi = hasData ? (MenuOwnerDrawInfo*)mii.dwItemData : AllocStruct<MenuOwnerDrawInfo>();
+        if (!hasData) {
+            VecAppend(g_menuDrawInfos, modi);
+#if IS_DEBUG
+            gMenuDrawAllocations++;
+#endif
         }
-        auto modi = AllocStruct<MenuOwnerDrawInfo>();
-        VecAppend(g_menuDrawInfos, modi);
         modi->fState = mii.fState;
-        modi->fType = mii.fType;
+        modi->fType = mii.fType | MFT_OWNERDRAW;
         modi->hbmpItem = mii.hbmpItem;
         modi->hbmpChecked = mii.hbmpChecked;
         modi->hbmpUnchecked = mii.hbmpUnchecked;
-        if (len(buf) > 0) {
-            modi->text = ToUtf8(buf);
+        TempStr text = ToUtf8Temp(buf);
+        if (!str::Eq(modi->text, text)) str::ReplaceWithCopy(&modi->text, text);
+        if (!hasData) {
+            mii.fMask = MIIM_FTYPE | MIIM_DATA;
+            mii.fType = modi->fType;
+            mii.dwItemData = (ULONG_PTR)modi;
+            SetMenuItemInfoW(hmenu, (uint)i, TRUE, &mii);
         }
-        mii.dwItemData = (ULONG_PTR)modi;
-        SetMenuItemInfoW(hmenu, (uint)i, TRUE /* by position */, &mii);
-
-        if (mii.hSubMenu != nullptr) {
+        if (scope == MenuDrawScope::Tree && mii.hSubMenu != nullptr) {
             MarkMenuOwnerDraw(mii.hSubMenu);
         }
     }
@@ -3037,7 +3046,7 @@ HMENU BuildMenu(MainWindow* win) {
     // BuildMenuFromDef just set the global to this window's submenu
     win->menuReadAloud = GetReadAloudAppSubmenu();
 
-    MarkMenuOwnerDraw(mainMenu, true);
+    MarkMenuOwnerDraw(mainMenu, true, MenuDrawScope::Level);
     return mainMenu;
 }
 
@@ -3046,10 +3055,13 @@ void UpdateAppMenu(MainWindow* win, HMENU m) {
     if (!win) {
         return;
     }
+    // The hamburger borrows the menu bar's submenus; prepare them only when opened.
+    if (m != win->menu && GetSubMenu(m, 0) && GetSubMenu(m, 0) == GetSubMenu(win->menu, 0)) return;
     UINT_PTR id = (UINT_PTR)GetMenuItemID(m, 0);
     if (id == menuDefFile[0].idOrSubmenu) {
         RebuildFileMenu(win->CurrentTab(), m);
     } else if (id == menuDefFavorites[0].idOrSubmenu) {
+        FreeMenuOwnerDrawInfoData(m);
         MenuEmpty(m);
         // build with a real ctx (not nullptr): command-visibility now hides
         // document-dependent commands when no document is loaded, and a null ctx
@@ -3062,12 +3074,14 @@ void UpdateAppMenu(MainWindow* win, HMENU m) {
     } else if (id == menuDefZoom[0].idOrSubmenu) {
         BuildMenuZoom(m);
     } else if (m && m == win->menuReadAloud) {
+        FreeMenuOwnerDrawInfoData(m);
         RebuildReadAloudMenu(win, m, false, false);
     } else if (IsReadAloudContextSubmenu(m)) {
+        FreeMenuOwnerDrawInfoData(m);
         RebuildReadAloudMenu(win, m, true, win->contextMenuPtValid);
     }
-    MenuUpdateStateForWindow(win);
-    MarkMenuOwnerDraw(win->menu, true);
+    MenuUpdateStateForWindow(win, m);
+    MarkMenuOwnerDraw(m, false, MenuDrawScope::Level);
 }
 
 // show/hide top-level menu bar. This doesn't persist across launches
@@ -3626,3 +3640,78 @@ bool ActivateMenuBarByAccel(MainWindow* win, WCHAR accel) {
 
     return false;
 }
+
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+
+void MenuOwnerDraw_UnitTests() {
+    Settings* saved = gSettings;
+    Settings* settings = NewSettings({});
+    settings->uIFontSize = 22;
+    gSettings = settings;
+    if (ThemeGetCount() == 0) CreateThemeCommands();
+    defer {
+        gSettings = saved;
+        DeleteSettings(settings);
+    };
+    HMENU root = CreatePopupMenu();
+    HMENU submenu = CreatePopupMenu();
+    AppendMenuW(submenu, MF_STRING, CmdOpenFile, L"Open");
+    AppendMenuW(root, MF_POPUP | MF_STRING, (UINT_PTR)submenu, L"File");
+    MarkMenuOwnerDraw(root);
+    int allocations = gMenuDrawAllocations;
+    for (int i = 0; i < 20; i++) MarkMenuOwnerDraw(root);
+    utassert(gMenuDrawAllocations == allocations);
+    MENUITEMINFOW info{sizeof(info)};
+    info.fMask = MIIM_DATA;
+    GetMenuItemInfoW(submenu, 0, TRUE, &info);
+    auto* draw = (MenuOwnerDrawInfo*)info.dwItemData;
+    utassert(draw && str::Eq(draw->text, StrL("Open")));
+    MenuSetText(submenu, CmdOpenFile, StrL("Open changed"));
+    MenuSetChecked(submenu, CmdOpenFile, true);
+    MarkMenuOwnerDraw(submenu);
+    GetMenuItemInfoW(submenu, 0, TRUE, &info);
+    draw = (MenuOwnerDrawInfo*)info.dwItemData;
+    utassert(draw && str::Eq(draw->text, StrL("Open changed")));
+    utassert(draw && (draw->fState & MFS_CHECKED));
+    HMENU borrowed = CreatePopupMenu();
+    AppendMenuW(borrowed, MF_POPUP | MF_STRING, (UINT_PTR)submenu, L"File");
+    MarkMenuOwnerDraw(borrowed, false, MenuDrawScope::Level);
+    FreeMenuOwnerDrawInfoData(borrowed, MenuDrawScope::Level);
+    GetMenuItemInfoW(submenu, 0, TRUE, &info);
+    utassert(info.dwItemData == (ULONG_PTR)draw);
+    RemoveMenu(borrowed, 0, MF_BYPOSITION);
+    DestroyMenu(borrowed);
+    FreeMenuOwnerDrawInfoData(root);
+    DestroyMenu(root);
+
+    constexpr int kMenuGroups = 8;
+    constexpr int kGroupItems = 64;
+    root = CreatePopupMenu();
+    borrowed = CreatePopupMenu();
+    for (int group = 0; group < kMenuGroups; group++) {
+        submenu = CreatePopupMenu();
+        for (int item = 0; item < kGroupItems; item++) AppendMenuW(submenu, MF_STRING, CmdOpenFile + item, L"Command");
+        AppendMenuW(root, MF_POPUP | MF_STRING, (UINT_PTR)submenu, L"Group");
+        AppendMenuW(borrowed, MF_POPUP | MF_STRING, (UINT_PTR)submenu, L"Group");
+    }
+    MarkMenuOwnerDraw(root);
+    allocations = gMenuDrawAllocations;
+    MarkMenuOwnerDraw(borrowed, false, MenuDrawScope::Level);
+    utassert(gMenuDrawAllocations - allocations == kMenuGroups);
+    allocations = gMenuDrawAllocations;
+    LARGE_INTEGER start{}, end{}, frequency{};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&start);
+    for (int i = 0; i < 100; i++) MarkMenuOwnerDraw(borrowed, false, MenuDrawScope::Level);
+    QueryPerformanceCounter(&end);
+    utassert(gMenuDrawAllocations == allocations);
+    printf("Hamburger preparation: %.3f ms per open (8 groups, 512 submenu commands)\n",
+           10.0 * (end.QuadPart - start.QuadPart) / frequency.QuadPart);
+    FreeMenuOwnerDrawInfoData(borrowed, MenuDrawScope::Level);
+    while (GetMenuItemCount(borrowed) > 0) RemoveMenu(borrowed, 0, MF_BYPOSITION);
+    DestroyMenu(borrowed);
+    FreeMenuOwnerDrawInfoData(root);
+    DestroyMenu(root);
+}
+#endif

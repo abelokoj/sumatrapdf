@@ -148,8 +148,9 @@ static void PaintPopupHeader(AnnotPopupHeader* h, VirtPaintCtx* ctx) {
 }
 
 static void PaintPopupBg(AnnotTextPopup*, VirtHostPaintEvent* ev) {
-    int radius = DpiScale(kCornerRadius);
-    ev->gfx->FillRoundedRect(ev->clientRect, radius, PopupBg(), ThemeEdgeColor());
+    int radius = UiCornerDiameter(DpiGetForHwnd(ev->host->native), kCornerRadius);
+    ev->host->cornerBorder = ThemeEdgeColor();
+    ev->gfx->FillRoundedRect(ev->clientRect, radius, PopupBg(), kColorTransparent);
 }
 
 static void PostedHidePopup(MainWindow* win) {

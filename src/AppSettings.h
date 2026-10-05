@@ -36,6 +36,7 @@ Str GetAppFontFamily();
 float GetUiScale();
 int UiScalePx(int logicalPx);
 int UiScalePxForDpi(int dpi, int logicalPx);
+int GetAppCornerRadius(int dpi, int designRadius);
 int GetAppScrollbarWidth(int dpi);
 int UiFontSizePx(int designPx);
 int UiFontSizePxForDpi(int dpi, int designPx);

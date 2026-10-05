@@ -1284,6 +1284,15 @@ int UiScalePx(int logicalPx) {
     return UiScalePxForDpi(DpiGet(), logicalPx);
 }
 
+int GetAppCornerRadius(int dpi, int designRadius) {
+    constexpr int kDesignFontSize = 18;
+    int scaled = UiScalePxForDpi(dpi, designRadius);
+    int fontSize = gSettings ? GetAppMenuFontSizeForDpi(dpi) : UiScalePxForDpi(dpi, kDesignFontSize);
+    int withFont = MulDiv(fontSize, designRadius, kDesignFontSize);
+    if (gSettings && gSettings->uIFontSize >= kMinFontSize) return std::max(1, withFont);
+    return std::max(1, std::max(scaled, withFont));
+}
+
 int GetAppScrollbarWidth(int dpi) {
     int width = gSettings ? gSettings->scrollbarWidth : 20;
     return UiScalePxForDpi(dpi, limitValue(width, 8, 40));

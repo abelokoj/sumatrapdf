@@ -1764,7 +1764,9 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
 }
 
 static void PaintToolbarBg(AnnotEditToolbar*, VirtHostPaintEvent* ev) {
-    ev->gfx->FillRoundedRect(ev->clientRect, UiScalePx(kCornerRadius), BarBg(), BarBorderColor());
+    int radius = UiCornerDiameter(DpiGetForHwnd(ev->host->native), kCornerRadius);
+    ev->host->cornerBorder = BarBorderColor();
+    ev->gfx->FillRoundedRect(ev->clientRect, radius, BarBg(), kColorTransparent);
 }
 
 static Size ChipSizeFor(const AnnotEditItem& item, PlatformFont* font, int rowDy, int padX) {
@@ -1931,8 +1933,7 @@ static bool PositionToolbar(AnnotEditToolbar* tb, const Rect& annot) {
     SetWindowPos(tb->host->native, ToolbarZ(tb), placed.x, placed.y, placed.dx, placed.dy,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     if (sizeChanged) {
-        int radius = std::max(1, (int)lroundf(kCornerRadius * GetUiScale()));
-        tb->host->ClipToRoundedRect(radius, {w, h});
+        tb->host->ClipToRoundedRect(kCornerRadius, {w, h});
     }
     return true;
 }
@@ -3358,8 +3359,9 @@ static Color AnnotationHoverText() {
 }
 
 static void PaintAnnotationHoverOverlay(AnnotationHoverOverlay*, VirtHostPaintEvent* ev) {
-    int radius = UiScalePx(6);
-    ev->gfx->FillRoundedRect(ev->clientRect, radius, AnnotationHoverBg(), ThemeEdgeColor());
+    int radius = UiCornerDiameter(DpiGetForHwnd(ev->host->native), 6);
+    ev->host->cornerBorder = ThemeEdgeColor();
+    ev->gfx->FillRoundedRect(ev->clientRect, radius, AnnotationHoverBg(), kColorTransparent);
 }
 
 static void AnnotationHoverNativeMsg(AnnotationHoverOverlay*, VirtHostNativeMsg* ev) {
@@ -3440,8 +3442,7 @@ static void BuildAnnotationHoverOverlay(AnnotationHoverOverlay* overlay, Annotat
     column->AddChild(table);
     auto* content = new Padding(column, Insets{UiScalePx(8), UiScalePx(10), UiScalePx(8), UiScalePx(10)});
     overlay->size = overlay->host->SetLayoutSizedToContent(content);
-    int radius = std::max(1, (int)lroundf(6 * GetUiScale()));
-    overlay->host->ClipToRoundedRect(radius, overlay->size);
+    overlay->host->ClipToRoundedRect(6, overlay->size);
 
     str::Builder dump;
     for (int i = 0; i < len(rows.keys); i++) {
