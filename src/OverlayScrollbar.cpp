@@ -13,6 +13,7 @@
 #include "OverlayScrollbar.h"
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
+#include "DarkMode.h"
 #endif
 
 constexpr const WCHAR* kOverlayScrollbarClass = L"SUMATRA_OVERLAY_SCROLLBAR";
@@ -1425,6 +1426,21 @@ bool OverlayScrollbar_UnitTestsNative() {
             ok &= clipped.bottom <= 30;
             utassert(clipped.bottom <= 30);
             DeleteObject(region);
+        }
+    }
+    HWND combo = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL, 10, 10, 180, 160,
+                                 parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ok &= combo != nullptr;
+    if (combo) {
+        for (int i = 0; i < 40; i++) SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"Dictionary pack");
+        COMBOBOXINFO info{sizeof(info)};
+        bool haveInfo = GetComboBoxInfo(combo, &info);
+        utassert(haveInfo);
+        if (haveInfo) {
+            DarkModeApplyToChildControls(parent);
+            auto* sb = (OverlayScrollbar*)GetPropW(info.hwndList, kNativeScrollbarProperty);
+            utassert(sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd));
+            ok &= sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd);
         }
     }
     HMODULE richModule = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);

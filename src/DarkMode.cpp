@@ -224,7 +224,12 @@ static BOOL CALLBACK StyleChildScrollbar(HWND hwnd, LPARAM) {
     WCHAR klass[64]{};
     GetClassNameW(hwnd, klass, dimofi(klass));
     // Document canvases select their own hidden/overlay mode.
-    if (_wcsicmp(klass, L"SUMATRA_PDF_CANVAS") == 0 || _wcsicmp(klass, L"COMBOBOX") == 0) return TRUE;
+    if (_wcsicmp(klass, L"SUMATRA_PDF_CANVAS") == 0) return TRUE;
+    if (_wcsicmp(klass, L"COMBOBOX") == 0) {
+        COMBOBOXINFO info{sizeof(info)};
+        if (GetComboBoxInfo(hwnd, &info)) InstallAppScrollbar(info.hwndList);
+        return TRUE;
+    }
     if (GetWindowLongPtrW(hwnd, GWL_STYLE) & (WS_VSCROLL | WS_HSCROLL)) InstallAppScrollbar(hwnd);
     return TRUE;
 }
