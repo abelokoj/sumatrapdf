@@ -15,7 +15,19 @@
 
 <p align="center"><strong>Read, annotate and learn in one place.</strong><br>A native Windows document reader with customizable pen tools, offline dictionaries and vocabulary practice.<br><em>Built on <a href="https://github.com/sumatrapdfreader/sumatrapdf">SumatraPDF</a>, with visual inspiration from <a href="https://github.com/JaviLendi/PrettySumatraPDF">PrettySumatraPDF</a>.</em></p>
 
-<p align="center"><a href="#overview">Overview</a> · <a href="#download">Download</a> · <a href="#features">Features</a> · <a href="#get-started">Get started</a> · <a href="#upstream">Upstream source</a> · <a href="#development">Development</a> · <a href="#support">Support</a></p>
+<p align="center"><a href="#why-i-built-this">Why I built this</a> · <a href="#overview">Overview</a> · <a href="#download">Download</a> · <a href="#features">Features</a> · <a href="#get-started">Get started</a> · <a href="#upstream">Upstream source</a> · <a href="#development">Development</a> · <a href="#support">Support</a></p>
+
+---
+
+<a id="why-i-built-this"></a>
+
+## Why I built this
+
+Reading a paper or textbook is more than moving through pages. It means marking an argument, looking up an unfamiliar word, keeping useful notes and returning to what you have learned. I wanted those tasks to fit into one reading environment, rather than require a separate application for each step.
+
+SumatraPDF already provides the document-reading foundation. My aim is to extend it, not replace it: customizable pens for annotation, a temporary laser for presentation, and offline dictionaries with vocabulary practice that keeps words connected to their source documents. Appearance controls let readers adjust the interface to their needs.
+
+That is why I am building SumatraPDF Enhanced: to make reading, annotation and learning work together in a native Windows application. Core dictionary lookup and vocabulary review work offline, and the source remains open for others to inspect, adapt and improve. The project builds on the work of SumatraPDF and other open-source contributors, whose contributions are credited below.
 
 ---
 
