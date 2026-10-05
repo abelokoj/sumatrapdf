@@ -419,6 +419,20 @@ blockquote { margin: 0; padding: 0 1em; color: var(--muted); border-left: .25em 
 table { border-collapse: collapse; }
 table th, table td { border: 1px solid var(--border); padding: 6px 13px; }
 img { max-width: 100%%; }
+
+)";
+
+static const char* kMarkdownScrollbarCss = R"(
+::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: #8b8b8b; border: 2px solid var(--scrollbar-track); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #696969; }
+::-webkit-scrollbar-button:single-button { display: block; width: var(--scrollbar-size); height: var(--scrollbar-size);
+  background-color: var(--scrollbar-track); background-repeat: no-repeat; background-position: center; background-size: 50%; }
+::-webkit-scrollbar-button:vertical:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M0 8L5 2L10 8Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:vertical:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M0 2L5 8L10 2Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:horizontal:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M8 0L2 5L8 10Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:horizontal:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M2 0L8 5L2 10Z'/%3E%3C/svg%3E"); }
 )";
 
 // cmark emits <pre><code class="language-mermaid">…</code></pre> for ```mermaid
@@ -531,8 +545,11 @@ static TempStr MarkdownPageCssTemp() {
     TempStr codeBg = isDefault ? str::DupTemp(StrL("#f6f8fa")) : ColorToCssTemp(AccentColor(bgCol, 8));
 
     TempStr cssVars =
-        fmt("--bg:%s; --fg:%s; --link:%s; --muted:%s; --border:%s; --code-bg:%s;", bg, fg, link, muted, border, codeBg);
-    return fmt(kMarkdownPageCssFmt, cssVars, GetUiFontCssTemp());
+        fmt("--bg:%s; --fg:%s; --link:%s; --muted:%s; --border:%s; --code-bg:%s; --scrollbar-size:%dpx; "
+            "--scrollbar-track:%s;",
+            bg, fg, link, muted, border, codeBg, GetAppScrollbarWidth(96),
+            ColorToCssTemp(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol));
+    return str::JoinTemp(fmt(kMarkdownPageCssFmt, cssVars, GetUiFontCssTemp()), Str(kMarkdownScrollbarCss));
 }
 
 // Markdown pages are exposed to WebView2 as generated .html resources. Keep
@@ -788,6 +805,13 @@ Str MarkdownToHtmlPage(Str markdown) {
 }
 
 bool MarkdownToc_UnitTestHtmlLinks() {
+    Str scrollbarPage = MarkdownToHtmlPage(StrL("# Scrollbar\n\nText"));
+    bool scrollbarOk = str::Contains(scrollbarPage, StrL("--scrollbar-size:")) &&
+                       str::Contains(scrollbarPage, StrL("data:image/svg+xml,%3Csvg")) &&
+                       !str::Contains(scrollbarPage, StrL("%%3Csvg"));
+    str::Free(scrollbarPage);
+    if (!scrollbarOk) return false;
+
     // GitHub's slug rules: '_' survives, punctuation is dropped, each space
     // becomes its own '-'. Generated register docs link to "#intr_state" and
     // "#adc_intr_ctl--trans_en" (#5883).

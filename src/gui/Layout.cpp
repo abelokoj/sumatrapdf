@@ -1682,6 +1682,11 @@ Size Wrap::Layout(const Constraints bc) {
             continue;
         }
         v.size = v.layout->Layout(cbc);
+        if (bc.HasBoundedWidth() && v.size.dx > bc.max.dx) {
+            Constraints bounded = cbc;
+            bounded.max.dx = bc.max.dx;
+            v.size = v.layout->Layout(bounded);
+        }
     }
 
     int maxWidth = bc.HasBoundedWidth() ? bc.max.dx : Inf;

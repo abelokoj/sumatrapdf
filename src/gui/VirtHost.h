@@ -146,6 +146,9 @@ Point UiCursorScreenPos();
 int UiTooltipDelayMs();
 // height of a horizontal scrollbar the OS draws
 int UiHScrollbarDy();
+extern void (*gUiInstallScrollbar)(HWND hwnd);
+extern int (*gUiScrollbarTrackPos)(HWND hwnd, int fallback, int bar);
+extern int (*gUiScrollbarInset)(HWND hwnd);
 extern int (*gUiScrollbarWidth)(int dpi);
 int UiScrollbarWidth(int dpi);
 extern int (*gUiCornerRadius)(int dpi, int designRadius);

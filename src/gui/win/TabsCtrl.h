@@ -15,6 +15,7 @@ struct VirtRoot;
 struct VirtCloseButton;
 struct VirtMouseEvent;
 struct TabListPopup;
+struct Pixmap;
 
 constexpr Color kTabDefaultBgCol = (Color)-1;
 
@@ -114,6 +115,7 @@ struct TabsCtrl : VirtCtrl {
     int scrollDx = 0;
     int viewportDx = 0;
     bool hasOverflow = false;
+    Pixmap* tabListIcon = nullptr;
     int tabListVisibleItems = 10;
     TabListPopup* tabListPopup = nullptr;
 

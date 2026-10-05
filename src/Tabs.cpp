@@ -11,6 +11,7 @@
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
+#include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
 #include "gui/win/TabsCtrl.h"
 
@@ -37,6 +38,7 @@
 #include "FileHistory.h"
 #include "Theme.h"
 #include "Translations.h"
+#include "SvgIcons.h"
 #include "Tabs.h"
 
 // always full path (FullPathInTitle only affects tab/window title text).
@@ -163,6 +165,10 @@ void UpdateTabWidth(MainWindow* win) {
         win->tabsCtrl->interfaceScale = GetUiScale();
         win->tabsCtrl->tabListVisibleItems = limitValue(gSettings->tabListVisibleItems, 1, 50);
         win->tabsCtrl->tabIconDx = UiScalePxForDpi(dpi, limitValue(gSettings->toolbarSize, 8, 64));
+        int iconDx = win->tabsCtrl->tabIconDx;
+        win->tabsCtrl->tabListIcon =
+            GetCachedPixmapForSvg(Str(gIconChevronDownBold), iconDx, iconDx, win->tabsCtrl->GetColor(kColTabText),
+                                  win->tabsCtrl->GetColor(kColTabBg));
         win->tabsCtrl->tabMinDx = UiScalePxForDpi(dpi, limitValue(gSettings->minTabWidth, 60, 400));
         win->tabsCtrl->tabDefaultDx = std::max(win->tabsCtrl->tabMinDx, UiScalePxForDpi(dpi, gSettings->tabWidth));
     }

@@ -279,6 +279,18 @@ static void Layout_TestOverlay() {
 }
 
 static void Layout_TestWrap() {
+    for (bool rtl : {false, true}) {
+        auto* wide = new Spacer(160, 10);
+        auto* next = new Spacer(40, 10);
+        auto* wrap = new Wrap();
+        wrap->rtl = rtl;
+        wrap->AddChild(wide);
+        wrap->AddChild(next);
+        LayoutToSize(wrap, Size{90, 100});
+        utassert(LayoutRectEq(wide->lastBounds, 0, 0, 90, 10));
+        utassert(LayoutRectEq(next->lastBounds, rtl ? 50 : 0, 10, 40, 10));
+        delete wrap;
+    }
     // three 40-wide children in a 90-wide box wrap to two + one
     {
         auto* a = new Spacer(40, 10);

@@ -1611,6 +1611,7 @@ static void OnHScroll(MainWindow* win, WPARAM wp) {
         OverlayScrollbarGetInfo(win->overlayScrollH, &si);
     } else {
         GetScrollInfo(win->hwndCanvas, SB_HORZ, &si);
+        si.nTrackPos = AppScrollbarTrackPos(win->hwndCanvas, si.nTrackPos, SB_HORZ);
     }
 
     int currPos = si.nPos;
@@ -1645,6 +1646,7 @@ static void OnHScroll(MainWindow* win, WPARAM wp) {
     si.fMask = SIF_POS;
     SetScrollInfo(win->hwndCanvas, SB_HORZ, &si, !overlayMode);
     GetScrollInfo(win->hwndCanvas, SB_HORZ, &si);
+    si.nTrackPos = AppScrollbarTrackPos(win->hwndCanvas, si.nTrackPos, SB_HORZ);
     if (useOverlay) {
         OverlayScrollbarSetInfo(win->overlayScrollH, &si, TRUE);
     }

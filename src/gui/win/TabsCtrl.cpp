@@ -1243,7 +1243,13 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 RECT list{right.right, 0, clientRc.dx, clientRc.dy};
                 DrawTextW(hdc, L"\u2039", 1, &left, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 DrawTextW(hdc, L"\u203a", 1, &right, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DrawTextW(hdc, L"\u2304", 1, &list, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                if (tabListIcon && list.right > list.left) {
+                    GfxHdc gfx(hdc);
+                    gfx.PushClip(ToRect(list));
+                    gfx.DrawPixmap(tabListIcon, {list.left + (list.right - list.left - tabIconDx) / 2,
+                                                 (clientRc.dy - tabIconDx) / 2, tabIconDx, tabIconDx});
+                    gfx.PopClip();
+                }
                 SetTextColor(hdc, oldColor);
                 SetBkMode(hdc, oldMode);
                 SelectObject(hdc, oldFont);

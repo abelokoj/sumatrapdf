@@ -70,6 +70,7 @@ bool WindowApplyRoundedCorners(HWND hwnd) {
 }
 
 static void RoundPopupMenu(HWND hwnd);
+static void StyleWindowScrollbars(HWND hwnd);
 
 static LRESULT CALLBACK WindowCornersHook(int code, WPARAM wp, LPARAM lp) {
     if (code == HCBT_CREATEWND) {
@@ -80,6 +81,7 @@ static LRESULT CALLBACK WindowCornersHook(int code, WPARAM wp, LPARAM lp) {
     if (code == HCBT_ACTIVATE) {
         WindowApplyRoundedCorners((HWND)wp);
         RoundChildControls((HWND)wp);
+        StyleWindowScrollbars((HWND)wp);
     }
     return CallNextHookEx(nullptr, code, wp, lp);
 }
@@ -155,6 +157,9 @@ void WindowCornersInit() {
 
 void DarkModeInit() {
     WindowCornersInit();
+    gUiInstallScrollbar = InstallAppScrollbar;
+    gUiScrollbarTrackPos = AppScrollbarTrackPos;
+    gUiScrollbarInset = AppScrollbarInset;
     gUiScrollbarWidth = GetAppScrollbarWidth;
     // WindowBase::UpdateTheme() re-applies dark mode through this hook, so
     // gui/ never names darkmodelib. Installed even when the lib isn't used:
@@ -215,9 +220,24 @@ void DarkModeRememberTreeViewStyle() {
     DarkMode::setPrevTreeViewStyle();
 }
 
+static BOOL CALLBACK StyleChildScrollbar(HWND hwnd, LPARAM) {
+    WCHAR klass[64]{};
+    GetClassNameW(hwnd, klass, dimofi(klass));
+    // Document canvases select their own hidden/overlay mode.
+    if (_wcsicmp(klass, L"SUMATRA_PDF_CANVAS") == 0 || _wcsicmp(klass, L"COMBOBOX") == 0) return TRUE;
+    if (GetWindowLongPtrW(hwnd, GWL_STYLE) & (WS_VSCROLL | WS_HSCROLL)) InstallAppScrollbar(hwnd);
+    return TRUE;
+}
+
+static void StyleWindowScrollbars(HWND hwnd) {
+    StyleChildScrollbar(hwnd, 0);
+    EnumChildWindows(hwnd, StyleChildScrollbar, 0);
+}
+
 void DarkModeApplyToWindow(HWND hwnd) {
     WindowApplyRoundedCorners(hwnd);
     RoundChildControls(hwnd);
+    StyleWindowScrollbars(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -227,6 +247,7 @@ void DarkModeApplyToWindow(HWND hwnd) {
 void DarkModeApplyToWindowAndEraseBg(HWND hwnd) {
     WindowApplyRoundedCorners(hwnd);
     RoundChildControls(hwnd);
+    StyleWindowScrollbars(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -237,6 +258,7 @@ void DarkModeApplyToWindowAndEraseBg(HWND hwnd) {
 void DarkModeApplyToNotifyWindowAndEraseBg(HWND hwnd) {
     WindowApplyRoundedCorners(hwnd);
     RoundChildControls(hwnd);
+    StyleWindowScrollbars(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -257,6 +279,7 @@ void DarkModeApplyToTitleBar(HWND hwnd) {
 // call this once the children are there (issues #5894, #5895).
 void DarkModeApplyToPopupWindow(HWND hwnd) {
     WindowApplyRoundedCorners(hwnd);
+    StyleWindowScrollbars(hwnd);
     if (!gUseDarkModeLib) {
         return;
     }
@@ -289,6 +312,7 @@ void DarkModeApplyToMenuBar(HWND hwndRebar) {
 }
 
 void DarkModeApplyToChildControls(HWND hwnd) {
+    StyleWindowScrollbars(hwnd);
     if (!gUseDarkModeLib || IsCurrentThemeDefault()) {
         return;
     }
@@ -306,6 +330,7 @@ static void ApplyToInfotip(MainWindow* win) {
 }
 
 void DarkModeApplyToNewFrame(MainWindow* win) {
+    StyleWindowScrollbars(win->hwndFrame);
     WindowApplyRoundedCorners(win->hwndFrame);
     if (!gUseDarkModeLib || IsCurrentThemeDefault()) {
         return;
@@ -331,6 +356,7 @@ bool DarkModeChooseColor(tagCHOOSECOLORW* cc) {
 }
 
 void DarkModeApplyToFrameAfterThemeChange(MainWindow* win) {
+    StyleWindowScrollbars(win->hwndFrame);
     if (!gUseDarkModeLib) {
         return;
     }

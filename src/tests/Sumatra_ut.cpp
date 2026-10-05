@@ -25,6 +25,7 @@
 #include "Flags.h"
 #include "Commands.h"
 #include "SvgIcons.h"
+#include "Theme.h"
 #include "AppUnitTests.h"
 
 // must be last to over-write assert()
@@ -604,6 +605,20 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
+    WCHAR scrollbarOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SCROLLBARS_ONLY", scrollbarOnly, dimof(scrollbarOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        VirtCtrl_UnitTests();
+        utassert(OverlayScrollbar_UnitTestsNative());
+        utassert(MarkdownToc_UnitTestHtmlLinks());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        return utassert_print_results();
+    }
     WCHAR learningOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_LEARNING_UI_ONLY", learningOnly, dimof(learningOnly))) {
         VocabularyDialog_UnitTests();

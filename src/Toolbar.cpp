@@ -4990,9 +4990,7 @@ static void BuildToolbarLayout(MainWindow* win) {
     auto* overflow = new VirtIconButton();
     overflow->id = ToolbarOverflowId;
     overflow->padding = {cyPad, iconPad, cyPad, iconPad};
-    Str dots = StrL(
-        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>)");
-    overflow->pixmap = GetCachedPixmapForSvg(dots, tb->iconSize, tb->iconSize, fg, TbBgColor());
+    overflow->pixmap = GetCachedPixmapForSvg(Str(gIconChevronDownBold), tb->iconSize, tb->iconSize, fg, TbBgColor());
     overflow->SetTooltip(Tr("Toolbar commands and visibility"));
     overflow->SetFlag(vwfFocusable, true);
     overflow->onClick = MkFunc1(OnOverflowClicked, win);
@@ -5562,6 +5560,11 @@ static void CaptureToolbarPalette(VirtHost* host, Str name) {
 }
 
 static void ToolbarPaletteTests() {
+    auto savedCornerRadius = gUiCornerRadius;
+    gUiCornerRadius = GetAppCornerRadius;
+    defer {
+        gUiCornerRadius = savedCornerRadius;
+    };
     RenderCache* savedCache = gRenderCache;
     if (!savedCache) gRenderCache = new RenderCache();
     defer {

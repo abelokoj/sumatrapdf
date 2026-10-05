@@ -262,7 +262,11 @@ Size VirtHost::SetLayoutSizedToContent(ILayout* l) {
 }
 
 Rect VirtHost::ClientRect() const {
-    return HwndClientRect(native);
+    Rect rc = HwndClientRect(native);
+    if (native && gUiScrollbarInset && (GetWindowLongPtrW(native, GWL_STYLE) & WS_VSCROLL)) {
+        rc.dx = std::max(0, rc.dx - gUiScrollbarInset(native));
+    }
+    return rc;
 }
 
 Rect VirtHost::ScreenRect() const {

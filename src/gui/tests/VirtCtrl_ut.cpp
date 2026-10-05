@@ -9,6 +9,7 @@
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
 #include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
 #include "gui/win/WinGui.h"
 
 // must be last due to assert() over-write
@@ -195,6 +196,10 @@ static void CollectTabStops_Test() {
     delete box;
 }
 
+static int LargeScrollbarTrack(HWND, int, int) {
+    return 150000;
+}
+
 static void ScrollBox_Test() {
     auto* inner = new VBox();
     inner->AddChild(new Spacer(40, 200));
@@ -211,7 +216,36 @@ static void ScrollBox_Test() {
     utassert(!sb->ScrollTo(50));
     utassert(sb->ScrollTo(999));
     utassert(sb->scrollY == 120);
+    inner->AddChild(new Spacer(40, 200000));
+    sb->Layout(Tight({40, 80}));
+    sb->SetBounds({0, 0, 40, 80});
+    auto savedTrack = gUiScrollbarTrackPos;
+    gUiScrollbarTrackPos = LargeScrollbarTrack;
+    sb->OnVScroll(MAKEWPARAM(SB_THUMBTRACK, 150000 & 0xffff));
+    utassert(sb->scrollY == 150000);
+    gUiScrollbarTrackPos = savedTrack;
     delete sb;
+}
+
+static void ListScrollbar_Test() {
+    auto* model = new ListBoxModelStrings();
+    for (int i = 0; i < 50; i++) model->strings.Append(StrL("Word"));
+    VirtListBox list;
+    list.SetModel(model);
+    list.itemDy = 20;
+    list.SetBounds({0, 0, 200, 200});
+    int width = UiScrollbarWidth(96);
+    VirtMouseEvent click;
+    click.pt = {200 - width / 2, 199};
+    list.OnMouseDown(&click);
+    utassert(list.scrollY == 20);
+    click.pt.y = 0;
+    list.OnMouseDown(&click);
+    utassert(list.scrollY == 0);
+    click.pt.y = 100;
+    list.OnMouseDown(&click);
+    utassert(list.scrollY == 200);
+    utassert(list.GetCurrentSelection() == -1);
 }
 
 // #6203: a Horiz splitter between stacked panes must not pin the column to the
@@ -308,6 +342,7 @@ void VirtCtrl_UnitTests() {
     CollectVirtCtrls_Test();
     CollectTabStops_Test();
     ScrollBox_Test();
+    ListScrollbar_Test();
     Splitter_ShrinkTest();
     RoundedNativeControls_Test();
 }

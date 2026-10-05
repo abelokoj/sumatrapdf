@@ -32,6 +32,7 @@ static constexpr int kMouseTrackIntervalMs = 50;
 static constexpr UINT_PTR kNativeScrollbarSubclass = 0x736272;
 static constexpr UINT_PTR kNativeScrollbarTimer = 0x736273;
 static constexpr WCHAR kNativeScrollbarProperty[] = L"SumatraAppScrollbar";
+static constexpr WCHAR kNativeHScrollbarProperty[] = L"SumatraAppHScrollbar";
 static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force = false);
 
 static Rect NativeScrollbarClip(HWND hwnd) {
@@ -47,23 +48,22 @@ static Rect NativeScrollbarClip(HWND hwnd) {
 
 // Derive scrollbar colors from current theme
 static Color ThemeTrackColor() {
+    if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_SCROLLBAR);
     Color bg = ThemeControlBackgroundColor();
     return bg;
 }
 
 static Color ThemeThumbColor() {
-    Color bg = ThemeControlBackgroundColor();
-    return AccentColor(bg, 100);
+    if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_BTNTEXT);
+    return MkRgb(139, 139, 139);
 }
 
 static Color ThemeThumbHoverColor() {
-    Color bg = ThemeControlBackgroundColor();
-    return AccentColor(bg, 140);
+    if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_HIGHLIGHT);
+    return MkRgb(105, 105, 105);
 }
 
 static constexpr int kMinThumbSize = 20;
-static constexpr u8 kAlphaThin = 180;
-static constexpr u8 kAlphaThick = 220;
 
 using State = OverlayScrollbar::State;
 
@@ -80,37 +80,45 @@ static bool IsActive(OverlayScrollbar* sb) {
     return sb->state != State::Hidden;
 }
 
-static int ScaledWidth(OverlayScrollbar* sb, bool thick) {
+static int ScaledWidth(OverlayScrollbar* sb) {
     sb->thickWidth = GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner));
-    sb->thinWidth = std::max(UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), 6), sb->thickWidth / 3);
-    int width = thick ? sb->thickWidth : sb->thinWidth;
-    if (sb->nativeAdapter) width = std::max(width, DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner)));
-    return width;
+    sb->thinWidth = sb->thickWidth;
+    return sb->thickWidth;
 }
 
 static bool IsVert(OverlayScrollbar* sb) {
     return sb->type == OverlayScrollbar::Type::Vert;
 }
 
-// Get the track rect in client coords of the scrollbar window
-static Rect GetTrackRect(OverlayScrollbar* sb) {
+static Rect GetBarRect(OverlayScrollbar* sb) {
     Rect rc = HwndClientRect(sb->hwnd);
     if (sb->nativeAdapter) {
-        int width = std::min(rc.dx, GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner)));
-        rc.x += (rc.dx - width) / 2;
-        rc.dx = width;
+        int width = std::min(IsVert(sb) ? rc.dx : rc.dy, GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner)));
+        if (IsVert(sb)) {
+            rc.x += (rc.dx - width) / 2;
+            rc.dx = width;
+        } else {
+            rc.y += (rc.dy - width) / 2;
+            rc.dy = width;
+        }
     }
+    return rc;
+}
+
+// Get the track rect in client coords of the scrollbar window
+static Rect GetTrackRect(OverlayScrollbar* sb) {
+    Rect rc = GetBarRect(sb);
     int arrowSize = 0;
     int gap = 0;
-    if (IsThick(sb)) {
+    if (IsVisible(sb)) {
         arrowSize = IsVert(sb) ? rc.dx : rc.dy;
-        gap = DpiScale(2);
+        gap = UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), 2);
     }
-    int total = arrowSize + gap;
+    int total = std::min(arrowSize + gap, (IsVert(sb) ? rc.dy : rc.dx) / 2);
     if (IsVert(sb)) {
-        return {0, total, rc.dx, rc.dy - (2 * total)};
+        return {rc.x, rc.y + total, rc.dx, rc.dy - (2 * total)};
     }
-    return {total, 0, rc.dx - (2 * total), rc.dy};
+    return {rc.x + total, rc.y, rc.dx - (2 * total), rc.dy};
 }
 
 // Calculate thumb rect within the track
@@ -123,7 +131,8 @@ static Rect GetThumbRect(OverlayScrollbar* sb) {
 
     int trackLen = IsVert(sb) ? track.dy : track.dx;
     int thumbLen = MulDiv(trackLen, (int)sb->nPage, range);
-    thumbLen = std::max(thumbLen, DpiScale(kMinThumbSize));
+    thumbLen =
+        setMinMax(thumbLen, std::min(trackLen, UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), kMinThumbSize)), trackLen);
 
     int scrollableTrack = trackLen - thumbLen;
     int scrollableRange = range - (int)sb->nPage;
@@ -141,21 +150,21 @@ static Rect GetThumbRect(OverlayScrollbar* sb) {
 }
 
 static Rect GetArrowTopRect(OverlayScrollbar* sb) {
-    Rect rc = HwndClientRect(sb->hwnd);
-    int arrowSize = IsVert(sb) ? rc.dx : rc.dy;
+    Rect rc = GetBarRect(sb);
+    int arrowSize = std::min(IsVert(sb) ? rc.dx : rc.dy, (IsVert(sb) ? rc.dy : rc.dx) / 2);
     if (IsVert(sb)) {
-        return {0, 0, rc.dx, arrowSize};
+        return {rc.x, rc.y, rc.dx, arrowSize};
     }
-    return {0, 0, arrowSize, rc.dy};
+    return {rc.x, rc.y, arrowSize, rc.dy};
 }
 
 static Rect GetArrowBottomRect(OverlayScrollbar* sb) {
-    Rect rc = HwndClientRect(sb->hwnd);
-    int arrowSize = IsVert(sb) ? rc.dx : rc.dy;
+    Rect rc = GetBarRect(sb);
+    int arrowSize = std::min(IsVert(sb) ? rc.dx : rc.dy, (IsVert(sb) ? rc.dy : rc.dx) / 2);
     if (IsVert(sb)) {
-        return {0, rc.dy - arrowSize, rc.dx, arrowSize};
+        return {rc.x, rc.Bottom() - arrowSize, rc.dx, arrowSize};
     }
-    return {rc.dx - arrowSize, 0, arrowSize, rc.dy};
+    return {rc.Right() - arrowSize, rc.y, arrowSize, rc.dy};
 }
 
 static void ScrollRichEditTo(HWND hwnd, int target) {
@@ -191,12 +200,12 @@ static void SendScrollMsg(OverlayScrollbar* sb, UINT scrollMsg, WPARAM wp) {
         WCHAR klass[32]{};
         GetClassNameW(sb->hwndOwner, klass, dimofi(klass));
         bool track = LOWORD(wp) == SB_THUMBTRACK || LOWORD(wp) == SB_THUMBPOSITION;
-        if (track && _wcsicmp(klass, L"RICHEDIT50W") == 0) {
+        if (track && IsVert(sb) && _wcsicmp(klass, L"RICHEDIT50W") == 0) {
             ScrollRichEditTo(sb->hwndOwner, sb->nTrackPos);
-        } else if (track && _wcsicmp(klass, L"EDIT") == 0) {
+        } else if (track && IsVert(sb) && _wcsicmp(klass, L"EDIT") == 0) {
             int first = (int)SendMessageW(sb->hwndOwner, EM_GETFIRSTVISIBLELINE, 0, 0);
             SendMessageW(sb->hwndOwner, EM_LINESCROLL, 0, sb->nTrackPos - first);
-        } else if (track && _wcsicmp(klass, L"LISTBOX") == 0) {
+        } else if (track && IsVert(sb) && _wcsicmp(klass, L"LISTBOX") == 0) {
             SendMessageW(sb->hwndOwner, LB_SETTOPINDEX, sb->nTrackPos, 0);
         } else {
             SendMessageW(sb->hwndOwner, scrollMsg, wp, 0);
@@ -221,8 +230,11 @@ static Rect GetScrollbarScreenRect(OverlayScrollbar* sb) {
         if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL) {
             ownerRc.dx += DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner));
         }
+        if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_HSCROLL) {
+            ownerRc.dy += DpiGetSystemMetrics(SM_CYHSCROLL, DpiGetForHwnd(sb->hwndOwner));
+        }
     }
-    int scrollW = ScaledWidth(sb, true);
+    int scrollW = ScaledWidth(sb);
     if (IsVert(sb)) {
         return {ownerRc.x + ownerRc.dx - scrollW, ownerRc.y, scrollW, ownerRc.dy};
     }
@@ -326,12 +338,7 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
 
     memset(bits, 0, (size_t)w * h * 4);
 
-    bool thick = IsThick(sb);
-    u8 alpha = kAlphaThin;
-    if (thick) {
-        // non-default themes define exact colors, so draw thick scrollbar fully opaque
-        alpha = !sb->nativeAdapter && IsCurrentThemeDefault() ? kAlphaThick : 255;
-    }
+    u8 alpha = 255;
 
     auto fillRect = [&](Rect r, Color color) {
         DWORD pixel = PremultiplyPixel(color, alpha);
@@ -347,128 +354,138 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
         }
     };
 
-    if (IsThick(sb)) {
+    if (IsVisible(sb)) {
         fillRect(Rect(0, 0, w, h), ThemeTrackColor());
     }
 
-    Rect thumbRc = GetThumbRect(sb);
-    Color thumbCol = sb->mouseOverThumb ? ThemeThumbHoverColor() : ThemeThumbColor();
-
-    if (!IsThick(sb)) {
-        int thinW = ScaledWidth(sb, false);
-        if (IsVert(sb)) {
-            thumbRc.x = (w - thinW) / 2;
-            thumbRc.dx = thinW;
-        } else {
-            thumbRc.y = (h - thinW) / 2;
-            thumbRc.dy = thinW;
-        }
-    }
-    fillRect(thumbRc, thumbCol);
-
-    if (IsThick(sb)) {
-        Gdiplus::Graphics gfx(hdcMem);
+    {
+        Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)bits);
+        Gdiplus::Graphics gfx(&surface);
         gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Rect thumbRc = GetThumbRect(sb);
+        Color thumbCol = sb->mouseOverThumb ? ThemeThumbHoverColor() : ThemeThumbColor();
 
-        Color arrowCol = ThemeThumbHoverColor();
-        u8 ar = (u8)MulDiv(GetRValue(arrowCol), alpha, 255);
-        u8 ag = (u8)MulDiv(GetGValue(arrowCol), alpha, 255);
-        u8 ab = (u8)MulDiv(GetBValue(arrowCol), alpha, 255);
-        Gdiplus::Color gdipArrowCol(alpha, ar, ag, ab);
+        int thumbInset = UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), 2);
+        if (IsVisible(sb)) {
+            if (IsVert(sb))
+                thumbRc.SubLR(std::min(thumbInset, thumbRc.dx / 3), std::min(thumbInset, thumbRc.dx / 3));
+            else
+                thumbRc.SubTB(std::min(thumbInset, thumbRc.dy / 3), std::min(thumbInset, thumbRc.dy / 3));
+        }
+        if (!thumbRc.IsEmpty()) {
+            int diameter = std::min(thumbRc.dx, thumbRc.dy);
+            Gdiplus::GraphicsPath path;
+            path.AddArc(thumbRc.x, thumbRc.y, diameter, diameter, 180, 90);
+            path.AddArc(thumbRc.Right() - diameter, thumbRc.y, diameter, diameter, 270, 90);
+            path.AddArc(thumbRc.Right() - diameter, thumbRc.Bottom() - diameter, diameter, diameter, 0, 90);
+            path.AddArc(thumbRc.x, thumbRc.Bottom() - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            Gdiplus::SolidBrush thumbBrush(
+                Gdiplus::Color(alpha, GetRValue(thumbCol), GetGValue(thumbCol), GetBValue(thumbCol)));
+            gfx.FillPath(&thumbBrush, &path);
+        }
 
-        Rect arrowTop = GetArrowTopRect(sb);
-        Rect arrowBot = GetArrowBottomRect(sb);
+        if (IsVisible(sb)) {
+            Color arrowCol = ThemeThumbHoverColor();
+            u8 ar = (u8)MulDiv(GetRValue(arrowCol), alpha, 255);
+            u8 ag = (u8)MulDiv(GetGValue(arrowCol), alpha, 255);
+            u8 ab = (u8)MulDiv(GetBValue(arrowCol), alpha, 255);
+            Gdiplus::Color gdipArrowCol(alpha, ar, ag, ab);
 
-        if (gThickArrows) {
-            // filled triangles (like Windows Terminal)
-            Gdiplus::SolidBrush br(gdipArrowCol);
-            if (IsVert(sb)) {
-                float sz = (float)arrowTop.dx / 3.0f;
-                // up triangle
-                float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
-                float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
-                Gdiplus::PointF upPts[3] = {
-                    {cx, cy - (sz * 0.7f)},
-                    {cx - sz, cy + (sz * 0.7f)},
-                    {cx + sz, cy + (sz * 0.7f)},
-                };
-                gfx.FillPolygon(&br, upPts, 3);
-                // down triangle
-                cx = (float)(arrowBot.x + (arrowBot.dx / 2));
-                cy = (float)(arrowBot.y + (arrowBot.dy / 2));
-                Gdiplus::PointF downPts[3] = {
-                    {cx - sz, cy - (sz * 0.7f)},
-                    {cx + sz, cy - (sz * 0.7f)},
-                    {cx, cy + (sz * 0.7f)},
-                };
-                gfx.FillPolygon(&br, downPts, 3);
+            Rect arrowTop = GetArrowTopRect(sb);
+            Rect arrowBot = GetArrowBottomRect(sb);
+
+            if (gThickArrows) {
+                // filled triangles (like Windows Terminal)
+                Gdiplus::SolidBrush br(gdipArrowCol);
+                if (IsVert(sb)) {
+                    float sz = (float)arrowTop.dx / 3.0f;
+                    // up triangle
+                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
+                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
+                    Gdiplus::PointF upPts[3] = {
+                        {cx, cy - (sz * 0.7f)},
+                        {cx - sz, cy + (sz * 0.7f)},
+                        {cx + sz, cy + (sz * 0.7f)},
+                    };
+                    gfx.FillPolygon(&br, upPts, 3);
+                    // down triangle
+                    cx = (float)(arrowBot.x + (arrowBot.dx / 2));
+                    cy = (float)(arrowBot.y + (arrowBot.dy / 2));
+                    Gdiplus::PointF downPts[3] = {
+                        {cx - sz, cy - (sz * 0.7f)},
+                        {cx + sz, cy - (sz * 0.7f)},
+                        {cx, cy + (sz * 0.7f)},
+                    };
+                    gfx.FillPolygon(&br, downPts, 3);
+                } else {
+                    float sz = (float)arrowTop.dy / 3.0f;
+                    // left triangle
+                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
+                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
+                    Gdiplus::PointF leftPts[3] = {
+                        {cx - (sz * 0.7f), cy},
+                        {cx + (sz * 0.7f), cy - sz},
+                        {cx + (sz * 0.7f), cy + sz},
+                    };
+                    gfx.FillPolygon(&br, leftPts, 3);
+                    // right triangle
+                    cx = (float)(arrowBot.x + (arrowBot.dx / 2));
+                    cy = (float)(arrowBot.y + (arrowBot.dy / 2));
+                    Gdiplus::PointF rightPts[3] = {
+                        {cx - (sz * 0.7f), cy - sz},
+                        {cx - (sz * 0.7f), cy + sz},
+                        {cx + (sz * 0.7f), cy},
+                    };
+                    gfx.FillPolygon(&br, rightPts, 3);
+                }
             } else {
-                float sz = (float)arrowTop.dy / 3.0f;
-                // left triangle
-                float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
-                float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
-                Gdiplus::PointF leftPts[3] = {
-                    {cx - (sz * 0.7f), cy},
-                    {cx + (sz * 0.7f), cy - sz},
-                    {cx + (sz * 0.7f), cy + sz},
-                };
-                gfx.FillPolygon(&br, leftPts, 3);
-                // right triangle
-                cx = (float)(arrowBot.x + (arrowBot.dx / 2));
-                cy = (float)(arrowBot.y + (arrowBot.dy / 2));
-                Gdiplus::PointF rightPts[3] = {
-                    {cx - (sz * 0.7f), cy - sz},
-                    {cx - (sz * 0.7f), cy + sz},
-                    {cx + (sz * 0.7f), cy},
-                };
-                gfx.FillPolygon(&br, rightPts, 3);
-            }
-        } else {
-            // chevron lines
-            Gdiplus::Pen pen(gdipArrowCol, 1.5f);
-            pen.SetStartCap(Gdiplus::LineCapRound);
-            pen.SetEndCap(Gdiplus::LineCapRound);
-            pen.SetLineJoin(Gdiplus::LineJoinRound);
-            int inset = IsVert(sb) ? arrowTop.dx / 5 : arrowTop.dy / 5;
+                // chevron lines
+                Gdiplus::Pen pen(gdipArrowCol, 1.5f);
+                pen.SetStartCap(Gdiplus::LineCapRound);
+                pen.SetEndCap(Gdiplus::LineCapRound);
+                pen.SetLineJoin(Gdiplus::LineJoinRound);
+                int inset = IsVert(sb) ? arrowTop.dx / 5 : arrowTop.dy / 5;
 
-            if (IsVert(sb)) {
-                int sz = arrowTop.dx / 5;
-                float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
-                float cy = (float)(arrowTop.y + (arrowTop.dy / 2)) + ((float)inset / 2);
-                Gdiplus::PointF upPts[3] = {
-                    {cx - (float)sz, cy + ((float)sz / 2.0f)},
-                    {cx, cy - ((float)sz / 2.0f)},
-                    {cx + (float)sz, cy + ((float)sz / 2.0f)},
-                };
-                gfx.DrawLines(&pen, upPts, 3);
+                if (IsVert(sb)) {
+                    int sz = arrowTop.dx / 5;
+                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
+                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2)) + ((float)inset / 2);
+                    Gdiplus::PointF upPts[3] = {
+                        {cx - (float)sz, cy + ((float)sz / 2.0f)},
+                        {cx, cy - ((float)sz / 2.0f)},
+                        {cx + (float)sz, cy + ((float)sz / 2.0f)},
+                    };
+                    gfx.DrawLines(&pen, upPts, 3);
 
-                cx = (float)(arrowBot.x + (arrowBot.dx / 2));
-                cy = (float)(arrowBot.y + (arrowBot.dy / 2)) - ((float)inset / 2);
-                Gdiplus::PointF downPts[3] = {
-                    {cx - (float)sz, cy - ((float)sz / 2.0f)},
-                    {cx, cy + ((float)sz / 2.0f)},
-                    {cx + (float)sz, cy - ((float)sz / 2.0f)},
-                };
-                gfx.DrawLines(&pen, downPts, 3);
-            } else {
-                int sz = arrowTop.dy / 5;
-                float cx = (float)(arrowTop.x + (arrowTop.dx / 2)) + ((float)inset / 2);
-                float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
-                Gdiplus::PointF leftPts[3] = {
-                    {cx + ((float)sz / 2.0f), cy - (float)sz},
-                    {cx - ((float)sz / 2.0f), cy},
-                    {cx + ((float)sz / 2.0f), cy + (float)sz},
-                };
-                gfx.DrawLines(&pen, leftPts, 3);
+                    cx = (float)(arrowBot.x + (arrowBot.dx / 2));
+                    cy = (float)(arrowBot.y + (arrowBot.dy / 2)) - ((float)inset / 2);
+                    Gdiplus::PointF downPts[3] = {
+                        {cx - (float)sz, cy - ((float)sz / 2.0f)},
+                        {cx, cy + ((float)sz / 2.0f)},
+                        {cx + (float)sz, cy - ((float)sz / 2.0f)},
+                    };
+                    gfx.DrawLines(&pen, downPts, 3);
+                } else {
+                    int sz = arrowTop.dy / 5;
+                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2)) + ((float)inset / 2);
+                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
+                    Gdiplus::PointF leftPts[3] = {
+                        {cx + ((float)sz / 2.0f), cy - (float)sz},
+                        {cx - ((float)sz / 2.0f), cy},
+                        {cx + ((float)sz / 2.0f), cy + (float)sz},
+                    };
+                    gfx.DrawLines(&pen, leftPts, 3);
 
-                cx = (float)(arrowBot.x + (arrowBot.dx / 2)) - ((float)inset / 2);
-                cy = (float)(arrowBot.y + (arrowBot.dy / 2));
-                Gdiplus::PointF rightPts[3] = {
-                    {cx - ((float)sz / 2.0f), cy - (float)sz},
-                    {cx + ((float)sz / 2.0f), cy},
-                    {cx - ((float)sz / 2.0f), cy + (float)sz},
-                };
-                gfx.DrawLines(&pen, rightPts, 3);
+                    cx = (float)(arrowBot.x + (arrowBot.dx / 2)) - ((float)inset / 2);
+                    cy = (float)(arrowBot.y + (arrowBot.dy / 2));
+                    Gdiplus::PointF rightPts[3] = {
+                        {cx - ((float)sz / 2.0f), cy - (float)sz},
+                        {cx + ((float)sz / 2.0f), cy},
+                        {cx - ((float)sz / 2.0f), cy + (float)sz},
+                    };
+                    gfx.DrawLines(&pen, rightPts, 3);
+                }
             }
         }
     }
@@ -517,6 +534,14 @@ static void SetState(OverlayScrollbar* sb, State newState) {
         // SW_HIDE can trigger Z-order changes that hide other popups
         sb->mouseOverThumb = false;
         MakeLayeredWindowTransparent(sb->hwnd);
+    }
+
+    if (wasVisible != nowVisible) {
+        for (auto* other : gAllScrollbars) {
+            if (other == sb || other->hwndOwner != sb->hwndOwner || !IsVisible(other)) continue;
+            OverlayScrollbarUpdatePos(other);
+            PaintScrollbar(other);
+        }
     }
 
     KillTimer(sb->hwnd, OverlayScrollbar::kTimerAutoHide);
@@ -703,9 +728,8 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
                 int ptInTrack = IsVert(sb) ? my : mx;
                 Rect track = GetTrackRect(sb);
                 int range = sb->nMax - sb->nMin + 1;
-                int thumbLen = MulDiv(IsVert(sb) ? track.dy : track.dx, (int)sb->nPage, range);
-                int minThumb = DpiScale(kMinThumbSize);
-                thumbLen = std::max(thumbLen, minThumb);
+                Rect thumb = GetThumbRect(sb);
+                int thumbLen = IsVert(sb) ? thumb.dy : thumb.dx;
                 int trackLen = IsVert(sb) ? track.dy : track.dx;
                 int scrollableTrack = trackLen - thumbLen;
                 int scrollableRange = range - (int)sb->nPage;
@@ -722,9 +746,8 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
                 return 0;
             }
 
-            // Thumb hover is handled by the global tracker, but also handle here
-            // for responsiveness when already thick
-            if (IsThick(sb)) {
+            // Also update hover immediately when the cursor enters the bar.
+            if (IsVisible(sb)) {
                 Rect thumbRc = GetThumbRect(sb);
                 bool wasOver = sb->mouseOverThumb;
                 sb->mouseOverThumb = thumbRc.Contains(Point(mx, my));
@@ -740,7 +763,7 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
             int my = GET_Y_LPARAM(lp);
             SetCapture(hwnd);
 
-            if (IsThick(sb)) {
+            if (IsVisible(sb)) {
                 Rect arrowTop = GetArrowTopRect(sb);
                 Rect arrowBot = GetArrowBottomRect(sb);
                 Point pt(mx, my);
@@ -776,9 +799,8 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
                 Rect track = GetTrackRect(sb);
                 int range = sb->nMax - sb->nMin + 1;
                 int trackLen = IsVert(sb) ? track.dy : track.dx;
-                int thumbLen = MulDiv(trackLen, (int)sb->nPage, range);
-                int minThumb = DpiScale(kMinThumbSize);
-                thumbLen = std::max(thumbLen, minThumb);
+                Rect thumb = GetThumbRect(sb);
+                int thumbLen = IsVert(sb) ? thumb.dy : thumb.dx;
                 int scrollableTrack = trackLen - thumbLen;
                 int scrollableRange = range - (int)sb->nPage;
                 int clickInTrack = (IsVert(sb) ? my : mx) - (IsVert(sb) ? track.y : track.x);
@@ -893,7 +915,7 @@ OverlayScrollbar* OverlayScrollbarCreate(HWND hwndOwner, OverlayScrollbar::Type 
     sb->hwndOwner = hwndOwner;
     sb->type = type;
     sb->mode = mode;
-    ScaledWidth(sb, true);
+    ScaledWidth(sb);
     DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
     DWORD style = WS_POPUP;
 
@@ -1022,21 +1044,24 @@ void OverlayScrollbarUpdatePos(OverlayScrollbar* sb) {
         if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL) {
             ownerRc.dx += DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(sb->hwndOwner));
         }
+        if (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_HSCROLL) {
+            ownerRc.dy += DpiGetSystemMetrics(SM_CYHSCROLL, DpiGetForHwnd(sb->hwndOwner));
+        }
     }
 
-    int scrollW = ScaledWidth(sb, IsThick(sb));
+    int scrollW = ScaledWidth(sb);
     int x, y, w, h;
 
-    // Check if the sibling scrollbar (other orientation, same owner) is thick
-    bool siblingThick = false;
+    // Keep visible bars from covering each other's end arrows.
+    bool siblingVisible = false;
     for (auto* other : gAllScrollbars) {
-        if (other != sb && other->hwndOwner == sb->hwndOwner && IsThick(other)) {
-            siblingThick = true;
+        if (other != sb && other->hwndOwner == sb->hwndOwner && IsVisible(other)) {
+            siblingVisible = true;
             break;
         }
     }
     int siblingInset = 0;
-    if (IsThick(sb) && siblingThick) {
+    if (IsVisible(sb) && siblingVisible) {
         siblingInset = scrollW;
     }
 
@@ -1157,8 +1182,8 @@ bool IsOverlayScrollbarVisible(OverlayScrollbar* sb) {
     return sb && IsVisible(sb);
 }
 
-int AppScrollbarTrackPos(HWND hwnd, int fallback) {
-    auto* sb = (OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty);
+int AppScrollbarTrackPos(HWND hwnd, int fallback, int bar) {
+    auto* sb = (OverlayScrollbar*)GetPropW(hwnd, bar == SB_HORZ ? kNativeHScrollbarProperty : kNativeScrollbarProperty);
     return sb && (sb->isDragging || sb->sendingNative) ? sb->nTrackPos : fallback;
 }
 
@@ -1176,8 +1201,10 @@ static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
         sb->syncingNative = false;
     };
     SCROLLINFO info{sizeof(info), SIF_ALL};
-    bool range = GetScrollInfo(sb->hwndOwner, SB_VERT, &info) && info.nMax - info.nMin + 1 > (int)info.nPage;
-    bool show = range && HwndIsVisible(sb->hwndOwner) && (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & WS_VSCROLL);
+    int bar = IsVert(sb) ? SB_VERT : SB_HORZ;
+    LONG_PTR style = IsVert(sb) ? WS_VSCROLL : WS_HSCROLL;
+    bool range = GetScrollInfo(sb->hwndOwner, bar, &info) && info.nMax - info.nMin + 1 > (int)info.nPage;
+    bool show = range && HwndIsVisible(sb->hwndOwner) && (GetWindowLongPtrW(sb->hwndOwner, GWL_STYLE) & style);
     Rect bounds = HwndWindowRect(sb->hwndOwner);
     Rect clip = NativeScrollbarClip(sb->hwndOwner);
     int width = GetAppScrollbarWidth(DpiGetForHwnd(sb->hwndOwner));
@@ -1207,25 +1234,80 @@ static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
     }
 }
 
+static void EraseNativeScrollEdges(HWND hwnd) {
+    int dpi = DpiGetForHwnd(hwnd);
+    int width = GetAppScrollbarWidth(dpi);
+    int nativeV = DpiGetSystemMetrics(SM_CXVSCROLL, dpi);
+    int nativeH = DpiGetSystemMetrics(SM_CYHSCROLL, dpi);
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if ((!(style & WS_VSCROLL) || width >= nativeV) && (!(style & WS_HSCROLL) || width >= nativeH)) return;
+
+    Rect client = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, nullptr);
+    Rect window = HwndWindowRect(hwnd);
+    client.Offset(-window.x, -window.y);
+    HDC dc = GetWindowDC(hwnd);
+    if (!dc) return;
+    HBRUSH brush = CreateSolidBrush(ThemeTrackColor());
+    if (style & WS_VSCROLL && width < nativeV) {
+        RECT stripe = ToRECT(Rect{client.Right(), client.y, nativeV - width, client.dy});
+        FillRect(dc, &stripe, brush);
+    }
+    if (style & WS_HSCROLL && width < nativeH) {
+        RECT stripe = ToRECT(Rect{client.x, client.Bottom(), client.dx, nativeH - width});
+        FillRect(dc, &stripe, brush);
+    }
+    DeleteObject(brush);
+    ReleaseDC(hwnd, dc);
+}
+
+static void SyncNativeScrollbars(HWND hwnd, bool force = false) {
+    auto* vertical = (OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty);
+    if (vertical) SyncNativeScrollbar(vertical, force);
+    auto* horizontal = (OverlayScrollbar*)GetPropW(hwnd, kNativeHScrollbarProperty);
+    if (!horizontal && (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_HSCROLL)) {
+        horizontal = OverlayScrollbarCreate(hwnd, OverlayScrollbar::Type::Horz, OverlayScrollbar::Mode::Thick);
+        horizontal->nativeAdapter = true;
+        if (!horizontal->hwnd || !SetPropW(hwnd, kNativeHScrollbarProperty, horizontal)) {
+            OverlayScrollbarDestroy(horizontal);
+            horizontal = nullptr;
+        }
+    }
+    if (horizontal) SyncNativeScrollbar(horizontal, force);
+    if (vertical && horizontal) {
+        OverlayScrollbar* bars[] = {vertical, horizontal};
+        for (auto* sb : bars) {
+            if (!IsVisible(sb)) continue;
+            Size previous = HwndWindowRect(sb->hwnd).Size();
+            OverlayScrollbarUpdatePos(sb);
+            if (previous != HwndWindowRect(sb->hwnd).Size()) PaintScrollbar(sb);
+        }
+    }
+}
+
 static LRESULT CALLBACK NativeScrollbarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     auto* sb = (OverlayScrollbar*)data;
     if (msg == WM_NCDESTROY) {
         KillTimer(hwnd, kNativeScrollbarTimer);
         RemovePropW(hwnd, kNativeScrollbarProperty);
+        auto* horizontal = (OverlayScrollbar*)GetPropW(hwnd, kNativeHScrollbarProperty);
+        RemovePropW(hwnd, kNativeHScrollbarProperty);
         RemoveWindowSubclass(hwnd, NativeScrollbarProc, id);
         OverlayScrollbarDestroy(sb);
+        OverlayScrollbarDestroy(horizontal);
         return DefSubclassProc(hwnd, msg, wp, lp);
     }
     if (msg == WM_TIMER && wp == kNativeScrollbarTimer) {
-        SyncNativeScrollbar(sb);
+        SyncNativeScrollbars(hwnd);
         return 0;
     }
     LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
     if ((OverlayScrollbar*)GetPropW(hwnd, kNativeScrollbarProperty) != sb) return result;
-    if (msg == WM_SIZE || msg == WM_SETTEXT || msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_KEYDOWN ||
-        msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW || msg == WM_NCPAINT || msg == EM_SETSCROLLPOS ||
-        msg == LB_SETTOPINDEX || msg == EM_LINESCROLL) {
-        SyncNativeScrollbar(sb, msg == WM_WINDOWPOSCHANGED);
+    if (msg == WM_SIZE || msg == WM_SETTEXT || msg == WM_VSCROLL || msg == WM_HSCROLL || msg == WM_MOUSEWHEEL ||
+        msg == WM_MOUSEHWHEEL || msg == WM_KEYDOWN || msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW ||
+        msg == WM_NCPAINT || msg == EM_SETSCROLLPOS || msg == LB_SETTOPINDEX || msg == EM_LINESCROLL ||
+        msg == WM_STYLECHANGED) {
+        SyncNativeScrollbars(hwnd, msg == WM_WINDOWPOSCHANGED);
+        EraseNativeScrollEdges(hwnd);
     }
     return result;
 }
@@ -1234,14 +1316,15 @@ void InstallAppScrollbar(HWND hwnd) {
     if (!hwnd || GetPropW(hwnd, kNativeScrollbarProperty)) return;
     auto* sb = OverlayScrollbarCreate(hwnd, OverlayScrollbar::Type::Vert, OverlayScrollbar::Mode::Thick);
     sb->nativeAdapter = true;
-    if (!SetPropW(hwnd, kNativeScrollbarProperty, sb) ||
+    if (!sb->hwnd || !SetPropW(hwnd, kNativeScrollbarProperty, sb) ||
         !SetWindowSubclass(hwnd, NativeScrollbarProc, kNativeScrollbarSubclass, (DWORD_PTR)sb)) {
         RemovePropW(hwnd, kNativeScrollbarProperty);
         OverlayScrollbarDestroy(sb);
         return;
     }
     SetTimer(hwnd, kNativeScrollbarTimer, 200, nullptr);
-    SyncNativeScrollbar(sb);
+    SyncNativeScrollbars(hwnd);
+    EraseNativeScrollEdges(hwnd);
 }
 
 void RemoveAppScrollbar(HWND hwnd) {
@@ -1249,8 +1332,11 @@ void RemoveAppScrollbar(HWND hwnd) {
     if (!sb) return;
     KillTimer(hwnd, kNativeScrollbarTimer);
     RemovePropW(hwnd, kNativeScrollbarProperty);
+    auto* horizontal = (OverlayScrollbar*)GetPropW(hwnd, kNativeHScrollbarProperty);
+    RemovePropW(hwnd, kNativeHScrollbarProperty);
     RemoveWindowSubclass(hwnd, NativeScrollbarProc, kNativeScrollbarSubclass);
     OverlayScrollbarDestroy(sb);
+    OverlayScrollbarDestroy(horizontal);
 }
 
 #if IS_DEBUG
@@ -1273,6 +1359,51 @@ bool OverlayScrollbar_UnitTestsNative() {
         ok &= sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd);
         utassert(sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd));
         if (sb) {
+            if (!ThemeUsesHighContrastColors()) {
+                utassert(ThemeThumbColor() == MkRgb(139, 139, 139));
+                utassert(ThemeThumbHoverColor() == MkRgb(105, 105, 105));
+            }
+            gSettings->scrollbarWidth = 8;
+            utassert(ScaledWidth(sb) == GetAppScrollbarWidth(DpiGetForHwnd(edit)));
+            SetWindowPos(sb->hwnd, nullptr, 0, 0, 8, 200, SWP_NOZORDER | SWP_NOACTIVATE);
+            sb->state = State::SmartThin;
+            utassert(ScaledWidth(sb) == GetAppScrollbarWidth(DpiGetForHwnd(edit)));
+            Rect smartTrack = GetTrackRect(sb);
+            sb->state = State::AlwaysThick;
+            utassert(smartTrack == GetTrackRect(sb));
+            sb->state = State::Hidden;
+            gSettings->scrollbarWidth = 28;
+            utassert(!GetPropW(edit, kNativeHScrollbarProperty));
+            SetWindowLongPtrW(edit, GWL_STYLE, GetWindowLongPtrW(edit, GWL_STYLE) | WS_HSCROLL);
+            SCROLLINFO horizontalInfo{sizeof(horizontalInfo), SIF_RANGE | SIF_PAGE | SIF_POS};
+            horizontalInfo.nMax = 200000;
+            horizontalInfo.nPage = 100;
+            horizontalInfo.nPos = 100000;
+            SetScrollInfo(edit, SB_HORZ, &horizontalInfo, false);
+            SyncNativeScrollbars(edit);
+            auto* horizontal = (OverlayScrollbar*)GetPropW(edit, kNativeHScrollbarProperty);
+            utassert(horizontal && horizontal->type == OverlayScrollbar::Type::Horz);
+            if (horizontal) {
+                horizontal->sendingNative = true;
+                horizontal->nTrackPos = 170000;
+                utassert(AppScrollbarTrackPos(edit, 7, SB_HORZ) == 170000);
+                utassert(AppScrollbarTrackPos(edit, 7) == 7);
+                horizontal->sendingNative = false;
+                utassert(AppScrollbarTrackPos(edit, 7, SB_HORZ) == 7);
+                horizontal->state = State::AlwaysThick;
+                SetWindowPos(horizontal->hwnd, nullptr, 0, 0, 200, GetAppScrollbarWidth(DpiGetForHwnd(edit)),
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+                Rect track = GetTrackRect(horizontal);
+                Rect thumb = GetThumbRect(horizontal);
+                utassert(track.Intersect(thumb) == thumb);
+                utassert(GetArrowTopRect(horizontal).Right() <= track.x);
+                utassert(GetArrowBottomRect(horizontal).x >= track.Right());
+                SetWindowPos(horizontal->hwnd, nullptr, 0, 0, 8, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+                track = GetTrackRect(horizontal);
+                thumb = GetThumbRect(horizontal);
+                utassert(track.dx >= 0 && thumb.dx >= 0 && thumb.dx <= track.dx);
+                horizontal->state = State::Hidden;
+            }
             sb->nTrackPos = 1200;
             SendScrollMsg(sb, WM_VSCROLL, MAKEWPARAM(SB_THUMBTRACK, sb->nTrackPos));
             ok &= SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0) == 1200;

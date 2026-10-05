@@ -3750,6 +3750,7 @@ void UpdateAfterThemeChange() {
         win->brControlBgColor = CreateSolidBrush(ThemeControlBackgroundColor());
 
         UpdateControlsColors(win);
+        UpdateTabWidth(win);
         RebuildMenuBarForWindow(win);
         UpdateToolbarAfterThemeChange(win);
         RecreateFindBar(win);

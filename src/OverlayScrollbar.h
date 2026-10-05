@@ -93,5 +93,5 @@ bool IsOverlayScrollbarVisible(OverlayScrollbar* sb);
 
 void InstallAppScrollbar(HWND hwnd);
 void RemoveAppScrollbar(HWND hwnd);
-int AppScrollbarTrackPos(HWND hwnd, int fallback);
+int AppScrollbarTrackPos(HWND hwnd, int fallback, int bar = SB_VERT);
 int AppScrollbarInset(HWND hwnd);

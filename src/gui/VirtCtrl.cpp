@@ -1322,7 +1322,7 @@ void VirtScroll::OnVScroll(WPARAM wp) {
             break;
         case SB_THUMBTRACK:
         case SB_THUMBPOSITION:
-            ScrollTo(HIWORD(wp));
+            ScrollTo(gUiScrollbarTrackPos ? gUiScrollbarTrackPos(GetHwnd(), HIWORD(wp), SB_VERT) : HIWORD(wp));
             break;
     }
 }
@@ -1340,6 +1340,7 @@ void VirtScroll::UpdateScrollbar() {
     si.nPage = (UINT)(bounds.dy - padding.top - padding.bottom);
     si.nPos = scrollY;
     SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+    if (gUiInstallScrollbar) gUiInstallScrollbar(hwnd);
 }
 
 // only tell the owner when the visible band actually changed, so that
@@ -1507,7 +1508,7 @@ void ScrollBox::OnVScroll(WPARAM wp) {
             break;
         case SB_THUMBTRACK:
         case SB_THUMBPOSITION:
-            ScrollTo(HIWORD(wp));
+            ScrollTo(gUiScrollbarTrackPos ? gUiScrollbarTrackPos(GetHwnd(), HIWORD(wp), SB_VERT) : HIWORD(wp));
             break;
     }
 }
@@ -1525,6 +1526,7 @@ void ScrollBox::UpdateScrollbar() {
     si.nPage = (UINT)std::max(bounds.dy, 0);
     si.nPos = scrollY;
     SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+    if (gUiInstallScrollbar) gUiInstallScrollbar(hwnd);
 }
 
 //--- VirtListBox
@@ -1634,11 +1636,13 @@ Rect VirtListBox::ThumbRectLocal() {
     int contentDy = ItemsCount() * GetItemHeight();
     int visibleDy = UsableDy();
     int minDy = DpiScaleByDpi(GetDpi(), 20);
-    int thumbDy = Scale(sb.dy, visibleDy, contentDy);
-    thumbDy = Clamp(thumbDy, std::min(minDy, sb.dy), sb.dy);
+    int arrowDy = std::min(sb.dx, sb.dy / 2);
+    int trackDy = sb.dy - 2 * arrowDy;
+    int thumbDy = Scale(trackDy, visibleDy, contentDy);
+    thumbDy = Clamp(thumbDy, std::min(minDy, trackDy), trackDy);
     int maxY = MaxScrollY();
-    int y = (maxY > 0) ? Scale(sb.dy - thumbDy, scrollY, maxY) : 0;
-    return {sb.x, sb.y + y, sb.dx, thumbDy};
+    int y = (maxY > 0) ? Scale(trackDy - thumbDy, scrollY, maxY) : 0;
+    return {sb.x, sb.y + arrowDy + y, sb.dx, thumbDy};
 }
 
 Size VirtListBox::GetIdealSize() {
@@ -1988,17 +1992,29 @@ void VirtListBox::Paint(VirtPaintCtx& ctx) {
         }
         ctx.gfx->PopClip();
 
+        Rect bar = ScrollbarRectLocal();
         Rect thumb = ThumbRectLocal();
         if (!thumb.IsEmpty()) {
-            Color colThumb = GetColor(kColListScrollbar);
-            if (colThumb == kColorUnset && !ColorSkipsPaint(colBg)) {
-                colThumb = AccentColor(colBg, 60);
-            }
             Point orig = ctx.bounds.TL();
+            bar.Offset(orig.x, orig.y);
             thumb.Offset(orig.x, orig.y);
-            // a slim thumb with a gap on both sides, like an overlay scrollbar
-            thumb.SubLR(2, 2);
-            ctx.gfx->FillRoundedRect(thumb, std::max(thumb.dx, 1), colThumb);
+            Color track = ColorSkipsPaint(colBg) ? MkRgb(255, 255, 255) : colBg;
+            Color gray = MkRgb(139, 139, 139);
+            ctx.gfx->FillRect(bar, track);
+            int arrowDy = std::min(bar.dx, bar.dy / 2);
+            int half = std::max(1, bar.dx / 4);
+            int centerX = bar.x + bar.dx / 2;
+            for (int dir : {-1, 1}) {
+                int centerY = dir < 0 ? bar.y + arrowDy / 2 : bar.Bottom() - arrowDy / 2;
+                Point triangle[] = {{centerX, centerY + dir * half},
+                                    {centerX - half, centerY - dir * half},
+                                    {centerX + half, centerY - dir * half},
+                                    {centerX, centerY + dir * half}};
+                ctx.gfx->FillQuads(triangle, 1, gray);
+            }
+            int inset = std::min(DpiScaleByDpi(GetDpi(), 2), std::max(0, (thumb.dx - 1) / 2));
+            thumb.SubLR(inset, inset);
+            ctx.gfx->FillRoundedRect(thumb, std::max(thumb.dx, 1), gray);
         }
     }
 
@@ -2032,7 +2048,12 @@ void VirtListBox::OnMouseDown(VirtMouseEvent* ev) {
     }
     Rect sb = ScrollbarRectLocal();
     if (!sb.IsEmpty() && sb.Contains(ev->pt)) {
-        // above / below the thumb: page towards the click
+        int arrowDy = std::min(sb.dx, sb.dy / 2);
+        if (ev->pt.y < sb.y + arrowDy || ev->pt.y >= sb.Bottom() - arrowDy) {
+            ScrollBy((ev->pt.y < sb.y + arrowDy ? -1 : 1) * GetItemHeight());
+            ev->didHandle = true;
+            return;
+        }
         int dir = (ev->pt.y < thumb.y) ? -1 : 1;
         ScrollBy(dir * UsableDy());
         ev->didHandle = true;
@@ -2054,7 +2075,7 @@ void VirtListBox::OnMouseMove(VirtMouseEvent* ev) {
     }
     Rect sb = ScrollbarRectLocal();
     Rect thumb = ThumbRectLocal();
-    int range = sb.dy - thumb.dy;
+    int range = sb.dy - 2 * std::min(sb.dx, sb.dy / 2) - thumb.dy;
     if (range <= 0) {
         ev->didHandle = true;
         return;

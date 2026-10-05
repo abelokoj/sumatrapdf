@@ -32,6 +32,9 @@ int UiHScrollbarDy() {
     return DpiGetSystemMetrics(SM_CYHSCROLL);
 }
 
+void (*gUiInstallScrollbar)(HWND hwnd) = nullptr;
+int (*gUiScrollbarTrackPos)(HWND hwnd, int fallback, int bar) = nullptr;
+int (*gUiScrollbarInset)(HWND hwnd) = nullptr;
 int (*gUiScrollbarWidth)(int dpi) = nullptr;
 int UiScrollbarWidth(int dpi) {
     return gUiScrollbarWidth ? gUiScrollbarWidth(dpi) : DpiScaleByDpi(dpi, 20);
