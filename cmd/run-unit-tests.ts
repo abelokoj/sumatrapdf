@@ -105,7 +105,7 @@ function tail(s: string, maxLines: number): string {
 }
 
 async function runAndCapture(exe: string, cwd: string, logPath: string): Promise<{ exitCode: number; output: string }> {
-  const proc = Bun.spawn([exe, "-unit-tests", "-for-ai"], {
+  const proc = Bun.spawn([exe, "-unit-tests", "-for-ai", "-for-testing"], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",

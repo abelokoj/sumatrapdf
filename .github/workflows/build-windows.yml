@@ -87,7 +87,7 @@ jobs:
       - name: Build debug ASan reader
         run: bun cmd/build.ts -asan -dbg
       - name: Run native unit tests
-        run: ./out/dbg64_asan/SumatraPDF-static.exe -unit-tests -for-ai -for-testing
+        run: bun cmd/run-unit-tests.ts -asan
       - name: Run all hosted-compatible UI tests
         env:
           SUMATRA_TEST_EXE: ${{ github.workspace }}\out\dbg64_asan\SumatraPDF-static.exe

@@ -901,6 +901,8 @@ struct DropDown : ControlBase {
         bool visible = true;
         // draw a color swatch to the left of each item (annotation color lists)
         bool colorSwatches = false;
+        // Initial native bounds, when already known, avoid a provisional resize.
+        Rect pos{};
         // TODO: model or items
     };
 

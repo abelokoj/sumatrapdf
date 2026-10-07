@@ -4,10 +4,11 @@
 
 ## v0.1.2
 
-- Reduced first-opening work in Settings and Learning Hub by creating offscreen dropdowns and practice controls when needed.
+- Reduced first-opening work in Settings and Learning Hub by creating offscreen dropdowns and practice controls when needed. Visible Settings dropdowns start at their final bounds without temporary list entries or a second resize.
+- Kept all five pen types on one adaptive row. Pen palettes use pin/unpin and hide icons; Dictionary and Learning Hub use compact pronunciation, stop and recording controls with full action names on hover and keyboard focus.
 - Shortened PDF wheel easing and combined continuous-view line updates, preserving wheel distance and direction changes.
 - Matched dictionary dropdown and button heights across themes and interface scales. Image and bookmark editors now refresh selected fonts, colors and spacing without overflowing their controls.
-- Removed duplicate borders on custom-painted controls and pale rounded header corners in Dictionary and Learning Hub.
+- Removed duplicate borders on custom-painted controls and parent-framed text fields, and pale rounded header corners in Dictionary and Learning Hub.
 - Added lasso rotation, duplication, recoloring and thickness commands with undo, and segment erasing that preserves the remaining ink. Selection edits refresh the visible page and annotation lists.
 - Added background annotation recovery copies with atomic manifests, original-file checks and explicit recovery choices. Recovery copies preserve the original PDF and the active undo history; repaired PDFs that cannot be saved incrementally are excluded.
 - Added source and package checksum manifests, x64 ASan/UI validation and disposable installation coexistence checks to build-on-push.

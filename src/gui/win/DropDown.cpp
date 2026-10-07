@@ -239,6 +239,7 @@ HWND DropDown::Create(const CreateArgs& args) {
     cargs.className = WC_COMBOBOX;
     cargs.font = args.font;
     cargs.visible = args.visible;
+    cargs.pos = args.pos;
 
     ControlBase::CreateControl(cargs);
     if (!hwnd) {
@@ -256,7 +257,7 @@ HWND DropDown::Create(const CreateArgs& args) {
         CbSetItemHeight(hwnd, -1, dy);
     }
 
-    if (!deferred) SizeToIdealSize(this);
+    if (!deferred && args.pos.IsEmpty()) SizeToIdealSize(this);
     return hwnd;
 }
 
@@ -510,11 +511,17 @@ void CbSetCurrentSelection(DropDown* dd, int n) {
         }
         bool previous = dd->suppressNotify;
         dd->suppressNotify = true;
-        CbResetContent(dd->hwnd);
         dd->pendingSelection = n;
-        if (n >= 0 && n < len(dd->items)) {
-            CbAddString(dd->hwnd, dd->items[n]);
-            CbSetCurrentSelection(dd->hwnd, 0);
+        if ((GetWindowLongPtrW(dd->hwnd, GWL_STYLE) & CBS_DROPDOWNLIST) == CBS_DROPDOWN) {
+            // The edit can display the selected model value without inserting
+            // a temporary native row. Populate the list only before interaction.
+            dd->HwndBase::SetText(n >= 0 && n < len(dd->items) ? dd->items[n] : Str{});
+        } else {
+            CbResetContent(dd->hwnd);
+            if (n >= 0 && n < len(dd->items)) {
+                CbAddString(dd->hwnd, dd->items[n]);
+                CbSetCurrentSelection(dd->hwnd, 0);
+            }
         }
         dd->suppressNotify = previous;
         return;
@@ -583,7 +590,7 @@ void DropDown_UnitTestsDeferred() {
             utassert(str::Eq(drop.GetTextTemp(), editable ? StrL("Custom value") : StrL("Third")));
             drop.SetIsEnabled(true);
         }
-        utassert(CbGetItemsCount(drop.hwnd) == (deferred && editable ? 0 : 1));
+        utassert(CbGetItemsCount(drop.hwnd) == (editable ? 0 : 1));
         utassert(str::Eq(drop.GetTextTemp(), deferred && editable ? StrL("Custom value") : StrL("Third")));
         if (editable) drop.SetText(StrL("Custom value"));
         drop.EnsureItems();

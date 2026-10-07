@@ -144,6 +144,8 @@ struct LearningWindow {
     ULONGLONG feedbackStart = 0;
     HICON smallIcon = nullptr, largeIcon = nullptr;
     HWND hoverButton = nullptr;
+    Tooltip* buttonTooltip = nullptr;
+    HWND tooltipButton = nullptr;
     HFONT titleFont = nullptr;
     int serial = 0, ticket = 0, page = 0, position = 0, correct = 0;
     HWND controls[lcLast]{};
@@ -161,6 +163,7 @@ struct LearningWindow {
         FreeDictionaryCatalog(packs);
         delete question;
         delete speech;
+        delete buttonTooltip;
         for (auto& run : detailRuns) str::Free(run.word);
         DeleteObject(titleFont);
         DestroyIcon(smallIcon);
@@ -623,11 +626,20 @@ static int WheelStep(int viewport) {
     SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
     return lines == WHEEL_PAGESCROLL ? viewport : UiScalePx(32) * (int)std::min(lines, (UINT)100);
 }
+static bool LearningIconOnlyButton(int id) {
+    return id == lcPronounce || id == lcStopVoice;
+}
+static Str LearningButtonCaption(HWND control, int id) {
+    if (LearningIconOnlyButton(id)) return {};
+    if (id == lcRecording) return StrL("US");
+    if (id == lcRecordingUk) return StrL("UK");
+    return HwndGetTextTemp(control);
+}
 static int LearningTextWidth(HWND control) {
     HDC dc = PlatformFontMeasurementDC();
     HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
     HGDIOBJ old = SelectObject(dc, font ? font : GetAppFont()->GetHFont());
-    WStr text = ToWStrTemp(HwndGetTextTemp(control));
+    WStr text = ToWStrTemp(LearningButtonCaption(control, GetDlgCtrlID(control)));
     SIZE size{};
     GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &size);
     SelectObject(dc, old);
@@ -894,7 +906,7 @@ static void MeasureLearning(LearningWindow* w) {
             if (!combo && !edit) {
                 HDC dc = PlatformFontMeasurementDC();
                 HGDIOBJ old = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
-                WStr text = ToWStrTemp(Read(w, id));
+                WStr text = ToWStrTemp(LearningButtonCaption(child, id));
                 SIZE extent{};
                 GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &extent);
                 SelectObject(dc, old);
@@ -902,6 +914,7 @@ static void MeasureLearning(LearningWindow* w) {
                     std::min(width, (int)extent.cx + inset * 2 + (HasLearningGlyph(id) ? LearningIconSize() + gap : 0));
             }
             if (label) size = LearningTextWidth(child) + UiScalePx(4);
+            if (LearningIconOnlyButton(id)) size = row;
             if (id == lcLearnedHint || id == lcSessionInfo) size = width;
             if (id == lcFeedback) {
                 int remaining = pad + width - x;
@@ -932,10 +945,11 @@ static void MeasureLearning(LearningWindow* w) {
                 height = row;
             }
             int h =
-                std::max(row, WrappedHeight(child, ToWStrTemp(Read(w, id)),
+                std::max(row, WrappedHeight(child, ToWStrTemp(LearningButtonCaption(child, id)),
                                             size - gap * 2 - (HasLearningGlyph(id) ? LearningIconSize() + gap : 0)) +
                                   (footer ? gap : gap * 2));
-            if (label || (edit && !(GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE))) h = row;
+            if (label || LearningIconOnlyButton(id) || (edit && !(GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE)))
+                h = row;
             if (!measuring) Place(w, id, x, y, size, combo ? row * 10 : h);
             height = std::max(height, combo ? row : h);
             x += size + gap;
@@ -2577,7 +2591,8 @@ static int LearningIconSize() {
 }
 static bool HasLearningGlyph(int id) {
     return id == lcLookup || id == lcSave || id == lcPractice || id == lcGuideStart || id == lcOpenVocabulary ||
-           id == lcDownload || id == lcInstallDeck || id == lcExport || id == lcImport || id == lcImportPack;
+           id == lcDownload || id == lcInstallDeck || id == lcExport || id == lcImport || id == lcImportPack ||
+           LearningIconOnlyButton(id) || id == lcRecording || id == lcRecordingUk;
 }
 static void DrawLearningGlyph(HDC dc, int id, RECT rc, Color ink) {
     int size = std::min((int)(rc.right - rc.left), (int)(rc.bottom - rc.top));
@@ -2593,9 +2608,19 @@ static void DrawLearningGlyph(HDC dc, int id, RECT rc, Color ink) {
     if (id == lcLookup) {
         Ellipse(dc, px(3), py(3), px(17), py(17));
         line(15, 15, 22, 22);
-    } else if (id == lcPractice) {
+    } else if (id == lcPractice || id == lcRecording || id == lcRecordingUk) {
         POINT triangle[]{{px(7), py(3)}, {px(21), py(12)}, {px(7), py(21)}};
         Polygon(dc, triangle, dimof(triangle));
+    } else if (id == lcStopVoice) {
+        Rectangle(dc, px(5), py(5), px(19), py(19));
+    } else if (id == lcPronounce) {
+        POINT speaker[]{{px(2), py(9)},   {px(7), py(9)},  {px(13), py(4)},
+                        {px(13), py(20)}, {px(7), py(15)}, {px(2), py(15)}};
+        Polygon(dc, speaker, dimof(speaker));
+        int direction = SetArcDirection(dc, AD_CLOCKWISE);
+        Arc(dc, px(13), py(7), px(20), py(17), px(17), py(7), px(17), py(17));
+        Arc(dc, px(12), py(3), px(24), py(21), px(19), py(3), px(19), py(21));
+        SetArcDirection(dc, direction);
     } else if (id == lcDownload || id == lcInstallDeck || id == lcImport || id == lcImportPack || id == lcExport) {
         bool up = id == lcExport;
         line(12, up ? 18 : 3, 12, up ? 3 : 18);
@@ -2653,13 +2678,13 @@ static void DrawLearningButton(DRAWITEMSTRUCT* item) {
     InflateRect(&textRect, -UiScalePx(8), 0);
     if (HasLearningGlyph(item->CtlID)) {
         int size = LearningIconSize();
-        RECT icon{textRect.left, (rc.bottom + rc.top - size) / 2, textRect.left + size,
-                  (rc.bottom + rc.top + size) / 2};
+        int left = LearningIconOnlyButton(item->CtlID) ? (rc.left + rc.right - size) / 2 : textRect.left;
+        RECT icon{left, (rc.bottom + rc.top - size) / 2, left + size, (rc.bottom + rc.top + size) / 2};
         if (pressed) OffsetRect(&icon, 1, 1);
         DrawLearningGlyph(item->hDC, item->CtlID, icon, primary || disabled ? ink : ThemeBrandColor());
         textRect.left += size + UiScalePx(8);
     }
-    TempStr text = HwndGetTextTemp(item->hwndItem);
+    Str text = LearningButtonCaption(item->hwndItem, item->CtlID);
     RECT measured = textRect;
     DrawTextW(item->hDC, CWStrTemp(text), -1, &measured, DT_CALCRECT | DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
     textRect.top += std::max(0, (int)((textRect.bottom - textRect.top) - (measured.bottom - measured.top)) / 2);
@@ -2744,20 +2769,53 @@ static LRESULT CALLBACK LearningSplitProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, LearningSplitProc, id);
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
+static void ShowLearningButtonTooltip(LearningWindow* w, HWND hwnd, bool keyboard) {
+    int id = GetDlgCtrlID(hwnd);
+    if (!LearningIconOnlyButton(id) && id != lcRecording && id != lcRecordingUk) return;
+    DpiScope dpi(hwnd);
+    if (!w->buttonTooltip) {
+        w->buttonTooltip = new Tooltip();
+        w->buttonTooltip->Create({.parent = w->hwnd, .font = GetAppFontForDpi(DpiGet())});
+    }
+    w->buttonTooltip->SetFont(GetAppFontForDpi(DpiGet()));
+    Rect bounds = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, w->hwnd);
+    Str name = HwndGetTextTemp(hwnd);
+    if (keyboard) {
+        RECT screen;
+        GetWindowRect(hwnd, &screen);
+        w->buttonTooltip->SetSingleAt(name, bounds, {screen.left, screen.bottom + UiScalePx(4)}, false);
+    } else {
+        w->buttonTooltip->SetSingle(name, bounds, false);
+    }
+    w->tooltipButton = hwnd;
+}
 static LRESULT CALLBACK LearningButtonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     auto* w = (LearningWindow*)data;
     if (msg == WM_MOUSEMOVE && IsWindowEnabled(hwnd)) {
         if (w->hoverButton != hwnd) {
             w->hoverButton = hwnd;
             InvalidateRect(hwnd, nullptr, false);
+            ShowLearningButtonTooltip(w, hwnd, false);
         }
         TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, hwnd, 0};
         TrackMouseEvent(&tracking);
     } else if (msg == WM_MOUSELEAVE || msg == WM_ENABLE) {
         if (w->hoverButton == hwnd) w->hoverButton = nullptr;
+        if (w->tooltipButton == hwnd && w->buttonTooltip) {
+            w->buttonTooltip->Delete();
+            w->tooltipButton = nullptr;
+        }
         InvalidateRect(hwnd, nullptr, false);
+    } else if (msg == WM_SETFOCUS && IsWindowEnabled(hwnd)) {
+        ShowLearningButtonTooltip(w, hwnd, true);
+    } else if (msg == WM_KILLFOCUS) {
+        if (w->tooltipButton == hwnd && w->buttonTooltip) {
+            w->buttonTooltip->Delete();
+            w->tooltipButton = nullptr;
+        }
     } else if (msg == WM_NCDESTROY) {
         if (w->hoverButton == hwnd) w->hoverButton = nullptr;
+        if (w->tooltipButton == hwnd) w->tooltipButton = nullptr;
         RemoveWindowSubclass(hwnd, LearningButtonProc, id);
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
@@ -3323,6 +3381,7 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
         SetWindowSubclass(child, LearningComboProc, 1, (DWORD_PTR)w);
         RoundControlUseCustomPaint(child);
     }
+    if (id == lcQuery || id == lcDetails || id == lcAnswer || id == lcNewDeck) RoundControlUseCustomPaint(child);
     if (IsRichDetails(child)) {
         SendMessageW(child, EM_SETEVENTMASK, 0, ENM_LINK);
         SendMessageW(child, EM_AUTOURLDETECT, TRUE, 0);
@@ -3785,6 +3844,27 @@ static void LearningPanelPaintTest(LearningWindow* w) {
     if (dc) DeleteDC(dc);
 }
 
+static void LearningFieldPaintTest(LearningWindow* w) {
+    HWND field = Control(w, lcQuery);
+    RoundControlCorners(field);
+    Size size = HwndWindowRect(field).Size();
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), size.dx, -size.dy, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    utassert(bitmap && pixels);
+    if (bitmap && pixels) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        PatBlt(dc, 0, 0, size.dx, size.dy, WHITENESS);
+        SendMessageW(field, WM_PRINT, (WPARAM)dc, PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND);
+        utassert(GetPixel(dc, size.dx / 2, 0) == (ThemeControlBackgroundColor() & 0xffffff));
+        SelectObject(dc, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+}
+
 static void LearningRowTests(LearningWindow* w) {
     int size = gSettings->uIFontSize, scale = gSettings->interfaceScale;
     Str theme = str::Dup(gSettings->theme), family = str::Dup(gSettings->uIFontFamily);
@@ -3809,10 +3889,17 @@ static void LearningRowTests(LearningWindow* w) {
             RefreshUiFonts();
             RefreshLearningStyle(w);
             LearningPanelPaintTest(w);
+            LearningFieldPaintTest(w);
             HWND combo = Control(w, w->dictionary ? lcVoice : lcDeck);
             HWND button = Control(w, w->dictionary ? lcPronounce : lcPractice);
             utassert(HwndWindowRect(combo).dy == HwndWindowRect(button).dy);
             utassert(HwndWindowRect(combo).dy >= PlatformFontLineHeight(GetAppFontForDpi(DpiGet())));
+            for (int id : {lcPronounce, lcStopVoice}) {
+                HWND audio = Control(w, id);
+                utassert(audio && HwndWindowRect(audio).dx == HwndWindowRect(audio).dy);
+                utassert(len(HwndGetTextTemp(audio)) > 0);
+                utassert((GetWindowLongPtrW(audio, GWL_STYLE) & WS_TABSTOP) != 0);
+            }
             for (HWND child : w->controls) {
                 if (!child || child == Control(w, lcTitle)) continue;
                 if (IsRichDetails(child)) {
@@ -3876,6 +3963,16 @@ void VocabularyDialog_UnitTests() {
             utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
                      HwndWindowRect(Control(learning, lcPronounce)).dy);
             LearningRowTests(learning);
+            HWND audio = Control(learning, lcPronounce);
+            ShowLearningButtonTooltip(learning, audio, true);
+            utassert(learning->buttonTooltip && learning->tooltipButton == audio);
+            if (learning->buttonTooltip) {
+                utassert(TooltipGetCount(learning->buttonTooltip->hwnd) == 1);
+                utassert(str::Eq(learning->buttonTooltip->lastText, HwndGetTextTemp(audio)));
+                SendMessageW(audio, WM_KILLFOCUS, 0, 0);
+                utassert(TooltipGetCount(learning->buttonTooltip->hwnd) == 0);
+                utassert(!learning->tooltipButton);
+            }
             WindowApplyScaledCaption(learning->hwnd);
             int before = HwndWindowRect(learning->hwnd).dy - HwndClientRect(learning->hwnd).dy;
             gSettings->interfaceScale = originalScale + 50;

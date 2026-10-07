@@ -12,7 +12,8 @@ foreach ($path in @($Installer,$PortableZip,$OfficialInstaller)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing acceptance input: $path" }
 }
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo([IO.Path]::GetFullPath($Installer)).ProductName -ne 'SumatraPDF Enhanced') { throw 'Wrong Enhanced installer product' }
-if ([Diagnostics.FileVersionInfo]::GetVersionInfo([IO.Path]::GetFullPath($OfficialInstaller)).ProductName -ne 'SumatraPDF') { throw 'Wrong official installer product' }
+$officialInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo([IO.Path]::GetFullPath($OfficialInstaller))
+if ($officialInfo.ProductName -ne 'SumatraPDF' -or $officialInfo.ProductVersion -ne '3.6.1') { throw 'Wrong pinned official installer product/version' }
 $reportRoot = [IO.Path]::GetFullPath($ReportDirectory)
 New-Item -ItemType Directory -Path $reportRoot -Force | Out-Null
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -20,13 +21,27 @@ $testRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot ('enhanced-install-accep
 if (-not $testRoot.StartsWith($tempRoot.TrimEnd('\') + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid acceptance temp root' }
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $results = [Collections.Generic.List[object]]::new()
-function Invoke-Exe([string]$exe,[string[]]$arguments,[int]$timeout = 120) {
-    $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden
+$script:commandNumber = 0
+function Invoke-Exe([string]$exe,[string[]]$arguments,[int]$timeout = 120,[int[]]$ExpectedExitCodes = @(0),[string[]]$RequiredOutput = @()) {
+    $script:commandNumber++
+    $prefix = Join-Path $reportRoot ('command-' + $script:commandNumber.ToString('D2'))
+    $stdout = $prefix + '-stdout.txt'
+    $stderr = $prefix + '-stderr.txt'
+    Write-Output "Acceptance command $script:commandNumber`: $exe $($arguments -join ' ')"
+    $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (-not $process.WaitForExit($timeout * 1000)) {
         Stop-Process -Id $process.Id -Force
         throw "Acceptance process timed out: $exe"
     }
-    if ($process.ExitCode -ne 0) { throw "Acceptance process failed: $exe ($($process.ExitCode))" }
+    $null = $process.WaitForExit()
+    $output = (Get-Content -LiteralPath $stdout -Raw) + (Get-Content -LiteralPath $stderr -Raw)
+    $command = @{ executable = $exe; arguments = $arguments; exitCode = $process.ExitCode; stdout = (Split-Path $stdout -Leaf); stderr = (Split-Path $stderr -Leaf) }
+    $command | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($prefix + '.json') -Encoding utf8
+    if ($ExpectedExitCodes -notcontains $process.ExitCode) { throw "Acceptance process failed: $exe ($($process.ExitCode)); see command $script:commandNumber output" }
+    foreach ($pattern in $RequiredOutput) {
+        if ($output -notmatch $pattern) { throw "Missing benchmark success evidence: $pattern; see command $script:commandNumber output" }
+    }
+    if ($RequiredOutput.Count -and $output -match 'Error:\s*failed to (load|render)') { throw 'Official benchmark reported a load/render failure' }
 }
 function File-Snapshot([string]$directory) {
     @((Get-ChildItem -LiteralPath $directory -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -104,7 +119,8 @@ try {
         while ((Test-Path -LiteralPath $exe) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if ((Test-Path -LiteralPath $exe) -or (Test-Path -LiteralPath (Join-Path $root $enhancedUninstall))) { throw 'Enhanced uninstall left app or registration' }
         if ($officialFiles -ne (File-Snapshot $officialDir) -or $officialReg -ne (Registry-State $officialKeys) -or $providers -ne (Registry-State $providerKeys) -or $shortcuts -ne (Shortcut-State) -or $officialDataFiles -ne (File-Snapshot $officialData) -or $sentinelHash -ne (Get-FileHash -LiteralPath $sentinel).Hash) { throw 'Enhanced uninstall changed official app, data, shortcuts or providers' }
-        Invoke-Exe $officialExe @('-for-testing','-bench',('"' + $pdf + '"'))
+        # Pinned 3.6.1 lacks -for-testing and keeps exit 1 after -bench. Require actual rendering in this disposable VM.
+        Invoke-Exe $officialExe @('-bench',('"' + $pdf + '"')) -ExpectedExitCodes @(1) -RequiredOutput @('page count: 1','pagerender\s+1:','Finished \(in ')
         $results.Add(@{ check = "$scope uninstall preserves official app/data/providers and official launch"; status = 'passed' })
         Invoke-Exe $officialExe (@('-uninstall','-silent') + $scopeFlags)
         $deadline = [DateTime]::UtcNow.AddSeconds(30)

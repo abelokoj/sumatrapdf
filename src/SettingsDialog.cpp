@@ -93,17 +93,22 @@ struct SettingsMoveBatch {
 };
 thread_local SettingsMoveBatch* SettingsMoveBatch::active = nullptr;
 
+static Rect SettingsControlWindowBounds(ControlBase* control, Rect bounds, HWND parent) {
+    bounds.x += control->insets.left;
+    bounds.y += control->insets.top;
+    bounds.dx -= control->insets.left + control->insets.right;
+    bounds.dy -= control->insets.top + control->insets.bottom;
+    if (control->mapRtlX) bounds.x = HwndMapChildXForRtlParent(parent, bounds.x, bounds.dx);
+    return bounds;
+}
+
 static void SetSettingsControlBounds(ControlBase* control, Rect bounds) {
     if (!SettingsMoveBatch::active) {
         control->ControlBase::SetBounds(bounds);
         return;
     }
     control->lastBounds = bounds;
-    bounds.x += control->insets.left;
-    bounds.y += control->insets.top;
-    bounds.dx -= control->insets.left + control->insets.right;
-    bounds.dy -= control->insets.top + control->insets.bottom;
-    if (control->mapRtlX) bounds.x = HwndMapChildXForRtlParent(GetParent(control->hwnd), bounds.x, bounds.dx);
+    bounds = SettingsControlWindowBounds(control, bounds, GetParent(control->hwnd));
     if (!SettingsMoveBatch::active->viewport.IsEmpty() &&
         bounds.Intersect(SettingsMoveBatch::active->viewport).IsEmpty())
         return;
@@ -1256,6 +1261,7 @@ static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
 
 bool SettingsDropDown::EnsureNative() {
     if (hwnd) return true;
+    pendingCreate.pos = SettingsControlWindowBounds(this, lastBounds, pendingCreate.parent);
     if (!EnsureCreated()) return false;
     SetColors(ThemeWindowTextColor(), ThemeWindowBackgroundColor());
     SettingsFocusStop(window, this);
@@ -2090,19 +2096,78 @@ static void SettingsSnapshots() {
     }
 }
 
+struct SettingsNativeResizeProbe {
+    HWND hwnd;
+    int resizes = 0;
+};
+static thread_local Vec<SettingsNativeResizeProbe>* settingsNativeResizeProbe = nullptr;
+
+static LRESULT CALLBACK SettingsNativeResizeHook(int code, WPARAM wp, LPARAM lp) {
+    if (code >= 0 && settingsNativeResizeProbe) {
+        auto* message = (CWPRETSTRUCT*)lp;
+        if (message->message == WM_SETFONT || message->message == WM_SIZE) {
+            WCHAR name[32]{};
+            GetClassNameW(message->hwnd, name, dimof(name));
+            if (_wcsicmp(name, WC_COMBOBOXW) == 0) {
+                int index = 0;
+                auto& probes = *settingsNativeResizeProbe;
+                while (index < len(probes) && probes[index].hwnd != message->hwnd) index++;
+                if (message->message == WM_SETFONT && index == len(probes))
+                    VecAppend(probes, {message->hwnd});
+                else if (message->message == WM_SIZE && index < len(probes))
+                    probes[index].resizes++;
+            }
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
 static void SettingsOpeningTests() {
     for (auto* entry : settingsMetrics.entries) delete entry;
     VecReset(settingsMetrics.entries);
     int before = settingsMetrics.measured;
     auto* first = new SettingsWnd();
     first->SetFont(GetAppFont());
+    Vec<SettingsNativeResizeProbe> nativeResizes;
+    settingsNativeResizeProbe = &nativeResizes;
+    HHOOK resizeHook = SetWindowsHookExW(WH_CALLWNDPROCRET, SettingsNativeResizeHook, nullptr, GetCurrentThreadId());
+    utassert(resizeHook);
     utassert(first->Create(nullptr, SettingsView::Hidden));
+    if (resizeHook) UnhookWindowsHookEx(resizeHook);
+    settingsNativeResizeProbe = nullptr;
+    // A visible lazy combo must arrive at its final size. Resizing it again
+    // after WM_SETFONT repeats the native edit/list geometry work at opening.
+    int lazyControls = 0;
+    for (auto& value : first->savedValues) {
+        if (value.checkbox || !value.control->hwnd || value.control == first->dropLayout ||
+            value.control == first->dropZoom)
+            continue;
+        lazyControls++;
+        bool recorded = false;
+        for (auto& probe : nativeResizes) {
+            if (probe.hwnd != value.control->hwnd) continue;
+            recorded = true;
+            utassert(probe.resizes == 0);
+        }
+        utassert(recorded);
+    }
+    utassert(lazyControls > 0);
     utassert(first->dropLayout->hwnd);
     utassert(!first->dropPenMin->hwnd);
     utassert(str::Eq(first->dropPenMin->GetTextTemp(), fmt("%g", gSettings->penMinWidth)));
     int coldMeasurements = settingsMetrics.measured - before;
     int width = HwndClientRect(first->hwnd).dx;
     utassert(!IsWindowVisible(first->hwnd) && first->autoLayout);
+    int zoomSelection = 2;
+    utassert(len(first->dropZoom->items) > zoomSelection);
+    CbSetCurrentSelection(first->dropZoom, zoomSelection);
+    utassert(CbGetItemsCount(first->dropZoom->hwnd) == 0);
+    if (len(first->dropZoom->items) > zoomSelection)
+        utassert(str::Eq(first->dropZoom->GetTextTemp(), first->dropZoom->items[zoomSelection]));
+    first->dropZoom->EnsureItems();
+    utassert(CbGetCurrentSelection(first->dropZoom) == zoomSelection);
+    if (len(first->dropZoom->items) > zoomSelection)
+        utassert(str::Eq(first->dropZoom->GetTextTemp(), first->dropZoom->items[zoomSelection]));
     first->dropPenMin->SetText(StrL("0.75 pt"));
     utassert(!first->dropPenMin->hwnd);
     utassert(SelectedNumber(first->dropPenMin, 1, 0.1, 64, StrL("pt")) == 0.75);

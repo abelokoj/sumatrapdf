@@ -80,6 +80,7 @@ struct ToolbarButtonInfo {
 
 static void CollectPaletteControls(ILayout*, Vec<VirtCtrl*>&);
 static int PinnedToolCommand(Str);
+static int PinnedToolIndex(MainWindow*, int);
 static bool ShowPinToolMenu(MainWindow*, int);
 static const char* kHandToolIcon =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8 12V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v8c0 5-3 8-7 8-2 0-4-1-5-3l-4-5a2 2 0 0 1 3-3l1 1Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>)";
@@ -3670,15 +3671,51 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
     return vbox;
 }
 
+struct PaletteIconButton : VirtButton {
+    Pixmap* pixmap = nullptr;
+    bool isCurrent = false;
+    PaletteIconButton(Str text, PlatformFont* font) : VirtButton(text, font) {
+        name = s;
+        SetTooltip(s);
+    }
+    Size GetIdealSize() override {
+        int pad = UiScalePx(6);
+        return {pixmap ? pixmap->width + 2 * pad : 2 * pad, pixmap ? pixmap->height + 2 * pad : 2 * pad};
+    }
+    void Paint(VirtPaintCtx& ctx) override {
+        if (isCurrent || HasFlag(vwfHovered) || HasFlag(vwfFocused)) {
+            ctx.gfx->FillRoundedRect(ctx.bounds, UiScalePx(6), TbHoverColor(),
+                                     isCurrent || HasFlag(vwfFocused) ? ThemeBrandColor() : TbHoverColor());
+        }
+        if (pixmap) {
+            ctx.gfx->DrawPixmap(pixmap,
+                                {ctx.bounds.x + (ctx.bounds.dx - pixmap->width) / 2,
+                                 ctx.bounds.y + (ctx.bounds.dy - pixmap->height) / 2, pixmap->width, pixmap->height});
+        }
+    }
+};
+
+static PaletteIconButton* NewPaletteButton(MainWindow* win, Str svg, Str text) {
+    ToolbarVirt* tb = win->toolbarVirt;
+    auto* button = new PaletteIconButton(text, tb->platformFont);
+    button->pixmap = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
+    return button;
+}
+
 struct InkPenTile : VirtButton {
     Pixmap* pixmap = nullptr;
     bool isCurrent = false;
+    bool showLabel = true;
+    int imagePad = 0;
+    int preferredDx = 0;
+    int index = 0;
+    Color color = kColorUnset;
     InkPenTile() : VirtButton({}) {}
     Size GetIdealSize() override {
         int imageDx = pixmap ? pixmap->width : UiScalePx(40);
         int imageDy = pixmap ? pixmap->height : UiScalePx(64);
-        Size label = PlatformFontMeasureText(font, s);
-        return {std::max(imageDx + UiScalePx(12), label.dx + UiScalePx(12)), imageDy + label.dy + UiScalePx(12)};
+        Size label = showLabel ? PlatformFontMeasureText(font, s) : Size{};
+        return {std::max(imageDx, label.dx) + 2 * imagePad, imageDy + label.dy + 2 * imagePad};
     }
     void Paint(VirtPaintCtx& ctx) override {
         Rect r = ctx.bounds;
@@ -3688,10 +3725,11 @@ struct InkPenTile : VirtButton {
         }
         if (pixmap) {
             ctx.gfx->DrawPixmap(pixmap,
-                                {r.x + (r.dx - pixmap->width) / 2, r.y + UiScalePx(4), pixmap->width, pixmap->height});
+                                {r.x + (r.dx - pixmap->width) / 2, r.y + imagePad, pixmap->width, pixmap->height});
         }
+        if (!showLabel) return;
         int labelDy = PlatformFontLineHeight(font);
-        Rect label{r.x, r.Bottom() - labelDy - UiScalePx(4), r.dx, labelDy};
+        Rect label{r.x, r.Bottom() - labelDy - imagePad, r.dx, labelDy};
         ctx.gfx->DrawText(s, label, gfxTextCenter | gfxTextVCenter, font, TbTextColor());
     }
 };
@@ -3699,6 +3737,23 @@ struct InkPenTile : VirtButton {
 static void OnHidePenSettings(MainWindow* win, VirtMouseEvent* ev) {
     uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide pen settings");
     ev->didHandle = true;
+}
+
+static ILayout* NewPaletteHeader(MainWindow* win, Str title) {
+    auto* header = new HBox();
+    header->gap = UiScalePx(8);
+    header->alignCross = CrossAxisAlign::CrossCenter;
+    header->rtl = IsUIRtl();
+    header->AddChild(NewVirtText({.s = title,
+                                  .font = win->toolbarVirt->platformFont,
+                                  .textColor = TbTextColor(),
+                                  .isRtl = IsUIRtl(),
+                                  .ellipsis = true}),
+                     1);
+    auto* close = NewPaletteButton(win, Str(gIconClose), Tr("Hide settings"));
+    close->onClick = MkFunc1(OnHidePenSettings, win);
+    header->AddChild(close);
+    return header;
 }
 
 // Original upright instruments: color barrels, metal nibs and distinct tips.
@@ -3717,29 +3772,69 @@ static TempStr InkPenSvg(int index, Color color) {
         shape);
 }
 
+struct InkPenRow : HBox {
+    int preferredWidth = 0;
+    InkPenRow() {
+        alignMain = MainAxisAlign::Homogeneous;
+        alignCross = CrossAxisAlign::CrossStart;
+        rtl = IsUIRtl();
+    }
+    int MinIntrinsicWidth(int) override { return preferredWidth; }
+    int MinIntrinsicHeight(int width) override {
+        return Layout(ExpandHeight(width == Inf ? preferredWidth : width)).dy;
+    }
+    Size Layout(Constraints bc) override {
+        int width = bc.ConstrainWidth(bc.HasBoundedWidth() ? bc.max.dx : preferredWidth);
+        int count = ChildrenCount();
+        if (!count) return bc.Constrain({});
+        gap = std::min(UiScalePx(2), width / (4 * count));
+        int slot = std::max(0, (width - gap * (count - 1)) / count);
+        int pad = std::min(UiScalePx(6), slot / 6);
+        bool labelsFit = true;
+        for (auto& item : children) {
+            auto* tile = (InkPenTile*)item.layout;
+            labelsFit &= PlatformFontMeasureText(tile->font, tile->s).dx + 2 * pad <= slot;
+        }
+        for (auto& item : children) {
+            auto* tile = (InkPenTile*)item.layout;
+            tile->showLabel = labelsFit;
+            tile->imagePad = pad;
+            int dx = std::max(1, std::min(tile->preferredDx, slot - 2 * pad));
+            tile->pixmap = GetCachedPixmapForSvg(InkPenSvg(tile->index, tile->color), dx, std::max(1, dx * 3 / 2),
+                                                 TbTextColor(), TbBgColor());
+        }
+        return HBox::Layout(bc.TightenWidth(width));
+    }
+};
+
 static ILayout* BuildInkPenTypes(MainWindow* win) {
     ToolbarVirt* tb = win->toolbarVirt;
     Str labels[] = {Tr("Ballpoint"), Tr("Fountain"), Tr("Brush"), Tr("Pencil"), Tr("Highlighter")};
     int cmds[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
     InkPenStyle styles[] = {InkPenStyle::Ballpoint, InkPenStyle::Fountain, InkPenStyle::Brush, InkPenStyle::Pencil,
                             InkPenStyle::Highlighter};
-    auto* row = new Wrap();
-    row->alignCross = CrossAxisAlign::CrossCenter;
-    row->rtl = IsUIRtl();
+    auto* row = new InkPenRow();
+    int preferredSlot = 0;
     for (int i = 0; i < dimof(cmds); i++) {
         auto* tile = new InkPenTile();
         tile->id = cmds[i];
         tile->font = tb->platformFont;
         tile->isCurrent = win->inkEraseMode == 0 && win->inkPenStyle == styles[i];
         tile->SetText(labels[i]);
+        tile->name = tile->s;
         tile->SetTooltip(labels[i]);
-        TempStr svg = InkPenSvg(i, InkPenColor(styles[i]));
-        int dx = std::max(UiScalePx(28), tb->iconSize);
-        tile->pixmap = GetCachedPixmapForSvg(svg, dx, dx * 3 / 2, TbTextColor(), TbBgColor());
+        tile->index = i;
+        tile->color = InkPenColor(styles[i]);
+        tile->preferredDx = std::max(UiScalePx(28), tb->iconSize);
+        tile->imagePad = UiScalePx(6);
+        tile->pixmap = GetCachedPixmapForSvg(InkPenSvg(i, tile->color), tile->preferredDx, tile->preferredDx * 3 / 2,
+                                             TbTextColor(), TbBgColor());
+        preferredSlot = std::max(preferredSlot, tile->GetIdealSize().dx);
         tile->onClick = MkFunc1(OnHoverRowClicked, win);
         row->AddChild(tile);
         RecordHoverItem(tb, tile, tile->s, {{}, labels[i], cmds[i], true, tile->isCurrent});
     }
+    row->preferredWidth = preferredSlot * dimof(cmds) + UiScalePx(2) * (dimof(cmds) - 1);
     return new Padding(row, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
 }
 
@@ -3812,16 +3907,7 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win->toolbarVirt;
     auto* panel = new VBox();
     panel->alignCross = CrossAxisAlign::Stretch;
-    auto* header = new Wrap();
-    header->colGap = UiScalePx(8);
-    header->alignCross = CrossAxisAlign::CrossCenter;
-    header->AddChild(NewVirtText({.s = Tr("Laser pointer"), .font = tb->platformFont, .textColor = TbTextColor()}));
-    auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
-    close->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
-    close->cornerRadius = UiScalePx(6);
-    close->onClick = MkFunc1(OnHidePenSettings, win);
-    header->AddChild(close);
-    panel->AddChild(header);
+    panel->AddChild(NewPaletteHeader(win, Tr("Laser pointer")));
     Vec<ToolbarHoverMenuItem> modes;
     VecAppend(modes, {Str(gIconLaserSolid), Tr("Solid line"), CmdLaserSolid, true,
                       win->laserPointerMode == LaserPointerMode::Solid});
@@ -3967,16 +4053,8 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
     if (ev->cmdId == CmdCreateAnnotInk) {
         auto* panel = new VBox();
         panel->alignCross = CrossAxisAlign::Stretch;
-        auto* header = new Wrap();
-        header->colGap = UiScalePx(8);
-        header->alignCross = CrossAxisAlign::CrossCenter;
-        header->AddChild(NewVirtText({.s = Tr("Pen types"), .font = tb->platformFont, .textColor = TbTextColor()}));
-        auto* close = new VirtButton(Tr("Hide settings"), tb->platformFont);
-        close->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
-        close->cornerRadius = UiScalePx(6);
-        close->onClick = MkFunc1(OnHidePenSettings, win);
-        header->AddChild(close);
-        panel->AddChild(new Padding(header, Insets{UiScalePx(8), UiScalePx(8), 0, UiScalePx(8)}));
+        panel->AddChild(
+            new Padding(NewPaletteHeader(win, Tr("Pen types")), Insets{UiScalePx(8), UiScalePx(8), 0, UiScalePx(8)}));
         panel->AddChild(BuildInkPenTypes(win));
         panel->AddChild(ev->layout);
         Vec<ToolbarHoverMenuItem> tools;
@@ -4004,12 +4082,14 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
     auto* withPin = new VBox();
     withPin->alignCross = CrossAxisAlign::Stretch;
     withPin->AddChild(ev->layout);
-    auto* pin = new VirtButton(Tr("Pin or unpin this tool"), tb->platformFont);
-    pin->cornerRadius = UiScalePx(6);
-    pin->padding = {UiScalePx(4), UiScalePx(8), UiScalePx(4), UiScalePx(8)};
+    bool isPinned = PinnedToolIndex(win, ev->cmdId) >= 0;
+    auto* pin = NewPaletteButton(win, Str(gIconPin), isPinned ? Tr("Unpin this tool") : Tr("Pin this tool"));
+    pin->isCurrent = isPinned;
     pin->id = ev->cmdId;
     pin->onClick = MkFunc1(PinToolClick, win);
-    withPin->AddChild(pin);
+    auto* pinAlign = new Align(pin);
+    pinAlign->HAlign = IsUIRtl() ? AlignStart : AlignEnd;
+    withPin->AddChild(pinAlign);
     ev->layout = withPin;
     ev->centerOnButton = true;
 }
@@ -4455,26 +4535,42 @@ static void RemovePinnedTool(int index) {
     uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
 }
 
-static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
-    int cmd = ev->target->id;
+static int PinnedToolIndex(MainWindow* win, int cmd) {
+    auto* presets = gSettings->pinnedAnnotationTools;
+    if (!presets) return -1;
     Str tool = PinnedToolName(win, cmd);
     bool presetColor = cmd == CmdCreateAnnotInk || cmd == CmdAnnotationHighlightBrush ||
                        cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut;
     Color color = presetColor ? AnnotCurrentColor(win, cmd) : kColorUnset;
     Str colorName = presetColor ? SerializeColorTemp(color) : StrL("");
     float width = cmd == CmdCreateAnnotInk ? InkPenWidth(win) : 0;
-    auto*& presets = gSettings->pinnedAnnotationTools;
-    if (!presets) presets = new Vec<PinnedAnnotationTool*>();
     for (int i = 0; i < len(*presets); i++) {
         auto* preset = (*presets)[i];
         if (str::Eq(preset->tool, tool) && str::Eq(preset->color, colorName) &&
             (cmd != CmdCreateAnnotInk || fabsf(preset->width - width) < 0.001f)) {
-            RemovePinnedTool(i);
-            ev->didHandle = true;
-            return;
+            return i;
         }
     }
+    return -1;
+}
+
+static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
+    int cmd = ev->target->id;
+    int index = PinnedToolIndex(win, cmd);
+    if (index >= 0) {
+        RemovePinnedTool(index);
+        ev->didHandle = true;
+        return;
+    }
+    auto*& presets = gSettings->pinnedAnnotationTools;
+    if (!presets) presets = new Vec<PinnedAnnotationTool*>();
     if (len(*presets) >= 32) return;
+    Str tool = PinnedToolName(win, cmd);
+    bool presetColor = cmd == CmdCreateAnnotInk || cmd == CmdAnnotationHighlightBrush ||
+                       cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut;
+    Color color = presetColor ? AnnotCurrentColor(win, cmd) : kColorUnset;
+    Str colorName = presetColor ? SerializeColorTemp(color) : StrL("");
+    float width = cmd == CmdCreateAnnotInk ? InkPenWidth(win) : 0;
     auto* preset = AllocStruct<PinnedAnnotationTool>();
     str::ReplaceWithCopy(&preset->tool, tool);
     str::ReplaceWithCopy(&preset->color, colorName);
@@ -4577,7 +4673,9 @@ static bool ShowPinToolMenu(MainWindow* win, int cmd) {
     Rect anchor = GetToolbarButtonScreenRect(win, cmd);
     HideToolbarHoverDropdown(win);
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, ToWStrTemp(Tr("Pin / unpin this tool")).s);
+    bool isPinned = PinnedToolIndex(win, cmd) >= 0;
+    AppendMenuW(menu, MF_STRING | (isPinned ? MF_CHECKED : 0), 1,
+                CWStrTemp(ToWStrTemp(isPinned ? Tr("Unpin this tool") : Tr("Pin this tool"))));
     if (IsAnnotColorCmd(cmd)) AppendMenuW(menu, MF_STRING, 2, ToWStrTemp(Tr("Tools, colors and settings")).s);
     MarkMenuOwnerDraw(menu);
     int picked =
@@ -5670,6 +5768,11 @@ static void CaptureToolbarPalette(VirtHost* host, Str name) {
     FreePixmap(image);
 }
 
+static void PaletteTestClick(int* count, VirtMouseEvent* ev) {
+    (*count)++;
+    ev->didHandle = true;
+}
+
 static void ToolbarPaletteTests() {
     auto savedCornerRadius = gUiCornerRadius;
     gUiCornerRadius = GetAppCornerRadius;
@@ -5855,6 +5958,77 @@ static void ToolbarPaletteTests() {
         tb.platformFont = GetAppFont();
         tb.iconSize = UiScalePx(28);
         win.laserPointerColor = MkRgb(244, 67, 54);
+        for (int width : {180, 320, 560}) {
+            ILayout* pens = BuildInkPenTypes(&win);
+            Vec<VirtCtrl*> buttons;
+            CollectPaletteControls(pens, buttons);
+            utassert(len(buttons) == 5);
+            for (bool rtl : {false, true}) {
+                ((InkPenRow*)pens->LayoutChildAt(0))->rtl = rtl;
+                Size size = pens->Layout(ExpandHeight(width));
+                pens->SetBounds({0, 0, size.dx, size.dy});
+                int top = buttons[0]->BoundsInWindow().y;
+                int selected = 0;
+                int clicks = 0;
+                for (VirtCtrl* button : buttons) {
+                    Rect rect = button->BoundsInWindow();
+                    utassert(rect.y == top);
+                    utassert(rect.dx > 0 && rect.x >= 0 && rect.Right() <= width);
+                    utassert(len(button->tooltip) > 0 && button->HasFlag(vwfFocusable));
+                    auto* tile = (InkPenTile*)button;
+                    utassert(str::Eq(tile->s, tile->tooltip) && str::Eq(tile->name, tile->s));
+                    utassert(tile->pixmap && tile->pixmap->width <= rect.dx);
+                    utassert(tile->showLabel == ((InkPenTile*)buttons[0])->showLabel);
+                    if (tile->isCurrent) selected++;
+                    button->onClick = MkFunc1(PaletteTestClick, &clicks);
+                    for (int key : {VK_RETURN, VK_SPACE}) {
+                        VirtKeyEvent ev;
+                        ev.target = button;
+                        ev.vkey = key;
+                        utassert(button->OnKeyDown(ev) && ev.didHandle);
+                    }
+                }
+                utassert(selected == 1 && clicks == 10);
+            }
+            delete pens;
+            VecReset(tb.hoverItems);
+        }
+        for (int command : {CmdCreateAnnotInk, CmdCreateAnnotUnderline}) {
+            auto* exact = AllocStruct<PinnedAnnotationTool>();
+            exact->tool = str::Dup(PinnedToolName(&win, command));
+            exact->color = str::Dup(SerializeColorTemp(AnnotCurrentColor(&win, command)));
+            exact->width = command == CmdCreateAnnotInk ? InkPenWidth(&win) : 0;
+            VecAppend(*presets, exact);
+            for (bool pinned : {true, false}) {
+                ToolbarHoverBuildEvent ev;
+                ev.cmdId = command;
+                BuildAnnotColorsHoverMenu(&win, &ev);
+                Vec<VirtCtrl*> buttons;
+                CollectPaletteControls(ev.layout, buttons);
+                auto* pin = (PaletteIconButton*)buttons[len(buttons) - 1];
+                utassert(pin->isCurrent == pinned);
+                utassert(str::Eq(pin->s, pinned ? Tr("Unpin this tool") : Tr("Pin this tool")));
+                utassert(str::Eq(pin->name, pin->s) && str::Eq(pin->tooltip, pin->s));
+                utassert(pin->pixmap && pin->HasFlag(vwfFocusable));
+                if (command == CmdCreateAnnotInk) {
+                    bool foundHide = false;
+                    for (VirtCtrl* button : buttons) {
+                        auto* text = AsVirtButton(button);
+                        if (!text || !str::Eq(text->s, Tr("Hide settings"))) continue;
+                        foundHide = true;
+                        auto* close = (PaletteIconButton*)button;
+                        utassert(close->pixmap && str::Eq(close->name, close->tooltip));
+                    }
+                    utassert(foundHide);
+                }
+                delete ev.layout;
+                VecReset(tb.hoverItems);
+                if (pinned) VecPop(*presets);
+            }
+            str::Free(exact->tool);
+            str::Free(exact->color);
+            free(exact);
+        }
         ILayout* pinned = BuildPinnedTools(&win);
         utassert(len(tb.pinnedItems) == 5);
         for (int i = 0; i < 5; i++) {
