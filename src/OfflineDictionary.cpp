@@ -28,7 +28,7 @@ constexpr int kDictionaryMaxResults = 64;
 static RecursiveMutex gDictionaryLock;
 static Mutex gDictionaryInstallLock;
 static Str kWordNetId = StrL("wordnet-en");
-static Str kDictionaryDownloadRoot = StrL("https://raw.githubusercontent.com/abelokoj/sumatrapdf/master/");
+static Str kDictionaryDownloadRoot = StrL("https://raw.githubusercontent.com/abelokoj/sumatrapdf-enhanced/master/");
 static Str kWordNetTitle = StrL("Princeton WordNet 3.0 (English)");
 static const char* kWordNetFiles[] = {"data.noun", "data.verb", "data.adj", "data.adv"};
 static const char* kWordNetExceptions[] = {"noun.exc", "verb.exc", "adj.exc", "adv.exc"};
@@ -1221,8 +1221,9 @@ static TempStr DictionaryUrl(Str word, DictionarySource source) {
 }
 
 static bool DictionaryHttpGet(Str url, str::Builder& body, DWORD& status) {
-    HINTERNET session = InternetOpenW(L"SumatraPDF-Enhanced dictionary (+https://github.com/abelokoj/sumatrapdf)",
-                                      INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    HINTERNET session =
+        InternetOpenW(L"SumatraPDF-Enhanced dictionary (+https://github.com/abelokoj/sumatrapdf-enhanced)",
+                      INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (!session) return false;
     DWORD connectTimeout = 8000, readTimeout = 12000;
     InternetSetOptionW(session, INTERNET_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
@@ -1307,8 +1308,9 @@ void GetDictionaryCatalog(Vec<OfflineDictPack>& packs) {
         VecAppend(packs,
                   {str::Dup(packId), str::Dup(Str(source.name)), str::Dup(StrL("English")),
                    str::Dup(StrL("Wiktionary CC BY-SA 3.0; WordNet license; lists MIT")),
-                   str::Dup(fmt("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/%s.wmvocab.json.gz",
-                                Str(source.id))),
+                   str::Dup(fmt(
+                       "https://github.com/abelokoj/sumatrapdf-enhanced/blob/master/data/vocabulary/%s.wmvocab.json.gz",
+                       Str(source.id))),
                    true, true});
     }
     bool bundled = HasEmbeddedWordNet() ||
@@ -1736,8 +1738,9 @@ bool OfflineDictionary_UnitTests() {
     for (const OfflineDictPack& pack : catalog) {
         if (pack.bundled && str::StartsWith(pack.id, StrL("wm-"))) {
             wmCount++;
-            ok = ok && str::StartsWith(pack.sourceUrl,
-                                       StrL("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/"));
+            ok = ok &&
+                 str::StartsWith(pack.sourceUrl,
+                                 StrL("https://github.com/abelokoj/sumatrapdf-enhanced/blob/master/data/vocabulary/"));
             ok = ok && len(pack.license) > 0;
         }
     }

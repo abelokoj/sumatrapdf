@@ -3188,7 +3188,7 @@ static void HomeFeaturesClicked(MainWindow* win, VirtMouseEvent*) {
 static void HomeFeatureAction(MainWindow* win, VirtMouseEvent* ev) {
     int cmd = ev->target->id;
     if (!cmd) {
-        SumatraLaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf/releases"));
+        SumatraLaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases"));
         return;
     }
     if ((cmd == CmdInkPen || cmd == CmdExportStudyNotes) && !win->ctrl) {
