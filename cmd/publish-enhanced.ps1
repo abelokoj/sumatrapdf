@@ -52,7 +52,7 @@ The app includes a native themed interface, pen profiles and favorite annotation
 
 Based on the **SumatraPDF $($upstream.version)** at upstream commit [$($upstream.commit)](https://github.com/sumatrapdfreader/sumatrapdf/commit/$($upstream.commit)), dated **$($upstream.commitDateUtc)**. This is the upstream commit date.
 
-Enhanced source: [$SourceCommit](https://github.com/abelokoj/sumatrapdf/commit/$SourceCommit).
+Enhanced source: [$SourceCommit](https://github.com/abelokoj/sumatrapdf-enhanced/commit/$SourceCommit).
 
 Bundled fonts, icons and dictionary data retain their separate licenses. Notices are included in the application payload and in the source repository.
 "@

@@ -5,10 +5,10 @@
     <img src="docs/images/enhanced-wordmark-light.svg" width="960" alt="SumatraPDF Enhanced">
   </picture><br>
 
-  <a href="https://github.com/abelokoj/sumatrapdf/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf?label=release&amp;color=168349" alt="Latest release"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf/total?color=168349" alt="Total release downloads"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
-  <a href="https://github.com/abelokoj/sumatrapdf/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf?style=flat&amp;color=eab308" alt="GitHub stars"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf-enhanced?label=release&amp;color=168349" alt="Latest release"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf-enhanced/total?color=168349" alt="Total release downloads"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf-enhanced?style=flat&amp;color=eab308" alt="GitHub stars"></a>
   <a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
   <img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
 </p>
@@ -51,12 +51,12 @@ This comparison refers to the upstream source snapshot recorded below. Reference
 
 ## 📥 Download
 
-**[Latest release and notes](https://github.com/abelokoj/sumatrapdf/releases/latest)**
+**[Latest release and notes](https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest)**
 
 | Device              | Installer                                                                                                                              | Standalone portable                                                                                                                    | Portable ZIP                                                                                                                           |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| x64 (Intel and AMD) | [Installer EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-install.exe)   | [Portable EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.exe)   | [Portable ZIP](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.zip)   |
-| ARM64               | [Installer EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-install.exe) | [Portable EXE](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.exe) | [Portable ZIP](https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.zip) |
+| x64 (Intel and AMD) | [Installer EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-install.exe)   | [Portable EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.exe)   | [Portable ZIP](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-x64-portable.zip)   |
+| ARM64               | [Installer EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-install.exe) | [Portable EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.exe) | [Portable ZIP](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.1/SumatraPDF-Enhanced-v0.1.1-arm64-portable.zip) |
 
 Run the installer to install the application, or run the standalone portable EXE directly. Both include the offline dictionary. The ZIP includes the reader, dictionary data, license notices and optional shell integration helpers; extract the entire folder before running **SumatraPDF.exe**.
 
@@ -137,7 +137,7 @@ Choose flashcards, meaning quiz, word quiz, spelling, word scramble or matching 
 
 ## ⚙️ Development and builds
 
-`master` contains the current Enhanced source. [GitHub-hosted Windows builds](https://github.com/abelokoj/sumatrapdf/actions/workflows/build-windows.yml) produce x64 and ARM64 installers, standalone portable executables and portable ZIP packages on pushes/pull requests and manual runs. Build locally through `bun cmd/build.ts -dbg`, `bun cmd/build.ts -rel` or `bun cmd/build.ts -rel -arm64`, following [agents.md](agents.md). Standalone builds use `bun cmd/build.ts -rel -static` and `bun cmd/build.ts -rel -arm64 -static`.
+`master` contains the current Enhanced source. [GitHub-hosted Windows builds](https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/build-windows.yml) produce x64 and ARM64 installers, standalone portable executables and portable ZIP packages on pushes/pull requests and manual runs. Build locally through `bun cmd/build.ts -dbg`, `bun cmd/build.ts -rel` or `bun cmd/build.ts -rel -arm64`, following [agents.md](agents.md). Standalone builds use `bun cmd/build.ts -rel -static` and `bun cmd/build.ts -rel -arm64 -static`.
 
 The native reader and interface do not require the Microsoft Edge browser. Optional upstream AI, manual and CHM browser integrations need the separate WebView2 runtime.
 
@@ -155,7 +155,7 @@ A release can also be started through **Actions > Enhanced release > Run workflo
 
 ## 🤝 Support and feedback
 
-Use [GitHub Issues](https://github.com/abelokoj/sumatrapdf/issues) to report a problem or request a feature. Include the Enhanced version, Windows version, device architecture and steps to reproduce the problem. For pen issues, include the device and stylus model. Remove personal document content from any screenshots or sample files you share.
+Use [GitHub Issues](https://github.com/abelokoj/sumatrapdf-enhanced/issues) to report a problem or request a feature. Include the Enhanced version, Windows version, device architecture and steps to reproduce the problem. For pen issues, include the device and stylus model. Remove personal document content from any screenshots or sample files you share.
 
 ## 📜 Credits and license
 

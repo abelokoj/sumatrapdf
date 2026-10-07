@@ -33,7 +33,7 @@ SumatraPDF Enhanced $Version - Windows $Architecture
 Extract the entire folder and run SumatraPDF.exe. Keep dictionaries beside it.
 Select a word and press Shift+D for offline dictionary lookup.
 The home learning hub opens vocabulary and practice activities.
-Release information: https://github.com/abelokoj/sumatrapdf/releases/latest
+Release information: https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest
 Source commit: $sourceSha
 Original SumatraPDF: 3.7 source snapshot, a0d8bcaed0412ce803d9c213845e710fcbe3c7a5.
 "@ | Set-Content -LiteralPath (Join-Path $stageDir 'README.txt') -Encoding utf8
