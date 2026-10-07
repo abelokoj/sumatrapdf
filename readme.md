@@ -5,12 +5,12 @@
     <img src="docs/images/enhanced-wordmark-light.svg" width="960" alt="SumatraPDF Enhanced">
   </picture><br>
 
-<a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf-enhanced?label=release&amp;color=168349" alt="Latest release"></a>
-<a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf-enhanced/total?color=168349" alt="Total release downloads"></a>
-<a href="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
-<a href="https://github.com/abelokoj/sumatrapdf-enhanced/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf-enhanced?style=flat&amp;color=eab308" alt="GitHub stars"></a>
-<a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
-<img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest"><img src="https://img.shields.io/github/v/release/abelokoj/sumatrapdf-enhanced?label=release&amp;color=168349" alt="Latest release"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/releases"><img src="https://img.shields.io/github/downloads/abelokoj/sumatrapdf-enhanced/total?color=168349" alt="Total release downloads"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml"><img src="https://github.com/abelokoj/sumatrapdf-enhanced/actions/workflows/release-windows.yml/badge.svg" alt="Release build status"></a>
+  <a href="https://github.com/abelokoj/sumatrapdf-enhanced/stargazers"><img src="https://img.shields.io/github/stars/abelokoj/sumatrapdf-enhanced?style=flat&amp;color=eab308" alt="GitHub stars"></a>
+  <a href="COPYING"><img src="https://img.shields.io/badge/license-GPL_v3-168349" alt="GPL v3 application license"></a>
+  <img src="https://img.shields.io/badge/platform-Windows_x64_%7C_ARM64-168349" alt="Windows x64 and ARM64">
 </p>
 
 <p align="center"><strong>Read, annotate and learn in one place.</strong><br>A native Windows document reader with customizable pen tools, offline dictionaries and vocabulary practice.<br><em>Built on <a href="https://github.com/sumatrapdfreader/sumatrapdf">SumatraPDF</a>, with visual inspiration from <a href="https://github.com/JaviLendi/PrettySumatraPDF">PrettySumatraPDF</a>.</em></p>
