@@ -2764,6 +2764,9 @@ static LRESULT CALLBACK LearningButtonProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
 }
 static void DrawLearningPanel(LearningWindow* w, DRAWITEMSTRUCT* item) {
     RECT rc = item->rcItem;
+    HBRUSH background = CreateSolidBrush(ThemeMainWindowBackgroundColor());
+    FillRect(item->hDC, &rc, background);
+    DeleteObject(background);
     bool title = item->CtlID == lcTitle;
     HBRUSH brush = CreateSolidBrush(title ? ThemeMainWindowBackgroundColor() : ThemeControlBackgroundColor());
     HPEN pen = CreatePen(PS_SOLID, UiScalePx(1), title ? ThemeMainWindowBackgroundColor() : ThemeEdgeColor());
@@ -3316,7 +3319,10 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
     w->controls[id] = child;
     if (_wcsicmp(klass, L"EDIT") == 0 && !(style & ES_MULTILINE))
         SetWindowSubclass(child, LearningEditProc, 1, (DWORD_PTR)w);
-    if (_wcsicmp(klass, L"COMBOBOX") == 0) SetWindowSubclass(child, LearningComboProc, 1, (DWORD_PTR)w);
+    if (_wcsicmp(klass, L"COMBOBOX") == 0) {
+        SetWindowSubclass(child, LearningComboProc, 1, (DWORD_PTR)w);
+        RoundControlUseCustomPaint(child);
+    }
     if (IsRichDetails(child)) {
         SendMessageW(child, EM_SETEVENTMASK, 0, ENM_LINK);
         SendMessageW(child, EM_AUTOURLDETECT, TRUE, 0);
@@ -3756,6 +3762,29 @@ static void GreenCheckGlyphTests() {
     DeleteDC(dc);
 }
 
+static void LearningPanelPaintTest(LearningWindow* w) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), 256, -64, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    utassert(bitmap && pixels);
+    if (bitmap && pixels) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        PatBlt(dc, 0, 0, 256, 64, WHITENESS);
+        DRAWITEMSTRUCT item{};
+        item.CtlID = lcTitle;
+        item.hwndItem = Control(w, lcTitle);
+        item.hDC = dc;
+        item.rcItem = {0, 0, 256, 64};
+        DrawLearningPanel(w, &item);
+        utassert(GetPixel(dc, 255, 0) == (ThemeMainWindowBackgroundColor() & 0xffffff));
+        SelectObject(dc, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+}
+
 static void LearningRowTests(LearningWindow* w) {
     int size = gSettings->uIFontSize, scale = gSettings->interfaceScale;
     Str theme = str::Dup(gSettings->theme), family = str::Dup(gSettings->uIFontFamily);
@@ -3779,6 +3808,7 @@ static void LearningRowTests(LearningWindow* w) {
             str::ReplaceWithCopy(&gSettings->uIFontFamily, i % 2 ? StrL("Consolas") : StrL("Manrope"));
             RefreshUiFonts();
             RefreshLearningStyle(w);
+            LearningPanelPaintTest(w);
             HWND combo = Control(w, w->dictionary ? lcVoice : lcDeck);
             HWND button = Control(w, w->dictionary ? lcPronounce : lcPractice);
             utassert(HwndWindowRect(combo).dy == HwndWindowRect(button).dy);

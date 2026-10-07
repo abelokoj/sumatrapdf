@@ -445,6 +445,7 @@ bool PreTranslateMessage(MSG& msg);
 
 HRGN RoundedControlRegion(HWND hwnd, Size size);
 void RoundControlCorners(HWND hwnd);
+void RoundControlUseCustomPaint(HWND hwnd);
 void RoundChildControls(HWND hwnd);
 
 // Base of the controls that a layout positions: the win32 controls (Static,

@@ -1996,6 +1996,7 @@ struct RoundedControlState {
     Size size;
     int diameter = 0;
     bool updating = false;
+    bool customPaint = false;
 };
 
 static constexpr UINT kWmDpiChangedAfterParent = 0x02e3;
@@ -2030,13 +2031,16 @@ static void PaintControlCorners(HWND hwnd, HDC dc, RoundedControlState* state) {
 #if IS_DEBUG
     roundedPaintCount++;
 #endif
-    if (!dc || state->size.dx < 2 || state->size.dy < 2) {
+    if (!dc || state->customPaint || state->size.dx < 2 || state->size.dy < 2) {
         return;
     }
     // Keep native text, arrows and scrollbars, replacing only their outer frame.
     HWND parent = GetParent(hwnd);
     WCHAR cls[80]{};
     GetClassNameW(hwnd, cls, dimof(cls));
+    if (wcscmp(cls, WC_BUTTONW) == 0 && (GetWindowLongPtrW(hwnd, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW) {
+        return;
+    }
     UINT colorMessage = WM_CTLCOLORSTATIC;
     if (wcscmp(cls, WC_EDITW) == 0 || wcscmp(cls, L"RICHEDIT50W") == 0 || wcscmp(cls, L"RichEdit20W") == 0) {
         colorMessage = (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_READONLY) ? WM_CTLCOLORSTATIC : WM_CTLCOLOREDIT;
@@ -2108,6 +2112,14 @@ void RoundControlCorners(HWND hwnd) {
     UpdateControlCorners(hwnd, state);
 }
 
+void RoundControlUseCustomPaint(HWND hwnd) {
+    RoundControlCorners(hwnd);
+    DWORD_PTR data = 0;
+    if (GetWindowSubclass(hwnd, RoundedControlProc, (UINT_PTR)RoundedControlProc, &data)) {
+        ((RoundedControlState*)data)->customPaint = true;
+    }
+}
+
 static BOOL CALLBACK RoundChildControl(HWND hwnd, LPARAM) {
     RoundControlCorners(hwnd);
     return TRUE;
@@ -2143,8 +2155,28 @@ bool RoundedControl_UnitTestHidden() {
     int before = roundedPaintCount;
     SendMessageW(combo, WM_NCPAINT, 1, 0);
     bool skipped = roundedPaintCount == before;
+    HWND button = CreateWindowExW(0, WC_BUTTONW, L"", WS_CHILD | BS_OWNERDRAW, 10, 10, 32, 32, parent, nullptr,
+                                  GetInstance(), nullptr);
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), 32, -32, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    bool retainedOwnerPaint = button && bitmap && pixels;
+    if (retainedOwnerPaint) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        PatBlt(dc, 0, 0, 32, 32, BLACKNESS);
+        RoundedControlState paint;
+        paint.size = {32, 32};
+        paint.diameter = 8;
+        PaintControlCorners(button, dc, &paint);
+        retainedOwnerPaint = GetPixel(dc, 16, 0) == RGB(0, 0, 0);
+        SelectObject(dc, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
     DestroyWindow(parent);
-    return skipped;
+    return skipped && retainedOwnerPaint;
 }
 #endif
 
