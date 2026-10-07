@@ -60,6 +60,7 @@ void PlatformFontShutdown();
 // maxDx < 0 means "as wide as it needs to be" (no wrapping)
 Size PlatformFontMeasureText(PlatformFont*, Str s, int maxDx = -1);
 int PlatformFontLineHeight(PlatformFont*);
+HDC PlatformFontMeasurementDC();
 
 PlatformFont* GetDefaultGuiFont(bool bold = false, bool italic = false);
 PlatformFont* GetDefaultGuiFontOfSize(int size);

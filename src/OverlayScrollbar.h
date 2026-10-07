@@ -52,6 +52,7 @@ struct OverlayScrollbar {
     int dragStartY = 0;      // mouse Y (or X for horz) when drag started
     int dragStartPos = 0;    // nPos when drag started
     bool mouseOverThumb = false;
+    bool mouseOverBar = false;
     bool nativeAdapter = false;
     bool syncingNative = false;
     bool sendingNative = false;
@@ -63,6 +64,11 @@ struct OverlayScrollbar {
     bool nativeShown = false;
     Color nativeTrack = 0;
     Color nativeThumb = 0;
+    HDC paintDc = nullptr;
+    HBITMAP paintBitmap = nullptr;
+    HBITMAP paintOldBitmap = nullptr;
+    void* paintBits = nullptr;
+    Size paintSize{};
 
     // repeat-scroll state (for held arrow/track clicks)
     UINT repeatScrollCode = 0;    // SB_LINEUP, SB_PAGEDOWN, etc.; 0 = not repeating

@@ -956,6 +956,32 @@ void PropertiesWnd::SetPropsText(Str text) {
     if (!editProps) {
         return;
     }
+    str::Builder display;
+    int labelWidth = 0;
+    for (int off = 0; off < len(text);) {
+        Str rest(text.s + off, len(text) - off);
+        int newline = str::IndexOfChar(rest, '\n');
+        Str line(rest.s, newline >= 0 ? newline : len(rest));
+        int labelBytes = 0;
+        if (GetPropertyLabelWidth(line, &labelBytes) >= 0) {
+            while (len(line) && line.s[0] == ' ') line = Str(line.s + 1, len(line) - 1);
+            GetPropertyLabelWidth(line, &labelBytes);
+            Str label(line.s, labelBytes);
+            labelWidth = std::max(labelWidth, PlatformFontMeasureText(propsFont, label).dx);
+            display.Append(label);
+            display.AppendChar('\t');
+            int value = labelBytes;
+            while (value < len(line) && line.s[value] == ' ') value++;
+            display.Append(Str(line.s + value, len(line) - value));
+        } else {
+            display.Append(line);
+        }
+        if (newline >= 0) display.AppendChar('\n');
+        off += (newline >= 0 ? newline + 1 : len(rest));
+    }
+    int tab = MulDiv(labelWidth + propsFont->averageCharWidth * 2, 4, std::max(1, propsFont->averageCharWidth));
+    SendMessageW(editProps->hwnd, EM_SETTABSTOPS, 1, (LPARAM)&tab);
+    text = ToStr(display);
     str::Builder crlfText;
     for (int i = 0; i < text.len; i++) {
         char c = text.s[i];
@@ -964,8 +990,10 @@ void PropertiesWnd::SetPropsText(Str text) {
         }
         crlfText.AppendChar(c);
     }
-    editProps->SetText(ToStr(crlfText));
-    SendMessageW(editProps->hwnd, EM_SETSEL, 0, 0);
+    if (!str::Eq(editProps->GetTextTemp(), ToStr(crlfText))) {
+        editProps->SetText(ToStr(crlfText));
+        SendMessageW(editProps->hwnd, EM_SETSEL, 0, 0);
+    }
 }
 
 void PropertiesWnd::SizeToContent() {
@@ -1027,11 +1055,22 @@ void PropertiesWnd::ApplyDarkMode() {
 }
 
 void PropertiesWnd::UpdateTheme() {
+    DpiScope dpi(hwnd);
+    propsFont = GetAppFontForDpi(GetDpi());
+    SetFont(propsFont);
     WindowBase::UpdateTheme();
-    // Re-apply monospaced font after darkmode child theming (may reset font).
     if (editProps && propsFont) {
         editProps->SetFont(propsFont);
+        SetPropsText(ToStr(propsText));
     }
+    for (auto* button : {btnCopyToClipboard, btnViewCert, btnUpdateEutl})
+        if (button) button->font = propsFont;
+    WindowApplyScaledCaption(hwnd);
+    DoLayout();
+}
+
+void RefreshPropertiesWindows() {
+    for (auto* window : gPropertiesWindows) window->UpdateTheme();
 }
 
 void PropertiesWnd::OnCommand(WindowBase::CommandEvent* ev) {
@@ -1083,7 +1122,10 @@ static void OnPropertiesDestroy(WindowBase::DestroyEvent* ev) {
 
 bool PropertiesWnd::Create(HWND parent) {
     hwndParent = parent;
+    DpiSetFromHwnd(parent);
     bool isRtl = IsUIRtl();
+    onDpiChanged = MkFunc1Void<WindowBase::DpiChangedEvent*>(
+        [](WindowBase::DpiChangedEvent* ev) { ((PropertiesWnd*)ev->w)->UpdateTheme(); });
 
     {
         CreateCustomArgs args;
@@ -1099,9 +1141,7 @@ bool PropertiesWnd::Create(HWND parent) {
         return false;
     }
 
-    HDC hdc = GetDC(hwnd);
-    propsFont = HdcCreateSimpleFont(hdc, StrL("Consolas"), 14);
-    ReleaseDC(hwnd, hdc);
+    propsFont = GetAppFontForDpi(GetDpi());
 
     auto* vbox = new VBox();
     vbox->alignMain = MainAxisAlign::MainStart;

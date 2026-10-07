@@ -5,7 +5,10 @@
 #include <commctrl.h>
 #include <richedit.h>
 #include "gui/Dpi.h"
+#include "gui/UIModels.h"
+#include "gui/VirtHost.h"
 #include "base/Win.h"
+#include "base/Timer.h"
 
 #include "Settings.h"
 #include "AppSettings.h"
@@ -27,6 +30,9 @@ static bool gThickArrows = true;
 // all live overlay scrollbars, for global mouse tracking
 static Vec<OverlayScrollbar*> gAllScrollbars;
 static UINT_PTR gMouseTrackTimer = 0;
+#if IS_DEBUG
+static int gScrollbarAllocations = 0;
+#endif
 static Point gLastMousePos = {-1, -1};
 static constexpr UINT_PTR kMouseTrackTimerID = 100;
 static constexpr int kMouseTrackIntervalMs = 50;
@@ -35,6 +41,7 @@ static constexpr UINT_PTR kNativeScrollbarTimer = 0x736273;
 static constexpr WCHAR kNativeScrollbarProperty[] = L"SumatraAppScrollbar";
 static constexpr WCHAR kNativeHScrollbarProperty[] = L"SumatraAppHScrollbar";
 static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force = false);
+static void EraseNativeScrollEdges(HWND hwnd, HDC target = nullptr);
 
 static Rect NativeScrollbarClip(HWND hwnd) {
     Rect clip = HwndWindowRect(hwnd);
@@ -61,7 +68,7 @@ static Color ThemeThumbColor() {
 
 static Color ThemeThumbHoverColor() {
     if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_HIGHLIGHT);
-    return MkRgb(105, 105, 105);
+    return UiScrollbarHoverColor(ThemeTrackColor());
 }
 
 static constexpr int kMinThumbSize = 20;
@@ -297,6 +304,48 @@ static bool MouseOverOwnerSurface(OverlayScrollbar* sb, Point pt) {
     return true;
 }
 
+static void FreeScrollbarSurface(OverlayScrollbar* sb) {
+    if (sb->paintDc) {
+        SelectObject(sb->paintDc, sb->paintOldBitmap);
+        DeleteObject(sb->paintBitmap);
+        DeleteDC(sb->paintDc);
+    }
+    sb->paintDc = nullptr;
+    sb->paintBitmap = sb->paintOldBitmap = nullptr;
+    sb->paintBits = nullptr;
+    sb->paintSize = {};
+}
+
+static bool EnsureScrollbarSurface(OverlayScrollbar* sb, int w, int h) {
+    if (sb->paintDc && sb->paintSize == Size(w, h)) return true;
+    FreeScrollbarSurface(sb);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return false;
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) {
+        if (bitmap) DeleteObject(bitmap);
+        DeleteDC(dc);
+        return false;
+    }
+    sb->paintOldBitmap = (HBITMAP)SelectObject(dc, bitmap);
+    sb->paintDc = dc;
+    sb->paintBitmap = bitmap;
+    sb->paintBits = bits;
+    sb->paintSize = {w, h};
+#if IS_DEBUG
+    gScrollbarAllocations++;
+#endif
+    return true;
+}
+
 // Update the layered window with the current appearance
 static void PaintScrollbar(OverlayScrollbar* sb) {
     if (!sb->hwnd || !HwndIsVisible(sb->hwnd)) {
@@ -310,33 +359,10 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
         return;
     }
 
+    if (!EnsureScrollbarSurface(sb, w, h)) return;
     HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    if (!hdcMem) {
-        ReleaseDC(nullptr, hdcScreen);
-        return;
-    }
-
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP hbmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!hbmp || !bits) {
-        if (hbmp) {
-            DeleteObject(hbmp);
-        }
-        DeleteDC(hdcMem);
-        ReleaseDC(nullptr, hdcScreen);
-        return;
-    }
-    HBITMAP hbmpOld = (HBITMAP)SelectObject(hdcMem, hbmp);
-
+    HDC hdcMem = sb->paintDc;
+    void* bits = sb->paintBits;
     memset(bits, 0, (size_t)w * h * 4);
 
     u8 alpha = 255;
@@ -364,7 +390,8 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
         Gdiplus::Graphics gfx(&surface);
         gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         Rect thumbRc = GetThumbRect(sb);
-        Color thumbCol = sb->mouseOverThumb ? ThemeThumbHoverColor() : ThemeThumbColor();
+        bool active = sb->mouseOverBar || sb->isDragging;
+        Color thumbCol = active ? ThemeThumbHoverColor() : ThemeThumbColor();
 
         int thumbInset = UiScalePxForDpi(DpiGetForHwnd(sb->hwndOwner), 2);
         if (IsVisible(sb)) {
@@ -384,10 +411,15 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
             Gdiplus::SolidBrush thumbBrush(
                 Gdiplus::Color(alpha, GetRValue(thumbCol), GetGValue(thumbCol), GetBValue(thumbCol)));
             gfx.FillPath(&thumbBrush, &path);
+            if (active && !ThemeUsesHighContrastColors()) {
+                Color edge = UiScrollbarHoverEdge(ThemeTrackColor());
+                Gdiplus::Pen pen(Gdiplus::Color(alpha, GetRValue(edge), GetGValue(edge), GetBValue(edge)), 1.0f);
+                gfx.DrawPath(&pen, &path);
+            }
         }
 
         if (IsVisible(sb)) {
-            Color arrowCol = ThemeThumbHoverColor();
+            Color arrowCol = active ? ThemeThumbHoverColor() : ThemeThumbColor();
             u8 ar = (u8)MulDiv(GetRValue(arrowCol), alpha, 255);
             u8 ag = (u8)MulDiv(GetGValue(arrowCol), alpha, 255);
             u8 ab = (u8)MulDiv(GetBValue(arrowCol), alpha, 255);
@@ -500,9 +532,6 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
     blend.AlphaFormat = AC_SRC_ALPHA;
     UpdateLayeredWindow(sb->hwnd, hdcScreen, &ptDst, &szWnd, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
 
-    SelectObject(hdcMem, hbmpOld);
-    DeleteObject(hbmp);
-    DeleteDC(hdcMem);
     ReleaseDC(nullptr, hdcScreen);
 }
 
@@ -632,6 +661,12 @@ static void CALLBACK MouseTrackTimerProc(HWND /*hwnd*/, UINT /*msg*/, UINT_PTR /
         Rect sbRect = GetScrollbarScreenRect(sb);
         bool overScrollbar = sbRect.Contains(pt) && overOwner;
 
+        if (sb->mouseOverBar != overScrollbar) {
+            sb->mouseOverBar = overScrollbar;
+            if (!overScrollbar) sb->mouseOverThumb = false;
+            PaintScrollbar(sb);
+        }
+
         if (sb->isDragging) {
             // Don't change state while dragging
             continue;
@@ -724,6 +759,13 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
         case WM_MOUSEMOVE: {
             int mx = GET_X_LPARAM(lp);
             int my = GET_Y_LPARAM(lp);
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&tracking);
+            if (!sb->mouseOverBar) {
+                sb->mouseOverBar = true;
+                if (sb->nativeAdapter) EraseNativeScrollEdges(sb->hwndOwner);
+                PaintScrollbar(sb);
+            }
 
             if (sb->isDragging) {
                 int ptInTrack = IsVert(sb) ? my : mx;
@@ -758,6 +800,13 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
             }
             return 0;
         }
+
+        case WM_MOUSELEAVE:
+            sb->mouseOverBar = false;
+            sb->mouseOverThumb = false;
+            if (sb->nativeAdapter) EraseNativeScrollEdges(sb->hwndOwner);
+            PaintScrollbar(sb);
+            return 0;
 
         case WM_LBUTTONDOWN: {
             int mx = GET_X_LPARAM(lp);
@@ -949,6 +998,7 @@ void OverlayScrollbarDestroy(OverlayScrollbar* sb) {
         KillTimer(sb->hwnd, OverlayScrollbar::kTimerAutoHide);
         DestroyWindow(sb->hwnd);
     }
+    FreeScrollbarSurface(sb);
     delete sb;
 }
 
@@ -1084,7 +1134,7 @@ void OverlayScrollbarUpdatePos(OverlayScrollbar* sb) {
     } else {
         exStyle |= WS_EX_TRANSPARENT;
     }
-    SetWindowLongPtrW(sb->hwnd, GWL_EXSTYLE, exStyle);
+    if (exStyle != GetWindowLongPtrW(sb->hwnd, GWL_EXSTYLE)) SetWindowLongPtrW(sb->hwnd, GWL_EXSTYLE, exStyle);
 
     // SWP_NOOWNERZORDER: raising an owned popup otherwise raises the owner
     // frame over other top-level windows (command palette, annotations).
@@ -1195,6 +1245,10 @@ int AppScrollbarInset(HWND hwnd) {
     return std::max(0, GetAppScrollbarWidth(dpi) - native);
 }
 
+#if IS_DEBUG
+static int nativeScrollbarRefreshCount = 0;
+#endif
+
 static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
     if (sb->syncingNative) return;
     sb->syncingNative = true;
@@ -1217,6 +1271,9 @@ static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
         sb->nativeThumb == thumb) {
         return;
     }
+#if IS_DEBUG
+    nativeScrollbarRefreshCount++;
+#endif
     bool repaint = sb->nativeSyncValid && (sb->nativeTrack != track || sb->nativeThumb != thumb ||
                                            sb->nativeWidth != width || sb->nativeBounds.Size() != bounds.Size());
     sb->nativeSyncValid = true;
@@ -1235,30 +1292,32 @@ static void SyncNativeScrollbar(OverlayScrollbar* sb, bool force) {
     }
 }
 
-static void EraseNativeScrollEdges(HWND hwnd) {
+static void EraseNativeScrollEdges(HWND hwnd, HDC target) {
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (!(style & (WS_VSCROLL | WS_HSCROLL)) || (!target && !IsWindowVisible(hwnd))) return;
     int dpi = DpiGetForHwnd(hwnd);
     int width = GetAppScrollbarWidth(dpi);
     int nativeV = DpiGetSystemMetrics(SM_CXVSCROLL, dpi);
     int nativeH = DpiGetSystemMetrics(SM_CYHSCROLL, dpi);
-    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    if ((!(style & WS_VSCROLL) || width >= nativeV) && (!(style & WS_HSCROLL) || width >= nativeH)) return;
 
     Rect client = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, nullptr);
     Rect window = HwndWindowRect(hwnd);
     client.Offset(-window.x, -window.y);
-    HDC dc = GetWindowDC(hwnd);
+    HDC dc = target ? target : GetWindowDC(hwnd);
     if (!dc) return;
     HBRUSH brush = CreateSolidBrush(ThemeTrackColor());
-    if (style & WS_VSCROLL && width < nativeV) {
-        RECT stripe = ToRECT(Rect{client.Right(), client.y, nativeV - width, client.dy});
+    if (style & WS_VSCROLL) {
+        int left = client.Right() - std::max(0, width - nativeV) - 1;
+        RECT stripe = ToRECT(Rect{left, client.y, std::abs(nativeV - width) + 1, client.dy});
         FillRect(dc, &stripe, brush);
     }
-    if (style & WS_HSCROLL && width < nativeH) {
-        RECT stripe = ToRECT(Rect{client.x, client.Bottom(), client.dx, nativeH - width});
+    if (style & WS_HSCROLL) {
+        int top = client.Bottom() - std::max(0, width - nativeH) - 1;
+        RECT stripe = ToRECT(Rect{client.x, top, client.dx, std::abs(nativeH - width) + 1});
         FillRect(dc, &stripe, brush);
     }
     DeleteObject(brush);
-    ReleaseDC(hwnd, dc);
+    if (!target) ReleaseDC(hwnd, dc);
 }
 
 static void SyncNativeScrollbars(HWND hwnd, bool force = false) {
@@ -1298,6 +1357,8 @@ static LRESULT CALLBACK NativeScrollbarProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         return DefSubclassProc(hwnd, msg, wp, lp);
     }
     if (msg == WM_TIMER && wp == kNativeScrollbarTimer) {
+        auto* horizontal = (OverlayScrollbar*)GetPropW(hwnd, kNativeHScrollbarProperty);
+        if (!HwndIsVisible(hwnd) && !sb->nativeShown && (!horizontal || !horizontal->nativeShown)) return 0;
         SyncNativeScrollbars(hwnd);
         return 0;
     }
@@ -1307,9 +1368,10 @@ static LRESULT CALLBACK NativeScrollbarProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         msg == WM_MOUSEHWHEEL || msg == WM_KEYDOWN || msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW ||
         msg == WM_NCPAINT || msg == EM_SETSCROLLPOS || msg == LB_SETTOPINDEX || msg == EM_LINESCROLL ||
         msg == WM_STYLECHANGED) {
-        SyncNativeScrollbars(hwnd, msg == WM_WINDOWPOSCHANGED);
+        SyncNativeScrollbars(hwnd);
         EraseNativeScrollEdges(hwnd);
     }
+    if (msg == WM_PAINT || msg == WM_NCMOUSEMOVE || msg == WM_NCMOUSELEAVE) EraseNativeScrollEdges(hwnd);
     return result;
 }
 
@@ -1341,6 +1403,46 @@ void RemoveAppScrollbar(HWND hwnd) {
 }
 
 #if IS_DEBUG
+bool OverlayScrollbar_UnitTestsPerf() {
+    HWND owner = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, -10000, -10000, 400, 800, nullptr, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    utassert(owner != nullptr);
+    if (!owner) return false;
+    OverlayScrollbar* sb = OverlayScrollbarCreate(owner, OverlayScrollbar::Type::Vert, OverlayScrollbar::Mode::Thick);
+    utassert(sb && sb->hwnd);
+    if (!sb || !sb->hwnd) {
+        OverlayScrollbarDestroy(sb);
+        DestroyWindow(owner);
+        return false;
+    }
+    sb->state = State::AlwaysThick;
+    sb->nMax = 10000;
+    sb->nPage = 100;
+    SetWindowPos(sb->hwnd, nullptr, -10000, -10000, 30, 600, SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(sb->hwnd, SW_SHOWNOACTIVATE);
+    int allocations = gScrollbarAllocations;
+    TimeStamp started = TimeGet();
+    for (int i = 0; i < 200; i++) {
+        sb->nPos = i;
+        sb->mouseOverBar = i % 2;
+        PaintScrollbar(sb);
+    }
+    int added = gScrollbarAllocations - allocations;
+    printf("Scrollbar paint: 200 frames, %d surfaces, %.3f ms\n", added, TimeSinceInMs(started));
+    utassert(added == 1);
+    SetWindowPos(sb->hwnd, nullptr, -10000, -10000, 45, 700, SWP_NOZORDER | SWP_NOACTIVATE);
+    PaintScrollbar(sb);
+    utassert(gScrollbarAllocations == allocations + 2);
+    utassert(sb->paintSize == Size(45, 700));
+    FreeScrollbarSurface(sb);
+    utassert(!sb->paintDc && !sb->paintBitmap && !sb->paintBits);
+    PaintScrollbar(sb);
+    utassert(gScrollbarAllocations == allocations + 3);
+    OverlayScrollbarDestroy(sb);
+    DestroyWindow(owner);
+    return true;
+}
+
 bool OverlayScrollbar_UnitTestsNative() {
     Settings* saved = gSettings;
     gSettings = NewSettings({});
@@ -1360,9 +1462,41 @@ bool OverlayScrollbar_UnitTestsNative() {
         ok &= sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd);
         utassert(sb && sb->nativeAdapter && !HwndIsVisible(sb->hwnd));
         if (sb) {
+            HDC surface = CreateCompatibleDC(nullptr);
+            HDC desktop = GetDC(nullptr);
+            HBITMAP bitmap = CreateCompatibleBitmap(desktop, 250, 100);
+            ReleaseDC(nullptr, desktop);
+            HGDIOBJ oldBitmap = SelectObject(surface, bitmap);
+            Rect client = HwndClientRect(edit);
+            int innerEdge = client.Right() -
+                            std::max(0, GetAppScrollbarWidth(DpiGetForHwnd(edit)) -
+                                            DpiGetSystemMetrics(SM_CXVSCROLL, DpiGetForHwnd(edit))) -
+                            1;
+            SetPixel(surface, innerEdge, client.dy / 2, (ThemeTrackColor() ^ 0x00ffffff) & 0x00ffffff);
+            SetPixel(surface, client.Right() - 1, client.dy / 2, (ThemeTrackColor() ^ 0x00ffffff) & 0x00ffffff);
+            EraseNativeScrollEdges(edit, surface);
+            utassert(GetPixel(surface, client.Right() - 1, client.dy / 2) == (ThemeTrackColor() & 0x00ffffff));
+            utassert(GetPixel(surface, innerEdge, client.dy / 2) == (ThemeTrackColor() & 0x00ffffff));
+            SelectObject(surface, oldBitmap);
+            DeleteObject(bitmap);
+            DeleteDC(surface);
+            SyncNativeScrollbars(edit);
+            int refreshes = nativeScrollbarRefreshCount;
+            WINDOWPOS unchanged{edit,
+                                nullptr,
+                                10,
+                                10,
+                                250,
+                                100,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW};
+            for (int i = 0; i < 100; i++) {
+                SendMessageW(edit, WM_WINDOWPOSCHANGED, 0, (LPARAM)&unchanged);
+            }
+            utassert(nativeScrollbarRefreshCount == refreshes);
             if (!ThemeUsesHighContrastColors()) {
                 utassert(ThemeThumbColor() == MkRgb(139, 139, 139));
-                utassert(ThemeThumbHoverColor() == MkRgb(105, 105, 105));
+                utassert(ThemeThumbHoverColor() == UiScrollbarHoverColor(ThemeTrackColor()));
+                utassert(GetRValue(ThemeThumbHoverColor()) > GetRValue(ThemeThumbColor()));
             }
             gSettings->scrollbarWidth = 8;
             utassert(ScaledWidth(sb) == GetAppScrollbarWidth(DpiGetForHwnd(edit)));

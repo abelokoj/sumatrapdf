@@ -6,6 +6,9 @@
 #include "base/UITask.h"
 #include "base/Win.h"
 #include "base/Pixmap.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 
 #include "gui/Dpi.h"
 #include "gui/UIModels.h"
@@ -15,6 +18,7 @@
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
+#include "gui/win/TabsCtrl.h"
 
 #include "Settings.h"
 #include "AppSettings.h"
@@ -24,6 +28,9 @@
 #include "TextSelection.h"
 #include "TextSearch.h"
 #include "DisplayModel.h"
+#if IS_DEBUG
+#include "RenderCache.h"
+#endif
 #include "SumatraPDF.h"
 #include "MainWindow.h"
 #include "Commands.h"
@@ -157,6 +164,8 @@ struct FindWindowWnd : WindowBase {
     Spacer* headerPagesGap = nullptr;
     Spacer* pagesResultsGap = nullptr;
     Padding* rootPadding = nullptr;
+    LabelWithClose titleRow;
+    Spacer* titleGap = nullptr;
     int layoutDpi = 96;
     // prev / next / match-case / match-whole-word / unpin(dock)
     VirtIconButton* btns[5]{};
@@ -206,6 +215,8 @@ struct FindWindowWnd : WindowBase {
     void OnDpiChanged(WindowBase::DpiChangedEvent* ev);
     void OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev);
     void OnClose(WindowBase::CloseEvent* ev);
+    void OnTitleClose(VirtMouseEvent* ev);
+    void OnNcHitTest(WindowBase::NcHitTestEvent* ev);
     void OnKeyDown(KeyEvent* ev);
     void OnCommand(WindowBase::CommandEvent* ev);
 };
@@ -319,7 +330,9 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
         // (their DCs get clipped to the control, not to this window), so e.g.
         // the results listbox can't paint its partially visible bottom row
         // below itself onto this window
-        args.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
+        // Paint the scaled title with the controls, avoiding competing native tool-window captions.
+        args.style = WS_POPUP | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
+        args.owner = win->hwndFrame;
         args.exStyle = WS_EX_TOOLWINDOW; // small caption, off the taskbar
         args.isRtl = IsUIRtl();
         args.pos = FindWindowPlacementRect(win);
@@ -328,8 +341,6 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
     if (!hwnd) {
         return false;
     }
-    // owned by the frame so it groups/minimizes with it but isn't a child
-    SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, (LONG_PTR)win->hwndFrame);
     SetColors(colTxt, colBg);
     DarkModeApplyToTitleBar(hwnd);
     PlatformFont* platformFont = GetAppFontForDpi(GetDpi());
@@ -438,6 +449,16 @@ void FindWindowWnd::BuildLayout() {
 
     auto* vbox = new VBox();
     vbox->alignCross = CrossAxisAlign::Stretch;
+    titleRow = NewLabelWithClose(hwnd, edit->GetFont(),
+                                 MkMethod1<FindWindowWnd, VirtMouseEvent*, &FindWindowWnd::OnTitleClose>(this));
+    titleRow.label->SetText(Tr("Find"));
+    titleRow.closeBtn->SetTooltip(Tr("Close"));
+    titleRow.closeBtn->SetFlag(vwfFocusable, true);
+    int titleSize = PlatformFontLineHeight(edit->GetFont());
+    titleRow.closeBtn->idealSize = {titleSize, titleSize};
+    vbox->AddChild(titleRow.box);
+    titleGap = new Spacer(0, gap);
+    vbox->AddChild(titleGap);
     vbox->AddChild(header);
     headerPagesGap = new Spacer(0, gap);
     vbox->AddChild(headerPagesGap);
@@ -469,6 +490,10 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     status->font = appFont;
     results->font = appFont;
     results->dpi = dpi;
+    titleRow.label->font = appFont;
+    int titleSize = PlatformFontLineHeight(appFont);
+    titleRow.closeBtn->idealSize = {titleSize, titleSize};
+    ApplyLabelWithCloseDpi(titleRow.label, titleRow.closeBtn, dpi);
 
     int pad = UiScalePxForDpi(dpi, kFindWinPadding);
     int gap = UiScalePxForDpi(dpi, kFindWinGap);
@@ -482,6 +507,7 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     toolsLayout->gap = appFont->averageCharWidth;
     headerLayout->colGap = gap;
     headerLayout->rowGap = gap;
+    titleGap->dy = gap;
     pagesLabelGap->dx = gap;
     headerPagesGap->dy = gap;
     pagesResultsGap->dy = pad;
@@ -935,6 +961,20 @@ void FindWindowWnd::OnClose(WindowBase::CloseEvent* /*ev*/) {
     // WmEvent.didHandle defaults true -> skip WindowBase::Destroy()
 }
 
+void FindWindowWnd::OnTitleClose(VirtMouseEvent* /*ev*/) {
+    HideFindWindow(win);
+}
+
+void FindWindowWnd::OnNcHitTest(WindowBase::NcHitTestEvent* ev) {
+    if (!titleRow.label) return;
+    POINT point{ev->screenPos.x, ev->screenPos.y};
+    MapWindowPoints(nullptr, hwnd, &point, 1);
+    if (titleRow.label->BoundsInWindow().Contains({point.x, point.y})) {
+        ev->result = HTCAPTION;
+        ev->didHandle = true;
+    }
+}
+
 void FindWindowWnd::OnKeyDown(KeyEvent* ev) {
     HWND editHwnd = CbEditHwnd(edit);
     bool editFocused = edit && (ev->hwnd == edit->hwnd || ev->hwnd == editHwnd);
@@ -1036,6 +1076,66 @@ void FindWindowWnd::OnCommand(WindowBase::CommandEvent* ev) {
 
 //--- public API
 
+#if IS_DEBUG
+void FindWindowLayout_UnitTests() {
+    RenderCache* savedCache = gRenderCache;
+    if (!savedCache) gRenderCache = new RenderCache();
+    defer {
+        if (!savedCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+        if (gSettings) SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+    };
+    for (int scale : {100, 150, 200}) {
+        gSettings->interfaceScale = scale;
+        RefreshUiFonts();
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        auto* w = CreateFindWindow(&win);
+        utassert(w && w->hwnd);
+        if (!w || !w->hwnd) {
+            delete w;
+            continue;
+        }
+        w->edit->SetText(StrL("persistent search"));
+        for (int width : {900, 520, 1200}) {
+            SetWindowPos(w->hwnd, nullptr, -10000, -10000, UiScalePx(width), UiScalePx(360),
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            w->Layout();
+            RECT editRect{};
+            GetWindowRect(w->edit->hwnd, &editRect);
+            MapWindowPoints(nullptr, w->hwnd, (POINT*)&editRect, 2);
+            int line = PlatformFontLineHeight(GetAppFontForDpi(w->GetDpi()));
+            // The query must sit below the scaled title, in one painted client tree.
+            utassert(editRect.top >= line + UiScalePxForDpi(w->GetDpi(), kFindWinPadding));
+            utassert((GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION);
+            utassert(str::Eq(w->edit->GetTextTemp(), StrL("persistent search")));
+            Rect title = w->titleRow.label->BoundsInWindow();
+            Rect close = w->titleRow.closeBtn->BoundsInWindow();
+            utassert(title.Bottom() <= editRect.top && close.Bottom() <= editRect.top);
+            utassert(close.dx >= line && close.dy >= line);
+            POINT titlePoint{title.x + title.dx / 2, title.y + title.dy / 2};
+            MapWindowPoints(w->hwnd, nullptr, &titlePoint, 1);
+            utassert(SendMessageW(w->hwnd, WM_NCHITTEST, 0, MAKELPARAM(titlePoint.x, titlePoint.y)) == HTCAPTION);
+            POINT closePoint{close.x + close.dx / 2, close.y + close.dy / 2};
+            MapWindowPoints(w->hwnd, nullptr, &closePoint, 1);
+            utassert(SendMessageW(w->hwnd, WM_NCHITTEST, 0, MAKELPARAM(closePoint.x, closePoint.y)) == HTCLIENT);
+        }
+        delete w;
+    }
+}
+#endif
+
 // The floating, movable/resizable find UI (see SearchUIFloating).
 FindWindowWnd* CreateFindWindow(MainWindow* win) {
     auto* w = new FindWindowWnd();
@@ -1044,6 +1144,7 @@ FindWindowWnd* CreateFindWindow(MainWindow* win) {
     w->onDpiChanged = MkMethod1<FindWindowWnd, WindowBase::DpiChangedEvent*, &FindWindowWnd::OnDpiChanged>(w);
     w->onGetMinMaxInfo = MkMethod1<FindWindowWnd, WindowBase::GetMinMaxInfoEvent*, &FindWindowWnd::OnGetMinMaxInfo>(w);
     w->onClose = MkMethod1<FindWindowWnd, WindowBase::CloseEvent*, &FindWindowWnd::OnClose>(w);
+    w->onNcHitTest = MkMethod1<FindWindowWnd, WindowBase::NcHitTestEvent*, &FindWindowWnd::OnNcHitTest>(w);
     w->onKeyDown = MkMethod1<FindWindowWnd, KeyEvent*, &FindWindowWnd::OnKeyDown>(w);
     if (!w->Create(win)) {
         delete w;

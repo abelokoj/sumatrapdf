@@ -2328,7 +2328,7 @@ static bool ShouldInstallMismatchedArch(HWND hwndParent) {
     auto hr = TaskDialogIndirect(&dialogConfig, &buttonPressedId, nullptr, nullptr);
     ReportIf(hr == E_INVALIDARG);
     if (buttonPressedId == kBtnIdDownload) {
-        LaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf/releases/latest"));
+        LaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest"));
         return false;
     }
     return true;

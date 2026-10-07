@@ -7,7 +7,6 @@
 #include "base/Win.h"
 
 #include "gui/UIModels.h"
-#include "gui/Gfx.h"
 
 #include "Settings.h"
 #include "AppSettings.h"
@@ -82,6 +81,35 @@ static void RefHoverRoundPopup(HWND hwnd) {
     if (same || !SetWindowRgn(hwnd, region, TRUE)) DeleteObject(region);
 }
 
+static void RefHoverDrawEdge(HDC hdc, HWND hwnd) {
+    constexpr float edgePoints = 0.5f;
+    int dpi = DpiGetForHwnd(hwnd);
+    float width = edgePoints * (float)dpi / 72.f;
+    Rect client = HwndClientRect(hwnd);
+    float inset = width / 2.f;
+    float dx = (float)client.dx - 1.f - width;
+    float dy = (float)client.dy - 1.f - width;
+    if (dx <= 0.f || dy <= 0.f) return;
+
+    float diameter = std::min(2.f * GetAppCornerRadius(dpi, 6), std::min(dx, dy));
+    Gdiplus::Graphics gfx(hdc);
+    gfx.SetPageUnit(Gdiplus::UnitPixel);
+    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen edge(Gdiplus::Color(255, 255, 0, 0), width);
+    if (diameter <= 0.f) {
+        gfx.DrawRectangle(&edge, inset, inset, dx, dy);
+        return;
+    }
+
+    Gdiplus::GraphicsPath path;
+    path.AddArc(inset, inset, diameter, diameter, 180.f, 90.f);
+    path.AddArc(inset + dx - diameter, inset, diameter, diameter, 270.f, 90.f);
+    path.AddArc(inset + dx - diameter, inset + dy - diameter, diameter, diameter, 0.f, 90.f);
+    path.AddArc(inset, inset + dy - diameter, diameter, diameter, 90.f, 90.f);
+    path.CloseFigure();
+    gfx.DrawPath(&edge, &path);
+}
+
 static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     RefHoverState* state = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (msg == WM_NCCALCSIZE) {
@@ -150,9 +178,7 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
         }
 
-        GfxHdc gfx(hdc);
-        gfx.FillRoundedRect(HwndClientRect(hwnd), 2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), kColorTransparent,
-                            ThemeEdgeColor());
+        RefHoverDrawEdge(hdc, hwnd);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -330,11 +356,7 @@ bool RefHoverWheelZoom(RefHoverState* s, EngineBase* engine, int wheelDelta) {
     }
     float factor = (wheelDelta > 0) ? kRefHoverUserZoomStep : (1.f / kRefHoverUserZoomStep);
     float newZoom = s->displayed.userZoom * factor;
-    if (newZoom < kRefHoverMinUserZoom) {
-        newZoom = kRefHoverMinUserZoom;
-    } else if (newZoom > kRefHoverMaxUserZoom) {
-        newZoom = kRefHoverMaxUserZoom;
-    }
+    newZoom = ClampF(newZoom, kRefHoverMinUserZoom, kRefHoverMaxUserZoom);
     if (newZoom == s->displayed.userZoom) {
         return false;
     }

@@ -575,6 +575,8 @@ struct ControlBase : ILayout, HwndBase {
     bool IsVisible() const;
 
     virtual bool IsFocused() const;
+    virtual bool IsFocusable() const;
+    virtual void PrepareFocus();
     virtual void SetFocus();
 
     LRESULT WndProcDefault(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -895,6 +897,7 @@ struct DropDown : ControlBase {
         bool isRtl = false;
         bool isEditable = false;
         bool deferItems = false; // materialize the native list when it is first used
+        bool visible = true;
         // draw a color swatch to the left of each item (annotation color lists)
         bool colorSwatches = false;
         // TODO: model or items
@@ -909,6 +912,12 @@ struct DropDown : ControlBase {
     bool deferItems = false;
     bool itemsPending = false;
     int pendingSelection = -1;
+    CreateArgs pendingCreate;
+    Str pendingText;
+    bool windowPending = false;
+    mutable bool pendingEnabled = true;
+    int deferredHeight = 0;
+    DWORD deferredMargins = 0;
     SelectionChangedHandler onSelectionChanged;
     TextChangedHandler onTextChanged;
     SelectionChangedHandler onCloseUp;
@@ -920,18 +929,25 @@ struct DropDown : ControlBase {
     bool suppressNotify = false;
 
     DropDown();
-    ~DropDown() override = default;
+    ~DropDown() override;
     HWND Create(const DropDown::CreateArgs&);
+    void DeferCreate(const DropDown::CreateArgs&);
+    HWND EnsureCreated();
 
     Size GetIdealSize() override;
     void OnCommand(ControlBase::CommandEvent* ev);
     void OnMessageReflect(ControlBase::MessageReflectEvent* ev);
     bool IsFocused() const override;
+    bool IsFocusable() const override;
+    void PrepareFocus() override;
     void SetFocus() override;
 
     void SetItems(StrVec& newItems);
     void EnsureItems();
     void SetText(Str);
+    TempStr GetTextTemp();
+    void SetIsEnabled(bool) const;
+    bool IsEnabled() const;
     void SetItemsKeepText(StrVec& newItems);
     void SetItemsSeqStrings(SeqStrings items);
     void SetCursorId(LPWSTR);

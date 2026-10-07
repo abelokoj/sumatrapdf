@@ -199,7 +199,7 @@ static int FitEditWidth(int content, int padding, int minimum, int available) {
 int EditPreferredWidth(HWND hwnd, Str sample, int minWidth, int availableWidth) {
     if (!hwnd) return FitEditWidth(0, 0, minWidth, availableWidth);
     if (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_MULTILINE) return HwndWindowRect(hwnd).dx;
-    HDC dc = GetDC(hwnd);
+    HDC dc = PlatformFontMeasurementDC();
     if (!dc) return FitEditWidth(0, 0, minWidth, availableWidth);
     Size measured;
     {
@@ -208,7 +208,6 @@ int EditPreferredWidth(HWND hwnd, Str sample, int minWidth, int availableWidth) 
         AutoRestoreFont selectFont(dc, font);
         measured = HdcGetTextExtentPoint32(dc, sample);
     }
-    ReleaseDC(hwnd, dc);
     DWORD margins = (DWORD)SendMessageW(hwnd, EM_GETMARGINS, 0, 0);
     Rect wr = HwndWindowRect(hwnd), cr = HwndClientRect(hwnd);
     int padding = (int)LOWORD(margins) + (int)HIWORD(margins) + std::max(0, wr.dx - cr.dx);
@@ -223,7 +222,7 @@ int Edit::GetPreferredWidth(Str sample, int minWidth, int availableWidth) {
 void EditSetDefaultMargins(HWND hwnd) {
     if (!hwnd || (GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_MULTILINE)) return;
     int inset = DpiScaleByDpi(DpiGetForHwnd(hwnd), 4);
-    HDC dc = GetDC(hwnd);
+    HDC dc = PlatformFontMeasurementDC();
     if (dc) {
         {
             HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
@@ -232,9 +231,9 @@ void EditSetDefaultMargins(HWND hwnd) {
             TEXTMETRICW metrics{};
             if (GetTextMetricsW(dc, &metrics)) inset = std::max(inset, (int)((metrics.tmAveCharWidth + 1) / 2));
         }
-        ReleaseDC(hwnd, dc);
     }
-    EditSetMargins(hwnd, inset, inset);
+    DWORD margins = (DWORD)SendMessageW(hwnd, EM_GETMARGINS, 0, 0);
+    if (LOWORD(margins) != inset || HIWORD(margins) != inset) EditSetMargins(hwnd, inset, inset);
 }
 
 #if IS_DEBUG

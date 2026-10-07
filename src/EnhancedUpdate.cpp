@@ -28,9 +28,10 @@
 #include "base/tests/UtAssert.h"
 #endif
 
-static const Str kEnhancedReleaseAPI = StrL("https://api.github.com/repos/abelokoj/sumatrapdf/releases/latest");
-static const Str kEnhancedReleases = StrL("https://github.com/abelokoj/sumatrapdf/releases/latest");
-static const Str kEnhancedDownloadRoot = StrL("https://github.com/abelokoj/sumatrapdf/releases/download/");
+static const Str kEnhancedReleaseAPI =
+    StrL("https://api.github.com/repos/abelokoj/sumatrapdf-enhanced/releases/latest");
+static const Str kEnhancedReleases = StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest");
+static const Str kEnhancedDownloadRoot = StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/");
 static Kind kEnhancedUpdateNotice = StrL("enhanced-update-check").s;
 static Kind kEnhancedAvailableNotice = StrL("enhanced-update-available").s;
 constexpr i64 kEnhancedMaxDownload = 256LL * 1024 * 1024;
@@ -522,9 +523,9 @@ void EnhancedUpdate_UnitTests() {
             delete release;
             Str evilURLs[] = {
                 StrL("https://github.com/sumatrapdfreader/sumatrapdf/releases/download/enhanced-v0.2.3/file.exe"),
-                StrL("http://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.2.3/file.exe"),
-                StrL("https://github.com.evil.example/abelokoj/sumatrapdf/file.exe"),
-                StrL("https://github.com/abelokoj/sumatrapdf/releases/download/enhanced-v0.2.3/../file.exe")};
+                StrL("http://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.2.3/file.exe"),
+                StrL("https://github.com.evil.example/abelokoj/sumatrapdf-enhanced/file.exe"),
+                StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.2.3/../file.exe")};
             for (Str url : evilURLs) {
                 release = ParseEnhancedRelease(EnhancedTestJson(arch, installed, digest, url), arch, installed);
                 utassert(release == nullptr);

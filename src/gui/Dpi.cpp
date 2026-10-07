@@ -132,11 +132,8 @@ static void DpiQueryForHwnd(HWND hwnd, int* outX, int* outY) {
             *outY = dpiY > 0 ? dpiY : *outX;
             return;
         }
-        if (DpiFromMonitor(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &x, &y)) {
-            *outX = x;
-            *outY = y;
-            return;
-        }
+        // Visible PerMonitorV2 windows already have their current DPI. Avoid
+        // querying the monitor through shcore on every nested control message.
         if (DynGetDpiForWindow) {
             uint dpiWin = DynGetDpiForWindow(hwnd);
             if (dpiWin >= 72) {
@@ -145,6 +142,11 @@ static void DpiQueryForHwnd(HWND hwnd, int* outX, int* outY) {
                 *outY = y;
                 return;
             }
+        }
+        if (DpiFromMonitor(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &x, &y)) {
+            *outX = x;
+            *outY = y;
+            return;
         }
     }
 
@@ -181,6 +183,30 @@ int DpiGetForHwnd(HWND hwnd) {
     DpiQueryForHwnd(hwnd, &x, &y);
     return x;
 }
+
+#if IS_DEBUG
+bool Dpi_UnitTestsWindowQuery() {
+    HWND hwnd = CreateWindowExW(0, L"STATIC", L"DPI query test", WS_POPUP | WS_VISIBLE, -10000, -10000, 100, 100,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!hwnd) return false;
+    auto windowQuery = DynGetDpiForWindow;
+    auto monitorQuery = DynGetDpiForMonitor;
+    int override = gDpiOverride, wine = gWineDpiOverride;
+    gDpiOverride = gWineDpiOverride = 0;
+    DynGetDpiForWindow = [](HWND) -> UINT { return 120; };
+    DynGetDpiForMonitor = [](HMONITOR, int, UINT* x, UINT* y) -> HRESULT {
+        *x = *y = 96;
+        return S_OK;
+    };
+    bool ok = DpiGetForHwnd(hwnd) == 120;
+    DynGetDpiForWindow = windowQuery;
+    DynGetDpiForMonitor = monitorQuery;
+    gDpiOverride = override;
+    gWineDpiOverride = wine;
+    DestroyWindow(hwnd);
+    return ok;
+}
+#endif
 
 int DpiGet() {
     return dpiX > 0 ? dpiX : 96;

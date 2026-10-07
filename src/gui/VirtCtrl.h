@@ -314,6 +314,7 @@ struct VirtRoot {
     void SetChild(VirtCtrl*);
     // the tops found in a layout tree; not owned
     void SetTops(const Vec<VirtCtrl*>&);
+    void ForgetTops();
     void SetBounds(Rect);
     void LayoutIfNeeded();
     void RequestLayout();
@@ -462,6 +463,7 @@ struct VirtListBox : VirtCtrl {
     void OnMouseDown(VirtMouseEvent*);
     void OnMouseUp(VirtMouseEvent*);
     void OnMouseMove(VirtMouseEvent*);
+    void OnMouseLeave();
     void OnMouseWheel(VirtMouseEvent*);
     void OnDoubleClick(VirtMouseEvent*);
     void OnKeyDown(VirtKeyEvent*);
@@ -499,6 +501,7 @@ struct VirtListBox : VirtCtrl {
     // EnsureVisible() called before the first layout; applied by SetBounds()
     int pendingVisibleIdx = -1;
     bool draggingThumb = false;
+    bool hoveringScrollbar = false;
     // where the thumb drag started, in window coords, and the scroll position
     // it started from
     int dragStartY = 0;
@@ -758,6 +761,7 @@ struct LabelWithClose {
 VirtCloseButton* AsVirtCloseButton(ILayout*);
 LabelWithClose NewLabelWithClose(HWND hwndForDpi, PlatformFont*, const VirtMouseHandler& onClose);
 void ApplyLabelWithCloseDpi(VirtText*, VirtCloseButton*, int dpi);
+void ApplyCloseButtonDpi(VirtCloseButton*, int dpi);
 
 struct VirtImage : VirtCtrl {
     Pixmap* pixmap = nullptr; // not owned

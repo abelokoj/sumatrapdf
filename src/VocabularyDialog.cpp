@@ -15,6 +15,7 @@
 #include "Settings.h"
 #include "AppSettings.h"
 #include "AppTools.h"
+#include "DarkMode.h"
 #include "MainWindow.h"
 #include "SumatraPDF.h"
 #include "Theme.h"
@@ -124,6 +125,7 @@ struct LearningWindow {
     MainWindow* owner = nullptr;
     bool dictionary = false, practice = false, revealed = false, checked = false;
     bool busy = false, updating = false, ready = false, lookupBusy = false;
+    bool opening = true;
     int scrollY = 0, contentHeight = 0, wheelRemainder = 0;
     bool layingOut = false, layoutPending = false;
     Vec<LearningPlacement> placements;
@@ -175,6 +177,7 @@ static HWND Control(LearningWindow* w, int id) {
 }
 
 static void LayoutLearning(LearningWindow* w, bool keepAnchor = false);
+static void EnsurePracticeControls(LearningWindow* w);
 
 constexpr int kGuideSteps = 9;
 constexpr UINT_PTR kFeedbackTimer = 1;
@@ -264,6 +267,10 @@ static void UpdateLearningChrome(LearningWindow* w);
 static void Feedback(LearningWindow* w, bool correct, Str message);
 static void SetLearningIcons(LearningWindow* w);
 static int LearningIconSize();
+static int LearningRowHeight() {
+    int content = std::max(PlatformFontLineHeight(GetAppFontForDpi(DpiGet())), LearningIconSize());
+    return std::max(UiScalePx(32), content + UiScalePx(16));
+}
 static bool HasLearningGlyph(int id);
 static void FitPackDropdown(LearningWindow* w);
 static void DrawGreenCheck(HDC dc, RECT rc, Color background);
@@ -617,14 +624,13 @@ static int WheelStep(int viewport) {
     return lines == WHEEL_PAGESCROLL ? viewport : UiScalePx(32) * (int)std::min(lines, (UINT)100);
 }
 static int LearningTextWidth(HWND control) {
-    HDC dc = GetDC(control);
+    HDC dc = PlatformFontMeasurementDC();
     HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
     HGDIOBJ old = SelectObject(dc, font ? font : GetAppFont()->GetHFont());
     WStr text = ToWStrTemp(HwndGetTextTemp(control));
     SIZE size{};
     GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &size);
     SelectObject(dc, old);
-    ReleaseDC(control, dc);
     return size.cx;
 }
 static int LearningInputWidth(LearningWindow* w, int id, int available, int row) {
@@ -823,24 +829,22 @@ static TempStr ChoiceLabel(int index) {
     return fmt("(%s)", Str(letters + pos));
 }
 static int WrappedHeight(HWND control, WStr text, int width) {
-    HDC dc = GetDC(control);
+    HDC dc = PlatformFontMeasurementDC();
     HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
     HGDIOBJ old = SelectObject(dc, font ? font : GetAppFontForDpi(DpiGet())->GetHFont());
     RECT rc{0, 0, std::max(width, 1), 0};
     DrawTextW(dc, CWStrTemp(text), len(text), &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
     SelectObject(dc, old);
-    ReleaseDC(control, dc);
     return std::max((int)rc.bottom, GetAppFontSizeForDpi(DpiGet()));
 }
 static int LabelWidth(HWND control, int index) {
-    HDC dc = GetDC(control);
+    HDC dc = PlatformFontMeasurementDC();
     HFONT font = (HFONT)SendMessageW(control, WM_GETFONT, 0, 0);
     HGDIOBJ old = SelectObject(dc, font ? font : GetAppFontForDpi(DpiGet())->GetHFont());
     WStr label = ToWStrTemp(ChoiceLabel(index));
     SIZE size{};
     GetTextExtentPoint32W(dc, CWStrTemp(label), len(label), &size);
     SelectObject(dc, old);
-    ReleaseDC(control, dc);
     return size.cx + UiScalePx(12);
 }
 static void WrapChoices(HWND control);
@@ -852,7 +856,7 @@ static void MeasureLearning(LearningWindow* w) {
     GetClientRect(w->hwnd, &client);
     VecReset(w->placements);
     int pad = UiScalePx(16), gap = UiScalePx(8);
-    int row = std::max(UiScalePx(32), std::max(GetAppFontSizeForDpi(DpiGet()), LearningIconSize()) + UiScalePx(12));
+    int row = LearningRowHeight();
     int width = std::max((int)client.right - pad * 2, row * 3), y = pad;
     bool measuring = false;
     // Stack overflowing groups instead of shrinking their text or hit targets.
@@ -888,13 +892,12 @@ static void MeasureLearning(LearningWindow* w) {
                 if (width - reserved >= row * 3) size = std::min(size, width - reserved);
             }
             if (!combo && !edit) {
-                HDC dc = GetDC(child);
+                HDC dc = PlatformFontMeasurementDC();
                 HGDIOBJ old = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
                 WStr text = ToWStrTemp(Read(w, id));
                 SIZE extent{};
                 GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &extent);
                 SelectObject(dc, old);
-                ReleaseDC(child, dc);
                 size =
                     std::min(width, (int)extent.cx + inset * 2 + (HasLearningGlyph(id) ? LearningIconSize() + gap : 0));
             }
@@ -1156,6 +1159,7 @@ static bool LearningPrimaryAction(LearningWindow* w, int id) {
 }
 static void PracticeControls(LearningWindow* w) {
     bool active = w->practice;
+    if (active) EnsurePracticeControls(w);
     w->scrollY = 0;
     UpdateLearningChrome(w);
     int library[] = {lcLibrary, lcLearned, lcDeleteWord};
@@ -1184,6 +1188,7 @@ static VocabScheduler Scheduler(LearningWindow* w) {
     return Selected(w, lcScheduler) == 0 ? VocabScheduler::Sm2 : VocabScheduler::Leitner;
 }
 static void NextQuestion(LearningWindow* w) {
+    EnsurePracticeControls(w);
     delete w->question;
     w->question = nullptr;
     if (w->position >= len(w->session)) {
@@ -1235,6 +1240,7 @@ static void StartPractice(LearningWindow* w) {
         return;
     }
     w->practice = true;
+    EnsurePracticeControls(w);
     w->position = 0;
     w->correct = 0;
     if (Selected(w, lcActivity) != (int)VocabActivity::MatchPairs) {
@@ -2131,7 +2137,7 @@ static void WrapChoices(HWND control) {
         for (int i = 0; i < len(list->strings); i++) label = std::max(label, LabelWidth(control, i));
     }
     list->labelWidth = label;
-    HDC dc = GetDC(control);
+    HDC dc = PlatformFontMeasurementDC();
     HGDIOBJ old = SelectObject(dc, list->font ? list->font : GetAppFontForDpi(DpiGet())->GetHFont());
     for (int pass = 0; pass < 2; pass++) {
         GetClientRect(control, &client);
@@ -2153,7 +2159,6 @@ static void WrapChoices(HWND control) {
         if (client.right == after.right) break;
     }
     SelectObject(dc, old);
-    ReleaseDC(control, dc);
     list->measuredWidth = client.right;
     list->wrapDirty = false;
 }
@@ -2486,7 +2491,7 @@ static void FitPackDropdown(LearningWindow* w) {
                    lcOnlineThird, lcSense}) {
         HWND combo = Control(w, id);
         if (!combo) continue;
-        HDC dc = GetDC(combo);
+        HDC dc = PlatformFontMeasurementDC();
         HGDIOBJ font = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
         int width = 0;
         int count = (int)SendMessageW(combo, CB_GETCOUNT, 0, 0);
@@ -2499,14 +2504,15 @@ static void FitPackDropdown(LearningWindow* w) {
             width = std::max(width, (int)size.cx + LearningIconSize() + UiScalePx(40));
         }
         SelectObject(dc, font);
-        ReleaseDC(combo, dc);
         MONITORINFO monitor{sizeof(monitor)};
         if (GetMonitorInfoW(MonitorFromWindow(w->hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
             width = std::min(width, (int)(monitor.rcWork.right - monitor.rcWork.left) - UiScalePx(32));
         SendMessageW(combo, CB_SETDROPPEDWIDTH, std::max(width, UiScalePx(240)), 0);
-        int height = std::max(LearningIconSize(), GetAppFontSizeForDpi(DpiGet())) + UiScalePx(16);
+        int height = LearningRowHeight();
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, height);
         SendMessageW(combo, CB_SETITEMHEIGHT, (WPARAM)-1, height);
+        int chrome = std::max(0, HwndWindowRect(combo).dy - height);
+        SendMessageW(combo, CB_SETITEMHEIGHT, (WPARAM)-1, std::max(1, height - chrome));
     }
 }
 static void DrawGreenCheck(HDC dc, RECT rc, Color background) {
@@ -2929,6 +2935,7 @@ static void RefreshLearningStyle(LearningWindow* w) {
     ZeroMemory(w->boundsValid, sizeof(w->boundsValid));
     FitPackDropdown(w);
     FormatDetails(w);
+    WindowApplyScaledCaption(w->hwnd);
     LayoutLearning(w, true);
     RedrawWindow(w->hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
@@ -3004,7 +3011,7 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         case WM_ACTIVATE:
             if (LOWORD(wp) != WA_INACTIVE) {
                 SetCurrentModelessDialog(hwnd);
-                if (w->ready) {
+                if (w->ready && !w->opening) {
                     RefreshDecks(w);
                     if (!w->dictionary && !w->practice) {
                         RefreshLibrary(w);
@@ -3068,7 +3075,7 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         case WM_MEASUREITEM: {
             auto* item = (MEASUREITEMSTRUCT*)lp;
             if (item->CtlType == ODT_COMBOBOX) {
-                item->itemHeight = std::max(GetAppFontSizeForDpi(DpiGet()), LearningIconSize()) + UiScalePx(12);
+                item->itemHeight = LearningRowHeight();
                 return TRUE;
             }
             if (item->CtlType == ODT_LISTBOX) {
@@ -3251,7 +3258,50 @@ static LRESULT CALLBACK LearningComboProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, LearningComboProc, id);
     return result;
 }
-static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text, DWORD style = 0) {
+static void PaintLearningEditTop(HWND hwnd, LearningWindow* w, HDC dc) {
+    Rect bounds = HwndWindowRect(hwnd);
+    POINT origin{};
+    ClientToScreen(hwnd, &origin);
+    RECT top{0, 0, bounds.dx, origin.y - bounds.y};
+    if (top.bottom <= 0) return;
+    HBRUSH brush = w->fieldBackground;
+    if (!brush) brush = CreateSolidBrush(ThemeControlBackgroundColor());
+    FillRect(dc, &top, brush);
+    if (!w->fieldBackground) DeleteObject(brush);
+}
+
+static LRESULT CALLBACK LearningEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* w = (LearningWindow*)data;
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, LearningEditProc, id);
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    if (msg == WM_NCCALCSIZE) {
+        LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+        RECT* client = wp ? &((NCCALCSIZE_PARAMS*)lp)->rgrc[0] : (RECT*)lp;
+        HFONT handle = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+        auto* font = handle ? GetPlatformFont(handle) : GetAppFontForDpi(DpiGetForHwnd(hwnd));
+        int extra = (int)(client->bottom - client->top) - PlatformFontLineHeight(font);
+        if (extra > 1) client->top += extra / 2;
+        return result;
+    }
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    if (msg == WM_SETFONT) {
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+    if (msg == WM_NCPAINT) {
+        HDC dc = GetWindowDC(hwnd);
+        if (dc) {
+            PaintLearningEditTop(hwnd, w, dc);
+            ReleaseDC(hwnd, dc);
+        }
+    }
+    if (msg == WM_PRINT && (lp & PRF_NONCLIENT)) PaintLearningEditTop(hwnd, w, (HDC)wp);
+    return result;
+}
+
+static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text, DWORD style = 0, bool visible = true) {
     if (id == lcDetails) {
         static HMODULE richEdit = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (richEdit) klass = MSFTEDIT_CLASS;
@@ -3259,10 +3309,13 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
     if (_wcsicmp(klass, L"COMBOBOX") == 0) style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
     if (_wcsicmp(klass, L"EDIT") == 0 || _wcsicmp(klass, MSFTEDIT_CLASS) == 0 || _wcsicmp(klass, kChoiceListClass) == 0)
         style &= ~WS_BORDER;
-    HWND child = CreateWindowExW(0, klass, CWStrTemp(text),
-                                 WS_CHILD | WS_VISIBLE | (_wcsicmp(klass, L"STATIC") ? WS_TABSTOP : 0) | style, 0, 0, 1,
-                                 1, w->hwnd, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
+    HWND child =
+        CreateWindowExW(0, klass, CWStrTemp(text),
+                        WS_CHILD | (visible ? WS_VISIBLE : 0) | (_wcsicmp(klass, L"STATIC") ? WS_TABSTOP : 0) | style,
+                        0, 0, 1, 1, w->hwnd, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
     w->controls[id] = child;
+    if (_wcsicmp(klass, L"EDIT") == 0 && !(style & ES_MULTILINE))
+        SetWindowSubclass(child, LearningEditProc, 1, (DWORD_PTR)w);
     if (_wcsicmp(klass, L"COMBOBOX") == 0) SetWindowSubclass(child, LearningComboProc, 1, (DWORD_PTR)w);
     if (IsRichDetails(child)) {
         SendMessageW(child, EM_SETEVENTMASK, 0, ENM_LINK);
@@ -3277,21 +3330,43 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
     return child;
 }
 
-static void MakeButton(LearningWindow* w, int id, Str text) {
-    HWND child = MakeControl(w, id, L"BUTTON", text, BS_OWNERDRAW | BS_NOTIFY);
+static void MakeButton(LearningWindow* w, int id, Str text, bool visible = true) {
+    HWND child = MakeControl(w, id, L"BUTTON", text, BS_OWNERDRAW | BS_NOTIFY, visible);
     SetWindowSubclass(child, LearningButtonProc, 1, (DWORD_PTR)w);
 }
-static HWND MakeLearningSplit(LearningWindow* w) {
-    HWND split =
-        MakeControl(w, lcSplit, L"STATIC", Tr("Resize word and answer panels"), SS_OWNERDRAW | SS_NOTIFY | WS_TABSTOP);
+static HWND MakeLearningSplit(LearningWindow* w, bool visible = true) {
+    HWND split = MakeControl(w, lcSplit, L"STATIC", Tr("Resize word and answer panels"),
+                             SS_OWNERDRAW | SS_NOTIFY | WS_TABSTOP, visible);
     SetWindowSubclass(split, LearningSplitProc, 1, (DWORD_PTR)w);
     return split;
+}
+
+static void EnsurePracticeControls(LearningWindow* w) {
+    if (w->dictionary || Control(w, lcAnswer)) return;
+    DpiScope dpi(w->hwnd);
+    MakeControl(w, lcSessionInfo, L"STATIC", {}, SS_NOPREFIX, false);
+    MakeControl(w, lcAnswer, L"EDIT", {}, ES_AUTOHSCROLL | WS_BORDER, false);
+    MakeControl(w, lcChoices, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER, false);
+    MakeControl(w, lcPairs, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER, false);
+    MakeLearningSplit(w, false);
+    MakeButton(w, lcCheck, Tr("Check answer"), false);
+    MakeButton(w, lcReveal, Tr("Show answer"), false);
+    MakeButton(w, lcBack, Tr("Back to library"), false);
+    MakeButton(w, lcAgain, Tr("Again"), false);
+    MakeButton(w, lcHard, Tr("Hard"), false);
+    MakeButton(w, lcGood, Tr("Good"), false);
+    MakeButton(w, lcEasy, Tr("Easy"), false);
 }
 static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bool activate = true) {
     for (LearningWindow* w : gLearningWindows) {
         if (w->owner == owner && w->dictionary == dictionary) {
+            bool active = GetForegroundWindow() == w->hwnd;
             ShowWindow(w->hwnd, SW_RESTORE);
             SetForegroundWindow(w->hwnd);
+            if (active) {
+                RefreshDecks(w);
+                if (!w->dictionary && !w->practice) RefreshLibrary(w);
+            }
             return w;
         }
     }
@@ -3417,20 +3492,8 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
         MakeControl(w, lcLearnedHint, L"STATIC",
                     Tr("Learned words stay in your library and leave practice. Mark unlearned to review them again."),
                     SS_NOPREFIX);
-        MakeControl(w, lcSessionInfo, L"STATIC", {}, SS_NOPREFIX);
         MakeButton(w, lcPractice, Tr("Practice"));
         MakeControl(w, lcLibrary, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
-        MakeControl(w, lcAnswer, L"EDIT", {}, ES_AUTOHSCROLL | WS_BORDER);
-        MakeControl(w, lcChoices, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
-        MakeControl(w, lcPairs, kChoiceListClass, {}, WS_VSCROLL | WS_BORDER);
-        MakeLearningSplit(w);
-        MakeButton(w, lcCheck, Tr("Check answer"));
-        MakeButton(w, lcReveal, Tr("Show answer"));
-        MakeButton(w, lcBack, Tr("Back to library"));
-        MakeButton(w, lcAgain, Tr("Again"));
-        MakeButton(w, lcHard, Tr("Hard"));
-        MakeButton(w, lcGood, Tr("Good"));
-        MakeButton(w, lcEasy, Tr("Easy"));
         MakeButton(w, lcDeleteWord, Tr("Remove word"));
         Str modes[] = {Tr("Flashcards"), Tr("Meaning quiz"),  Tr("Word quiz"),
                        Tr("Spelling"),   Tr("Word scramble"), Tr("Matching pairs")};
@@ -3466,6 +3529,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
         SetFocus(Control(w, lcQuery));
         SetCurrentModelessDialog(hwnd);
     }
+    w->opening = false;
     return w;
 }
 void ShowDictionaryDialog(MainWindow* owner, Str word, Str context, Str source, int page) {
@@ -3490,11 +3554,7 @@ void ShowDictionaryDialog(MainWindow* owner, Str word, Str context, Str source, 
     }
 }
 void ShowVocabularyDialog(MainWindow* owner) {
-    LearningWindow* w = OpenLearningWindow(owner, false);
-    if (w && !w->practice) {
-        RefreshDecks(w);
-        RefreshLibrary(w);
-    }
+    OpenLearningWindow(owner, false);
 }
 void RefreshVocabularyDialogs() {
     for (LearningWindow* w : gLearningWindows) {
@@ -3621,6 +3681,7 @@ static void LearningSurfaceCaptures() {
             EnableWindow(Control(w, lcSave), true);
             EnableWindow(Control(w, lcLearned), true);
         } else if (variant == 2) {
+            EnsurePracticeControls(w);
             SendMessageW(Control(w, lcActivity), CB_SETCURSEL, (int)VocabActivity::MeaningChoice, 0);
             w->practice = true;
             Text(w, lcDetails, StrL("omnipotent"));
@@ -3695,7 +3756,60 @@ static void GreenCheckGlyphTests() {
     DeleteDC(dc);
 }
 
+static void LearningRowTests(LearningWindow* w) {
+    int size = gSettings->uIFontSize, scale = gSettings->interfaceScale;
+    Str theme = str::Dup(gSettings->theme), family = str::Dup(gSettings->uIFontFamily);
+    defer {
+        gSettings->uIFontSize = size;
+        gSettings->interfaceScale = scale;
+        str::ReplaceWithCopy(&gSettings->theme, theme);
+        str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
+        str::Free(theme);
+        str::Free(family);
+        SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+        RefreshLearningStyle(w);
+    };
+    for (int i = 0; i < ThemeGetCount(); i++) {
+        str::ReplaceWithCopy(&gSettings->theme, ThemeGetNameAt(i));
+        SetCurrentThemeFromSettings();
+        for (int percent : {100, 200}) {
+            gSettings->interfaceScale = percent;
+            gSettings->uIFontSize = percent == 100 ? 18 : 24;
+            str::ReplaceWithCopy(&gSettings->uIFontFamily, i % 2 ? StrL("Consolas") : StrL("Manrope"));
+            RefreshUiFonts();
+            RefreshLearningStyle(w);
+            HWND combo = Control(w, w->dictionary ? lcVoice : lcDeck);
+            HWND button = Control(w, w->dictionary ? lcPronounce : lcPractice);
+            utassert(HwndWindowRect(combo).dy == HwndWindowRect(button).dy);
+            utassert(HwndWindowRect(combo).dy >= PlatformFontLineHeight(GetAppFontForDpi(DpiGet())));
+            for (HWND child : w->controls) {
+                if (!child || child == Control(w, lcTitle)) continue;
+                if (IsRichDetails(child)) {
+                    CHARFORMAT2W format{};
+                    format.cbSize = sizeof(format);
+                    SendMessageW(child, EM_GETCHARFORMAT, SCF_DEFAULT, (LPARAM)&format);
+                    LOGFONTW expected{};
+                    GetObjectW(GetAppFontForDpi(DpiGet())->GetHFont(), sizeof(expected), &expected);
+                    utassert(_wcsicmp(format.szFaceName, expected.lfFaceName) == 0);
+                    utassert(format.yHeight == MulDiv(abs(expected.lfHeight), 1440, DpiGet()));
+                } else {
+                    utassert((HFONT)SendMessageW(child, WM_GETFONT, 0, 0) == GetAppFontForDpi(DpiGet())->GetHFont());
+                }
+            }
+        }
+    }
+}
+
 void VocabularyDialog_UnitTests() {
+    RenderCache* originalCache = gRenderCache;
+    if (!originalCache) gRenderCache = new RenderCache();
+    defer {
+        if (!originalCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
     Settings* savedSettings = gSettings;
     Settings* fixture = NewSettings({});
     utassert(fixture != nullptr);
@@ -3714,6 +3828,60 @@ void VocabularyDialog_UnitTests() {
         gDontSaveSettings = savedNoSettings;
         DeleteSettings(fixture);
     };
+    {
+        Str originalData = str::Dup(GetAppDataDirTemp());
+        Str testData = str::Dup(GetTempFilePathTemp(StrL("cap")));
+        file::Delete(testData);
+        SetAppDataDir(testData);
+        defer {
+            SetAppDataDir(originalData);
+            RemoveDirectoryW(CWStrTemp(testData));
+            str::Free(originalData);
+            str::Free(testData);
+        };
+        int originalScale = gSettings->interfaceScale;
+        auto* learning = OpenLearningWindow(nullptr, true, false);
+        utassert(learning != nullptr);
+        if (learning) {
+            utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
+                     HwndWindowRect(Control(learning, lcPronounce)).dy);
+            LearningRowTests(learning);
+            WindowApplyScaledCaption(learning->hwnd);
+            int before = HwndWindowRect(learning->hwnd).dy - HwndClientRect(learning->hwnd).dy;
+            gSettings->interfaceScale = originalScale + 50;
+            RefreshUiFonts();
+            RefreshLearningStyle(learning);
+            int after = HwndWindowRect(learning->hwnd).dy - HwndClientRect(learning->hwnd).dy;
+            utassert(after > before);
+            DestroyWindow(learning->hwnd);
+        }
+        gSettings->interfaceScale = originalScale;
+        RefreshUiFonts();
+        auto* hub = OpenLearningWindow(nullptr, false, false);
+        utassert(hub != nullptr);
+        if (hub) {
+            utassert(Control(hub, lcLibrary));
+            utassert(HwndWindowRect(Control(hub, lcDeck)).dy == HwndWindowRect(Control(hub, lcPractice)).dy);
+            LearningRowTests(hub);
+            for (int id :
+                 {lcAnswer, lcChoices, lcPairs, lcSplit, lcCheck, lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy})
+                utassert(!Control(hub, id));
+            hub->practice = true;
+            PracticeControls(hub);
+            for (int id :
+                 {lcAnswer, lcChoices, lcPairs, lcSplit, lcCheck, lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy})
+                utassert(Control(hub, id));
+            HWND answer = Control(hub, lcAnswer);
+            Text(hub, lcAnswer, StrL("Retained answer"));
+            hub->practice = false;
+            PracticeControls(hub);
+            hub->practice = true;
+            PracticeControls(hub);
+            utassert(Control(hub, lcAnswer) == answer);
+            utassert(str::Eq(Read(hub, lcAnswer), StrL("Retained answer")));
+            DestroyWindow(hub->hwnd);
+        }
+    }
     utassert(str::Eq(DictionarySize(3335559018LL), StrL("3.34 GB")));
     utassert(str::Eq(DictionarySize(4719269), StrL("4.72 MB")));
     const KaikkiPack* simplePack = FindKaikkiPack(StrL("kaikki-simple-english"));
@@ -3830,6 +3998,25 @@ void VocabularyDialog_UnitTests() {
     Text(&window, lcDetails, ToStrTemp(lines));
     window.ready = true;
     LayoutLearning(&window);
+    HWND queryHwnd = Control(&window, lcQuery);
+    Rect queryBounds = ChildPosWithinParent(queryHwnd);
+    Text(&window, lcQuery, StrL("computing"));
+    SendMessageW(queryHwnd, EM_SETSEL, 1, 5);
+    for (int height : {60, 90}) {
+        SetWindowPos(queryHwnd, nullptr, 0, 0, 180, height, SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT bounds;
+        GetWindowRect(queryHwnd, &bounds);
+        POINT origin{};
+        ClientToScreen(queryHwnd, &origin);
+        int lineHeight = PlatformFontLineHeight(GetAppFontForDpi(DpiGetForHwnd(queryHwnd)));
+        utassert(abs(origin.y - bounds.top - (height - lineHeight) / 2) <= 1);
+        DWORD start = 0, end = 0;
+        SendMessageW(queryHwnd, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+        utassert(start == 1 && end == 5);
+    }
+    SetWindowPos(queryHwnd, nullptr, queryBounds.x, queryBounds.y, queryBounds.dx, queryBounds.dy,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    Text(&window, lcQuery, {});
     HWND details = Control(&window, lcDetails);
     Rect detailsRect = HwndWindowRect(details);
     int cornerDiameter =
@@ -3845,6 +4032,7 @@ void VocabularyDialog_UnitTests() {
     int cueWidth = LearningInputWidth(&window, lcQuery, 1000, 32);
     utassert(cueWidth >= EditPreferredWidth(Control(&window, lcQuery), StrL("Search your vocabulary…"), 96, 1000));
     SendMessageW(Control(&window, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"");
+    FitLearningInput(&window, lcQuery);
     RECT shortInput, longInput, action;
     GetWindowRect(Control(&window, lcQuery), &shortInput);
     Text(&window, lcQuery, StrL("pneumonoultramicroscopicsilicovolcanoconiosis"));

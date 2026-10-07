@@ -37,7 +37,15 @@ int (*gUiScrollbarTrackPos)(HWND hwnd, int fallback, int bar) = nullptr;
 int (*gUiScrollbarInset)(HWND hwnd) = nullptr;
 int (*gUiScrollbarWidth)(int dpi) = nullptr;
 int UiScrollbarWidth(int dpi) {
-    return gUiScrollbarWidth ? gUiScrollbarWidth(dpi) : DpiScaleByDpi(dpi, 20);
+    return gUiScrollbarWidth ? gUiScrollbarWidth(dpi) : DpiScaleByDpi(dpi, 30);
+}
+
+Color UiScrollbarHoverColor(Color track) {
+    return IsLightColor(track) ? MkRgb(180, 180, 180) : MkRgb(210, 210, 210);
+}
+
+Color UiScrollbarHoverEdge(Color track) {
+    return IsLightColor(track) ? MkRgb(96, 96, 96) : MkRgb(235, 235, 235);
 }
 
 int (*gUiCornerRadius)(int dpi, int designRadius) = nullptr;

@@ -3,6 +3,8 @@
 
 #include "base/Base.h"
 #include "base/Win.h"
+#include "base/AutoWin.h"
+#include "base/Timer.h"
 
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
@@ -166,6 +168,35 @@ static void CollectVirtCtrls_Test() {
     utassert(len(out) == 2);
     utassert(out[0] == first);
     utassert(out[1] == nested);
+    ILayout* group = box->children[2].layout;
+    for (Visibility visibility : {Visibility::Collapse, Visibility::Hidden}) {
+        group->SetVisibility(visibility);
+        VecReset(out);
+        CollectVirtCtrls(box, out);
+        utassert(len(out) == 1 && out[0] == first);
+    }
+    group->SetVisibility(Visibility::Visible);
+    VecReset(out);
+    CollectVirtCtrls(box, out);
+    VirtRoot root(nullptr);
+    root.SetTops(out);
+    root.focused = first;
+    root.hovered = first;
+    root.captured = first;
+    root.pressed = first;
+    root.SetTops(out);
+    utassert(root.focused == first && root.hovered == first);
+    utassert(root.captured == first && root.pressed == first);
+    group->SetVisibility(Visibility::Collapse);
+    VecReset(out);
+    CollectVirtCtrls(box, out);
+    root.SetTops(out);
+    utassert(root.focused == first && root.captured == first);
+    first->SetVisibility(Visibility::Collapse);
+    VecReset(out);
+    CollectVirtCtrls(box, out);
+    root.SetTops(out);
+    utassert(!root.focused && !root.hovered && !root.captured && !root.pressed);
     delete box;
 }
 
@@ -345,4 +376,52 @@ void VirtCtrl_UnitTests() {
     ListScrollbar_Test();
     Splitter_ShrinkTest();
     RoundedNativeControls_Test();
+}
+
+int PlatformFontMeasureDcCount();
+
+void PlatformFont_UnitTestsMeasure() {
+    auto* font = GetPlatformFont(StrL("Segoe UI"), 18, PlatformFontStyle::Regular);
+    HDC memory = CreateCompatibleDC(nullptr);
+    utassert(memory != nullptr);
+    if (!memory) return;
+    defer {
+        DeleteDC(memory);
+    };
+    AutoReleaseDC desktop(nullptr);
+    Str samples[] = {StrL("Settings"), StrL("Short and longer words on a wrapped line"), StrL("中文 العربية Ελληνικά"),
+                     StrL(""), StrL("Line one\nLine two")};
+    PlatformFont* fonts[] = {font, GetPlatformFont(StrL("Segoe UI"), 36, PlatformFontStyle::Bold), nullptr};
+    for (auto* measuredFont : fonts) {
+        HFONT handle = measuredFont ? measuredFont->GetHFont() : nullptr;
+        for (Str sample : samples)
+            for (int width : {-1, 160}) {
+                uint format = DT_LEFT | DT_NOPREFIX | (width < 0 ? DT_NOCLIP : DT_WORDBREAK);
+                int maxWidth = width < 0 ? 4096 : width;
+                Size expected = HdcMeasureText(desktop, sample, maxWidth, format, handle);
+                utassert(HdcMeasureText(memory, sample, maxWidth, format, handle) == expected);
+                utassert(PlatformFontMeasureText(measuredFont, sample, width) == expected);
+            }
+        AutoRestoreFont selected(desktop, handle);
+        TEXTMETRICW metrics{};
+        GetTextMetricsW(desktop, &metrics);
+        utassert(PlatformFontLineHeight(measuredFont) == (int)(metrics.tmHeight + metrics.tmExternalLeading));
+    }
+    int before = PlatformFontMeasureDcCount();
+    TimeStamp start = TimeGet();
+    for (int i = 0; i < 200; i++) {
+        PlatformFontMeasureText(font, samples[1]);
+        PlatformFontLineHeight(font);
+    }
+    double platformMs = TimeSinceInMs(start);
+    start = TimeGet();
+    for (int i = 0; i < 200; i++) {
+        HdcMeasureText(memory, samples[1], 4096, DT_LEFT | DT_NOPREFIX | DT_NOCLIP, font->GetHFont());
+        AutoRestoreFont selected(memory, font->GetHFont());
+        TEXTMETRICW metrics{};
+        GetTextMetricsW(memory, &metrics);
+    }
+    printf("Font measurement: 200 text/height pairs, platform %.3f ms, memory %.3f ms\n", platformMs,
+           TimeSinceInMs(start));
+    utassert(PlatformFontMeasureDcCount() == before);
 }

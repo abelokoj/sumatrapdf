@@ -539,6 +539,7 @@ bool CancelAnnotationPlacement(MainWindow* win) {
         return false;
     }
     AnnotPlacement& p = win->annotPlacement;
+    if (p.kind == AnnotPlacementKind::Ink && win->inkEraseMode != 0) EndPdfEditOperation(win);
     ReleasePlacementCapture(win);
     Kind group = NotifGroupForKind(p.kind);
     p.Reset();
@@ -966,7 +967,8 @@ bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
     AnnotPlacement& p = win->annotPlacement;
     bool pendingChanged = false;
     if (p.pageNo == pageNo && win->inkEraseMode != 2) {
-        pendingChanged = EraseInkStrokes(p.strokeCounts, p.points, pagePt, radius);
+        pendingChanged = win->inkEraseMode == 3 ? EraseInkSegments(p.strokeCounts, p.points, pagePt, radius)
+                                                : EraseInkStrokes(p.strokeCounts, p.points, pagePt, radius);
         if (len(p.strokeCounts) == 0) {
             p.pageNo = -1;
         }
@@ -1000,7 +1002,8 @@ bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
         if (Type(annot) != AnnotationType::Ink) {
             continue;
         }
-        InkEraseResult result = EraseAnnotationInk(annot, pagePt, radius);
+        InkEraseResult result = win->inkEraseMode == 3 ? EraseAnnotInkSegments(annot, pagePt, radius)
+                                                       : EraseAnnotationInk(annot, pagePt, radius);
         if (result == InkEraseResult::Empty) {
             DeleteAnnotationAndUpdateUI(tab, annot);
             savedChanged = true;
@@ -1023,6 +1026,7 @@ static bool HandleInkDown(MainWindow* win, Point pt) {
     }
     HwndSetFocus(win->hwndFrame);
     if (win->inkEraseMode != 0) {
+        BeginPdfEditOperation(win, "Erase ink gesture");
         win->annotPlacement.mouseDown = true;
         SetCapture(win->hwndCanvas);
         return AnnotationPlacementEraseAt(win, pt);
@@ -1055,6 +1059,7 @@ static bool HandleInkUp(MainWindow* win, Point pt) {
     if (win->inkEraseMode != 0) {
         AnnotationPlacementEraseAt(win, pt);
         win->annotPlacement.mouseDown = false;
+        EndPdfEditOperation(win);
         if (GetCapture() == win->hwndCanvas) {
             ReleaseCapture();
         }
@@ -1069,6 +1074,12 @@ static bool HandleInkUp(MainWindow* win, Point pt) {
     FinishInkAnnotationPlacement(win);
     StartAnnotationPlacement(win, cmdId);
     return true;
+}
+
+void AnnotationPlacementCaptureLost(MainWindow* win) {
+    if (!IsPlacingInkAnnotation(win) || win->inkEraseMode == 0) return;
+    win->annotPlacement.mouseDown = false;
+    EndPdfEditOperation(win);
 }
 
 bool AnnotationPlacementOnLeftDown(MainWindow* win, Point pt, WPARAM key) {
@@ -1188,10 +1199,16 @@ bool AnnotationPlacementOnMouseMove(MainWindow* win, Point pt, WPARAM key) {
             }
             break;
         case AnnotPlacementKind::Line:
-            if (p.pageNo > 0 && pt != p.end) {
+            if (p.pageNo > 0) {
                 Point start = dm->CvtToScreen(p.pageNo, p.start);
-                p.end = bit::IsMaskSet(key, (WPARAM)MK_SHIFT) ? SnapLineEndpoint(start, pt) : pt;
-                ScheduleRepaint(win, 0);
+                bool shift = bit::IsMaskSet(key, (WPARAM)MK_SHIFT);
+                Point end = shift ? SnapLineEndpoint(start, pt) : pt;
+                // Compare the snapped point, not the pointer: Shift at the same
+                // spot still has to move the preview, and releasing it has to put it back.
+                if (end != p.end) {
+                    p.end = end;
+                    ScheduleRepaint(win, 0);
+                }
             }
             break;
         case AnnotPlacementKind::PolyLine:
@@ -1936,7 +1953,8 @@ bool AnnotPlacement_UnitTestInkProfiles() {
 #endif
 
 bool HandlePenToolCommand(MainWindow* win, int cmdId) {
-    bool profile = cmdId == CmdInkFountain || cmdId == CmdInkBrush || cmdId == CmdInkPencil;
+    bool profile =
+        cmdId == CmdInkFountain || cmdId == CmdInkBrush || cmdId == CmdInkPencil || cmdId == CmdInkSegmentEraser;
     if (!profile && (cmdId < CmdInkPen || cmdId > CmdTogglePenOnly)) {
         return false;
     }
@@ -1957,13 +1975,17 @@ bool HandlePenToolCommand(MainWindow* win, int cmdId) {
     ApplyInkPenCommand(win->inkPenStyle, cmdId);
     StartAnnotationPlacement(win, CmdCreateAnnotInk);
     if (IsPlacingInkAnnotation(win)) {
-        win->inkEraseMode = cmdId == CmdInkEraser ? 1 : cmdId == CmdHighlightEraser ? 2 : 0;
+        win->inkEraseMode = cmdId == CmdInkEraser          ? 1
+                            : cmdId == CmdHighlightEraser  ? 2
+                            : cmdId == CmdInkSegmentEraser ? 3
+                                                           : 0;
         if (win->inkEraseMode != 0) {
             NotificationCreateArgs args;
             args.hwndParent = win->hwndCanvas;
             args.msg = win->inkEraseMode == 2
                            ? Tr("Erase highlighting. Handwritten ink is preserved. **Esc** to finish.")
-                           : Tr("Erase ink strokes. **Esc** to finish.");
+                       : win->inkEraseMode == 3 ? Tr("Erase portions of ink strokes. **Esc** to finish.")
+                                                : Tr("Erase ink strokes. **Esc** to finish.");
             args.timeoutMs = kNotifNoTimeout;
             args.groupId = kNotifInkAnnotationPlacement;
             args.corner = NotifCorner::BottomBar;

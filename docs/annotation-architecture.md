@@ -30,10 +30,22 @@ Laser ink is separate canvas state. It is composed with the page buffer, retains
 
 Canvas annotation selection and manipulation feed the annotation-edit toolbar and PDF edit operations. The engine uses MuPDF's journal for persistent undo and redo. `BeginPdfEditOperation` groups a gesture such as resize into an operation; setters and creation update journaled PDF objects. Pending placement is managed separately until committed. Undo history is session state, not a cross-device history embedded in the saved PDF.
 
-`Annotation.cpp` reads InkList and tests segment distance in `InkStrokeHit`; the stroke eraser removes hit strokes and regenerates the remaining ink geometry. `AnnotationPlacementEraseAt` converts the eraser position to page space and handles pending and persistent targets. Highlight-only erasing restricts its annotation types. Existing geometric hit testing is not handwriting recognition, a semantic word eraser or a complete lasso selection system.
+`Annotation.cpp` reads InkList and tests segment distance in `InkStrokeHit`; the stroke eraser removes hit strokes and regenerates the remaining ink geometry. `AnnotationPlacementEraseAt` converts the eraser position to page space and handles pending and persistent targets. Highlight-only erasing restricts its annotation types. Existing geometric hit testing is not handwriting recognition or a semantic word eraser.
+
+`Canvas.cpp` owns the page-local annotation lasso. A closed path selects fully enclosed supported annotations; ink selection requires all saved ink points to be enclosed. The selection provides move, resize and supported-geometry rotation handles, arrow-key movement, Delete, duplication, recoloring and thickness changes. Shift snaps rotation to 15-degree increments. Each action is one MuPDF journal operation and refreshes the affected page rendering. Tab/tool changes and invalid or deleted targets clear the selection; capture loss abandons the pending transform. Cross-page selection and persistent grouping remain roadmap work.
+
+The segment eraser clips a circle out of InkList polylines and retains the remaining pieces. A complete eraser gesture is one undo operation. Ordinary stroke erasing and highlight-only erasing retain their separate modes.
+
+## Recovery backups
+
+`AnnotRecovery.cpp` debounces unsaved annotation changes into atomic PDF snapshots and a versioned source manifest. Backups use a separate recovery directory, leave the original PDF unchanged, and preserve the live undo/redo journal. Source size, modification time and SHA-256 identify moved or externally changed files. An exclusive session lock prevents another reader from offering an active backup. Save or explicit discard cancels recovery promotion; close preserves unsaved backups and shutdown joins workers.
+
+On reopening, the reader offers to open a recovered copy, discard the backup or keep it for later. Recovery checks run outside the UI thread and recheck the live tab before presenting a result. The snapshot path currently requires a PDF that supports incremental saving; repaired and newly created PDFs report backup failure. This is annotation recovery, not a versioned notebook sidecar or cross-session undo history.
 
 ## Foundation tests and remaining work
 
 `Canvas_UnitTestPointerInput` exercises normalized device classification, contact and buttons, pressure masks and bounds, zero and missing pressure, tilt and rotation clamping, timestamps, eraser and barrel exposure, the legacy mouse adapter and chronological history conversion. The test uses synthetic samples; it requires no pointer hardware or visible window.
 
-Hardware acceptance must cover actual pen pressure, tilt availability, coalesced motion, hover, eraser inversion, touch suppression, mouse navigation and DPI transitions. This batch does not add a prediction algorithm, per-point nib rendering, textured brushes, persistent pressure and tilt payloads, cross-page strokes, handwriting cleanup, shape recognition, Easy Writing Pad or a full lasso workflow. Cancellation and pointer-capture transitions retain the existing canvas behavior and still need dedicated hardware acceptance.
+`Canvas_UnitTestLassoGeometry` covers the concave containment foundation; annotation transformation and PDF round-trip checks cover saved geometry. These synthetic checks do not establish physical stylus latency or other-device acceptance.
+
+Hardware acceptance must cover actual pen pressure, tilt availability, coalesced motion, hover, eraser inversion, touch suppression, mouse navigation and DPI transitions. Prediction, per-point nib rendering, textured brushes, persistent pressure and tilt payloads, cross-page strokes, handwriting cleanup, shape recognition and Easy Writing Pad remain roadmap work. Cancellation and pointer-capture transitions still need dedicated hardware acceptance.

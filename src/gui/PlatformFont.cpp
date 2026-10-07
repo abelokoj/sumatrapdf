@@ -9,6 +9,36 @@
 #include "gui/Dpi.h"
 
 #include "gui/PlatformFont.h"
+#if IS_DEBUG
+static thread_local int fontMeasureDcCount = 0;
+#endif
+
+// Layout measures text many times. A private memory DC avoids repeatedly
+// acquiring the desktop DC and keeps background ebook layout independent.
+struct FontMeasureDC {
+    HDC dc = CreateCompatibleDC(nullptr);
+    bool desktop = false;
+    FontMeasureDC() {
+        if (!dc) {
+            dc = GetDC(nullptr);
+            desktop = true;
+        }
+#if IS_DEBUG
+        fontMeasureDcCount++;
+#endif
+    }
+    ~FontMeasureDC() {
+        if (desktop)
+            ReleaseDC(nullptr, dc);
+        else
+            DeleteDC(dc);
+    }
+};
+
+HDC PlatformFontMeasurementDC() {
+    static thread_local FontMeasureDC context;
+    return context.dc;
+}
 
 // root node of the intrusive list of interned fonts; only its `next` is used
 static PlatformFont gPlatformFonts;
@@ -37,10 +67,7 @@ bool PlatformFont::SameAs(Str otherName, float otherSizePt, PlatformFontStyle ot
 }
 
 static PlatformFont* GetPlatformFontInternal(Str name, float sizePt, PlatformFontStyle style, uintptr_t nativeId) {
-    gPlatformFontsMutex.Lock();
-    defer {
-        gPlatformFontsMutex.Unlock();
-    };
+    AutoUnlockMutex lock(&gPlatformFontsMutex);
 
     for (PlatformFont* font = gPlatformFonts.next; font; font = font->next) {
         if (nativeId ? font->nativeId == nativeId : font->nativeId == 0 && font->SameAs(name, sizePt, style)) {
@@ -420,7 +447,7 @@ Size PlatformFontMeasureText(PlatformFont* font, Str s, int maxDx) {
         return {};
     }
     HFONT hf = font ? font->GetHFont() : nullptr;
-    AutoReleaseDC dc(nullptr);
+    HDC dc = PlatformFontMeasurementDC();
     uint fmt = DT_LEFT | DT_NOPREFIX;
     if (maxDx < 0) {
         maxDx = 4096;
@@ -433,9 +460,15 @@ Size PlatformFontMeasureText(PlatformFont* font, Str s, int maxDx) {
 
 int PlatformFontLineHeight(PlatformFont* font) {
     HFONT hf = font ? font->GetHFont() : nullptr;
-    AutoReleaseDC dc(nullptr);
+    HDC dc = PlatformFontMeasurementDC();
     AutoRestoreFont prev(dc, hf);
     TEXTMETRICW tm{};
     GetTextMetricsW(dc, &tm);
     return (int)(tm.tmHeight + tm.tmExternalLeading);
 }
+
+#if IS_DEBUG
+int PlatformFontMeasureDcCount() {
+    return fontMeasureDcCount;
+}
+#endif

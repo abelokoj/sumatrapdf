@@ -28,6 +28,9 @@
 #include "base/ByteReaderWriter.h"
 #include "PngOptimizer.h"
 #include "ImageReader.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "ImageSaveCropResize.h"
 
 ImageEditHost gImageEditHost;
@@ -675,6 +678,10 @@ static void InvalidateImageArea(ImageEditWindow* ew) {
 }
 
 static int GetControlAreaDy(ImageEditWindow* ew) {
+    if (ew->controlLayout) {
+        int width = std::max(1, HwndClientRect(ew->hwnd).dx - 2 * ImageEditButtonPadding());
+        return ew->controlLayout->Layout(Loose({width, Inf})).dy;
+    }
     int dy = DpiScale(kControlAreaDy);
     if (ew->fromRenderedBitmap) {
         dy -= ImageEditPathLabelRowDy(ew);
@@ -1776,6 +1783,15 @@ void ImageEditWindow::OnActivate(WindowBase::ActivateEvent* ev) {
         }
         return;
     }
+    PlatformFont* currentFont = ImageEditFont(hwnd);
+    if (currentFont != font && controlLayout) {
+        SetFont(currentFont);
+        ImageEditApplyFont(this);
+        CalcImageLayout(this);
+        LayoutControls(this);
+    }
+    UpdateTheme();
+    HwndInvalidate(hwnd, true);
     SetCurrentModelessDialog(hwnd);
     // menu commands often leave keyboard focus on the main window
     if (!HasFocusInImageEdit(this)) {
@@ -1863,7 +1879,7 @@ void ImageEditWindow::WndProc(WindowBase::WndProcEvent* ev) {
                 PaintResizeImage(ew, gfx, imageArea);
             }
             Rect controlArea{0, imageArea.dy, cRc.dx, cRc.dy - imageArea.dy};
-            gfx->FillRect(controlArea, GetSysColor(COLOR_BTNFACE));
+            gfx->FillRect(controlArea, ew->GetColor(kColWinBg));
             if (ew->vroot) {
                 ew->vroot->Paint(gfx, controlArea);
             }
@@ -2196,12 +2212,6 @@ void ImageEditWindow::WndProc(WindowBase::WndProcEvent* ev) {
 // background is COLOR_BTNFACE), so the buttons override the themed defaults
 static ImageEditButton* NewImageEditButton(ImageEditWindow* ew, Str text, const VirtMouseHandler& onClick) {
     auto* b = new ImageEditButton(Str{}, ew->font);
-    Color bg = GetSysColor(COLOR_BTNFACE);
-    b->SetColor(kColBtnText, GetSysColor(COLOR_BTNTEXT));
-    b->SetColor(kColBtnTextDisabled, GetSysColor(COLOR_GRAYTEXT));
-    b->SetColor(kColBtnBg, AccentColor(bg, 14));
-    b->SetColor(kColBtnBgHover, AccentColor(bg, 28));
-    b->SetColor(kColBtnBorder, AccentColor(bg, 40));
     b->textPadding = DpiScaledInsets(4, 10);
     b->SetLabel(text);
     b->onClick = onClick;
@@ -2306,7 +2316,6 @@ void ShowImageEditWindow(HWND parent, ImageEditMode mode, Str filePath, Rendered
         cargs.exStyle = WS_EX_CONTROLPARENT;
         cargs.pos = {CW_USEDEFAULT, CW_USEDEFAULT, winSize.dx, winSize.dy};
         cargs.visible = false;
-        cargs.bgColor = GetSysColor(COLOR_BTNFACE);
         if (gImageEditHost.appIconId) {
             cargs.icon = LoadIconW(h, MAKEINTRESOURCEW(gImageEditHost.appIconId));
         }
@@ -2361,7 +2370,6 @@ void ShowImageEditWindow(HWND parent, ImageEditMode mode, Str filePath, Rendered
         ew->staticPathLabel = NewVirtText({
             .s = filePath ? filePath : Str{},
             .font = ew->font,
-            .textColor = GetSysColor(COLOR_BTNTEXT),
             .pathEllipsis = true,
         });
     }
@@ -2378,7 +2386,6 @@ void ShowImageEditWindow(HWND parent, ImageEditMode mode, Str filePath, Rendered
     ew->staticInfoLabel = NewVirtText({
         .s = infoStr,
         .font = ew->font,
-        .textColor = GetSysColor(COLOR_BTNTEXT),
         .ellipsis = true,
     });
 
@@ -2580,3 +2587,61 @@ TempStr ImageResizeEdgesResultTemp(Str imagePath, int newW, int newH, int* exitC
     }
     return ToStrTemp(out);
 }
+
+#if IS_DEBUG
+bool ImageEdit_UnitTestsUi() {
+    GuiColorsInitIfNeeded();
+    Color previous[dimof(gColsBtn)];
+    memcpy(previous, gColsBtn, sizeof(previous));
+    gColsBtn[kColBtnBg] = MkRgb(7, 17, 27);
+    gColsBtn[kColBtnText] = MkRgb(220, 230, 240);
+    defer {
+        memcpy(gColsBtn, previous, sizeof(previous));
+    };
+    ImageEditWindow window;
+    window.autoLayout = false;
+    window.font = GetUserGuiFont(StrL("Segoe UI"), 40);
+    CreateCustomArgs args;
+    args.style = WS_OVERLAPPEDWINDOW;
+    args.visible = false;
+    args.font = window.font;
+    args.pos = {0, 0, 640, 600};
+    utassert(window.CreateCustom(args));
+    if (!window.hwnd) return false;
+    DpiScope scope(window.hwnd);
+    ResizeHwndToClientArea(window.hwnd, 640, 600, false);
+    auto* rows = new VBox();
+    rows->alignCross = CrossAxisAlign::Stretch;
+    rows->gap = ImageEditRowPadding();
+    window.staticPathLabel = NewVirtText({.s = StrL("image.png"), .font = window.font});
+    rows->AddChild(window.staticPathLabel);
+    auto* pathRow = new HBox();
+    pathRow->alignCross = CrossAxisAlign::CrossCenter;
+    window.destEdit = new Edit();
+    window.destEdit->Create({.parent = window.hwnd, .withBorder = true, .font = window.font});
+    pathRow->AddChild(window.destEdit, 1);
+    window.btnSave = NewImageEditButton(&window, StrL("Save"), {});
+    pathRow->AddChild(window.btnSave);
+    rows->AddChild(pathRow);
+    auto* infoRow = new HBox();
+    infoRow->alignCross = CrossAxisAlign::CrossCenter;
+    window.staticInfoLabel = NewVirtText({.s = StrL("640 x 480"), .font = window.font});
+    infoRow->AddChild(window.staticInfoLabel, 1);
+    window.btnCrop = NewImageEditButton(&window, StrL("Crop"), {});
+    infoRow->AddChild(window.btnCrop);
+    rows->AddChild(infoRow);
+    window.controlLayout = new Padding(rows, DpiScaledInsets(kRowPadding, kButtonPadding));
+    window.layout = window.controlLayout;
+    window.imgW = 640;
+    window.imgH = 480;
+    CalcImageLayout(&window);
+    LayoutControls(&window);
+    Rect client = HwndClientRect(window.hwnd);
+    utassert(window.controlLayout->lastBounds.Bottom() <= client.Bottom());
+    utassert(window.btnCrop->lastBounds.Bottom() <= client.Bottom());
+    utassert(window.btnSave->GetColor(kColBtnBg) == gColsBtn[kColBtnBg]);
+    utassert(window.btnSave->GetColor(kColBtnText) == gColsBtn[kColBtnText]);
+    utassert(!IsWindowVisible(window.hwnd));
+    return true;
+}
+#endif

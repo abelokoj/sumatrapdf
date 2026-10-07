@@ -1,5 +1,5 @@
 // gen-settings.ts - replaces Go "-gen-settings" flag
-// Generates src/Settings.h, website HTML docs, and markdown docs from settings definitions
+// Generates src/Settings.h, src/Settings.cpp, website HTML docs, and markdown docs from settings definitions
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -1148,6 +1148,12 @@ const fileState: Field[] = [
   ),
   compactStruct("WindowPos", windowPos, "default position (can be on any monitor)").structName("Rect"),
   field("ShowToc", Bool, true, "if true, show the table of contents (Bookmarks) sidebar when the document has one"),
+  field(
+    "SidebarView",
+    Str,
+    null,
+    "what the sidebar's top panel shows: bookmarks (the default), thumbnails or favorites",
+  ).ver("3.7"),
   field("SidebarDx", Int, 0, "width of the bookmarks / favorites sidebar in screen pixels, as last resized"),
   field("DisplayR2L", Bool, false, "if true, the document is displayed right-to-left in facing and book view modes"),
   field(
@@ -1200,6 +1206,7 @@ const fileStateLayout = [
   "Himl",
   "FilePath",
   "DecryptionKey",
+  "SidebarView",
   "DisplayMode",
   "Zoom",
   "BgCol",
@@ -1253,6 +1260,7 @@ const tabState: Field[] = [
     "PointF",
   ),
   field("ShowToc", Bool, true, "if true, the table of contents was shown when the document was closed"),
+  field("SidebarView", Str, null, "what the sidebar's top panel showed: bookmarks, thumbnails or favorites").ver("3.7"),
   compactArray("TocState", Int, null, "which table of contents items were expanded (see FileStates -> TocState)"),
 ];
 
@@ -1353,7 +1361,8 @@ const globalPrefs: Field[] = [
     .doc("valid values: thumbnails, list"),
   field("HomePageMaxRecentItems", Int, 30, "maximum recent documents shown on the home page, from 1 to 200"),
   field("TabListVisibleItems", Int, 10, "maximum visible rows in the open-file tab list, from 1 to 50"),
-  field("ScrollbarWidth", Int, 20, "app scrollbar width in logical pixels, from 8 to 40"),
+  field("ScrollbarWidth", Int, 30, "app scrollbar width in logical pixels, from 8 to 60"),
+  field("ScrollbarWidthExpanded", Bool, false, "saved scrollbar width has been expanded once").internal(),
   field(
     "HomePageThumbnailSize",
     Int,
@@ -1477,7 +1486,18 @@ const globalPrefs: Field[] = [
     "if true, the find UI is a floating, movable window with a results list " +
       "instead of the compact toolbar overlay",
   ).ver("3.7"),
-  field("ShowFavorites", Bool, false, "if true, show the Favorites sidebar"),
+  field(
+    "ShowFavorites",
+    Bool,
+    false,
+    "if true, show the sidebar's bottom panel: Favorites, unless SidebarBottomView says otherwise",
+  ),
+  field(
+    "SidebarBottomView",
+    Str,
+    null,
+    "what the sidebar's bottom panel shows: favorites (the default), bookmarks or thumbnails",
+  ).ver("3.7"),
   field(
     "SortFavoritesByName",
     Bool,
@@ -2413,6 +2433,26 @@ function buildStruct(struc: Field, built: Record<string, number>): string {
   return s1 + s2;
 }
 
+// Settings.cpp defines the metadata for (de)serializing the structs; the tables
+// code outside it uses are declared extern in Settings.h, the rest stay static
+const exportedMetadata = [
+  "gSettingsInfo",
+  "gThemesInfo",
+  "gFileStateInfo",
+  "gFileStateFields",
+  "gSessionDataInfo",
+  "gTabStateInfo",
+  "gFavoriteInfo",
+  "gFileEBookUIInfo",
+];
+
+// extern declarations of exportedMetadata, filled by buildMetaData
+const metadataExterns: string[] = [];
+
+function metadataStorage(name: string): string {
+  return exportedMetadata.includes(name) ? "" : "static ";
+}
+
 function buildMetaData(struc: Field, built: Record<string, number>): string {
   const lines: string[] = [];
   const names: string[] = [];
@@ -2454,7 +2494,12 @@ function buildMetaData(struc: Field, built: Record<string, number>): string {
     }
     data.push(dataLine);
   }
-  lines.push(`static const FieldInfo g${fullName}Fields[] = {`);
+  const fieldsName = `g${fullName}Fields`;
+  if (exportedMetadata.includes(fieldsName)) {
+    // with its size: callers take dimof() of it
+    metadataExterns.push(`extern const FieldInfo ${fieldsName}[${data.length}];`);
+  }
+  lines.push(`${metadataStorage(fieldsName)}const FieldInfo ${fieldsName}[] = {`);
   lines.push(...formatArrayLines(data));
   lines.push("};");
   const constStr = fullName !== "FileState" ? "const " : "";
@@ -2471,8 +2516,12 @@ function buildMetaData(struc: Field, built: Record<string, number>): string {
       break;
     }
   }
+  const infoName = `g${fullName}Info`;
+  if (exportedMetadata.includes(infoName)) {
+    metadataExterns.push(`extern ${constStr}StructInfo ${infoName};`);
+  }
   lines.push(
-    `static ${constStr}StructInfo g${fullName}Info = { sizeof(${struc.StructName}), ${names.length}, g${fullName}Fields, "${namesStr}", "${commentsStr}", ${couldBeTemporary} };`,
+    `${metadataStorage(infoName)}${constStr}StructInfo ${infoName} = { sizeof(${struc.StructName}), ${names.length}, ${fieldsName}, "${namesStr}", "${commentsStr}", ${couldBeTemporary} };`,
   );
   return lines.join("\n");
 }
@@ -2514,17 +2563,36 @@ constexpr float kInvalidZoom = -99.0F;
 
 {{structDef}}
 
-#ifdef INCLUDE_SETTINGSSTRUCTS_METADATA
+// NOLINTEND(modernize-use-designated-initializers)
+
+// (de)serialization metadata, defined in Settings.cpp
+struct FieldInfo;
+struct StructInfo;
+{{metadataExterns}}
+`;
+
+const settingsStructsCpp = `// !!!!! This file is auto-generated by cmd/gen-settings.ts
+
+/* Copyright 2026 the SumatraPDF project authors (see AUTHORS file).
+   License: Simplified BSD (see COPYING) */
+
+#include "base/Base.h"
+#include "base/SettingsUtil.h"
+
+#include "Settings.h"
+
+// NOLINTBEGIN(modernize-use-designated-initializers)
 
 {{structMetadata}}
 
 // NOLINTEND(modernize-use-designated-initializers)
-#endif
 `;
 
-function genSettingsStruct(): string {
+// returns [Settings.h, Settings.cpp]
+function genSettingsStruct(): [string, string] {
   const builtDef: Record<string, number> = {};
   const builtMeta: Record<string, number> = {};
+  metadataExterns.length = 0;
   let structDef = buildStruct(inkPenProfile("InkPenProfile", 100), builtDef);
   builtDef.InkPenProfile = 1;
   structDef += buildStruct(globalPrefsStruct, builtDef);
@@ -2533,10 +2601,14 @@ function genSettingsStruct(): string {
   structDef += buildStruct(themesStruct, builtDef);
   structMetaData += buildMetaData(themesStruct, builtMeta);
 
-  let content = settingsStructsHeader;
-  content = content.replaceAll("{{structDef}}", structDef);
-  content = content.replaceAll("{{structMetadata}}", structMetaData);
-  return content;
+  if (metadataExterns.length !== exportedMetadata.length) {
+    throw new Error(`exportedMetadata names tables that weren't generated: ${exportedMetadata.join(", ")}`);
+  }
+  let header = settingsStructsHeader;
+  header = header.replaceAll("{{structDef}}", structDef);
+  header = header.replaceAll("{{metadataExterns}}", metadataExterns.join("\n"));
+  const cpp = settingsStructsCpp.replaceAll("{{structMetadata}}", structMetaData);
+  return [header, cpp];
 }
 
 // ---------------------------------------------------------------------------
@@ -3062,16 +3134,17 @@ export async function main(opts?: { formatOutput?: boolean }) {
   const helpURI = `For documentation, see https://www.sumatrapdfreader.org/settings/settings${verUrlized}.html`;
   globalPrefs[0].Comment = helpURI;
 
-  // Generate C header
-  let s = genSettingsStruct();
-  s = s.replaceAll("\t", "    ");
+  // Generate C header and its .cpp with the metadata
+  const [header, cpp] = genSettingsStruct();
   const settingsPath = join("src", "Settings.h");
-  writeFileMust(settingsPath, s);
+  const settingsCppPath = join("src", "Settings.cpp");
+  writeFileMust(settingsPath, header.replaceAll("\t", "    "));
+  writeFileMust(settingsCppPath, cpp.replaceAll("\t", "    "));
   if (opts?.formatOutput !== false) {
     const rootDir = join(import.meta.dir, "..");
-    await clangFormatFiles(rootDir, [settingsPath]);
+    await clangFormatFiles(rootDir, [settingsPath, settingsCppPath]);
   }
-  console.log(`Wrote '${settingsPath}'`);
+  console.log(`Wrote '${settingsPath}' and '${settingsCppPath}'`);
 
   // Generate settings markdown
   const mdPath = join(websiteDocsDir, "Advanced-options-settings.md");

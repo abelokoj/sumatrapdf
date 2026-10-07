@@ -5,6 +5,7 @@
 #include "base/Win.h"
 #include "base/File.h"
 #include "base/Timer.h"
+#include "base/Pixmap.h"
 
 #include "gui/Dpi.h"
 
@@ -46,11 +47,69 @@
 
 static constexpr int kSettingsMaxWidth = 900;
 static constexpr int kSettingsMinWidth = 560;
+#if IS_DEBUG
+static double settingsComboMs, settingsCheckMs;
+#endif
 
 enum class SettingsView {
     Visible,
     Hidden
 };
+
+struct SettingsWnd;
+
+struct SettingsMoveBatch {
+    struct Move {
+        HWND hwnd;
+        Rect bounds;
+    };
+    Vec<Move> moves;
+    Rect viewport{};
+    WindowBase* themeWindow = nullptr;
+    bool createdControls = false;
+    static thread_local SettingsMoveBatch* active;
+    SettingsMoveBatch() {
+        ReportIf(active);
+        active = this;
+    }
+    ~SettingsMoveBatch() { ReportIf(active); }
+    void Apply() {
+        active = nullptr;
+        HDWP batch = BeginDeferWindowPos(len(moves));
+        constexpr UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW;
+        for (auto& move : moves) {
+            if (!batch) break;
+            Rect r = move.bounds;
+            batch = DeferWindowPos(batch, move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, flags);
+        }
+        if (!batch || !EndDeferWindowPos(batch)) {
+            for (auto& move : moves) {
+                Rect r = move.bounds;
+                SetWindowPos(move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, flags);
+            }
+        }
+        if (createdControls && themeWindow) themeWindow->UpdateTheme();
+    }
+};
+thread_local SettingsMoveBatch* SettingsMoveBatch::active = nullptr;
+
+static void SetSettingsControlBounds(ControlBase* control, Rect bounds) {
+    if (!SettingsMoveBatch::active) {
+        control->ControlBase::SetBounds(bounds);
+        return;
+    }
+    control->lastBounds = bounds;
+    bounds.x += control->insets.left;
+    bounds.y += control->insets.top;
+    bounds.dx -= control->insets.left + control->insets.right;
+    bounds.dy -= control->insets.top + control->insets.bottom;
+    if (control->mapRtlX) bounds.x = HwndMapChildXForRtlParent(GetParent(control->hwnd), bounds.x, bounds.dx);
+    if (!SettingsMoveBatch::active->viewport.IsEmpty() &&
+        bounds.Intersect(SettingsMoveBatch::active->viewport).IsEmpty())
+        return;
+    if (ChildPosWithinParent(control->hwnd) != bounds)
+        VecAppend(SettingsMoveBatch::active->moves, {control->hwnd, bounds});
+}
 
 struct SettingsLabel : VirtText {
     Str display;
@@ -131,6 +190,10 @@ struct SettingsMetrics {
 static SettingsMetrics settingsMetrics;
 
 struct SettingsDropDown : DropDown {
+    SettingsWnd* window = nullptr;
+    void SetBounds(Rect bounds) override;
+    void PrepareFocus() override;
+    bool EnsureNative();
     PlatformFont* measuredFont = nullptr;
     StrVec measuredItems;
     Size measuredSize;
@@ -143,16 +206,16 @@ struct SettingsDropDown : DropDown {
     Size GetIdealSize() override {
         bool sameItems = len(items) == len(measuredItems);
         for (int i = 0; sameItems && i < len(items); i++) sameItems = str::Eq(items[i], measuredItems[i]);
-        int height = HwndWindowRect(hwnd).dy;
+        int height = std::max(hwnd ? HwndWindowRect(hwnd).dy : deferredHeight, lastBounds.dy);
         HWND edit = CbEditHwnd(hwnd);
-        DWORD margins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : 0;
+        DWORD margins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : deferredMargins;
         if (sameItems && measuredFont == font && measuredDpi == DpiGet() && measuredIdealDx == idealDx &&
-            measuredMaxDx == maxDx && measuredHeight == height && measuredMargins == margins)
-            return measuredSize;
+            measuredMaxDx == maxDx && measuredHeight <= height && measuredMargins == margins)
+            return {measuredSize.dx, std::max(measuredSize.dy, height)};
         SettingsDropDownMetric* found = nullptr;
         for (auto* entry : settingsMetrics.entries) {
             if (entry->font != font || entry->dpi != DpiGet() || entry->idealDx != idealDx || entry->maxDx != maxDx ||
-                entry->height != height || entry->margins != margins || len(entry->items) != len(items))
+                entry->height > height || entry->margins != margins || len(entry->items) != len(items))
                 continue;
             bool same = true;
             for (int i = 0; same && i < len(items); i++) same = str::Eq(entry->items[i], items[i]);
@@ -163,6 +226,7 @@ struct SettingsDropDown : DropDown {
         }
         if (found) {
             measuredSize = found->size;
+            measuredSize.dy = std::max(measuredSize.dy, height);
 #if IS_DEBUG
             settingsMetrics.reused++;
 #endif
@@ -263,12 +327,57 @@ struct SettingsForm : Table {
 };
 
 struct SettingsCheckbox : Checkbox {
+    PlatformFont* measuredFont = nullptr;
+    Size measuredText{};
+    int glyphSize = 0;
+    void SetBounds(Rect bounds) override { SetSettingsControlBounds(this, bounds); }
+    int GlyphSize() {
+        if (measuredFont != font) {
+            measuredText = PlatformFontMeasureText(font, GetTextTemp());
+            glyphSize = std::max(UiScalePx(20), PlatformFontLineHeight(font));
+            measuredFont = font;
+        }
+        return glyphSize;
+    }
+
+    Size GetIdealSize() override {
+        int glyph = GlyphSize();
+        return {measuredText.dx + glyph + UiScalePx(8), std::max(measuredText.dy, glyph) + UiScalePx(4)};
+    }
+
+    void Paint(HDC dc) {
+        Rect bounds = HwndClientRect(hwnd);
+        GfxHdc gfx(dc);
+        gfx.FillRect(bounds, ThemeWindowBackgroundColor());
+        int size = GlyphSize();
+        bool rtl = HwndIsRtl(hwnd);
+        Rect box{rtl ? bounds.dx - size : 0, UiScalePx(2), size, size};
+        bool enabled = IsWindowEnabled(hwnd);
+        Color edge = enabled ? ThemeEdgeColor() : ThemeDisabledEdgeColor();
+        gfx.FillRoundedRect(box, UiScalePx(4), ThemeWindowControlBackgroundColor(), edge);
+        if (IsChecked()) {
+            Color green = IsLightColor(ThemeWindowBackgroundColor()) ? MkRgb(17, 120, 58) : MkRgb(93, 230, 145);
+            auto* glyphFont = GetUserGuiFont(StrL("Segoe UI Symbol"), size);
+            gfx.DrawText(StrL("✓"), box, gfxTextCenter | gfxTextVCenter, glyphFont,
+                         enabled ? green : SysDisabledTextColor());
+        }
+        int offset = size + UiScalePx(8);
+        Rect label{rtl ? 0 : offset, UiScalePx(2), std::max(1, bounds.dx - offset), bounds.dy - UiScalePx(2)};
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, enabled ? ThemeWindowTextColor() : SysDisabledTextColor());
+        UINT flags = DT_WORDBREAK | (rtl ? DT_RIGHT | DT_RTLREADING : DT_LEFT);
+        if (SendMessageW(hwnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEACCEL) flags |= DT_HIDEPREFIX;
+        HdcDrawText(dc, GetTextTemp(), label, flags, font->GetHFont());
+        if (GetFocus() == hwnd && !(SendMessageW(hwnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS))
+            gfx.DrawFocusRect(bounds);
+    }
+
     Size Layout(Constraints bc) override {
         Size size = GetIdealSize();
         int padX = insets.left + insets.right;
         int padY = insets.top + insets.bottom;
         if (bc.HasBoundedWidth() && size.dx > bc.max.dx - padX) {
-            int glyph = DpiGetSystemMetrics(SM_CXMENUCHECK) + UiScalePx(8);
+            int glyph = GlyphSize() + UiScalePx(8);
             Size text = PlatformFontMeasureText(font, GetTextTemp(), std::max(1, bc.max.dx - padX - glyph));
             size.dy = std::max(size.dy, text.dy + DpiScale(4));
         }
@@ -277,34 +386,128 @@ struct SettingsCheckbox : Checkbox {
     }
 };
 
+static LRESULT CALLBACK SettingsCheckboxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* checkbox = (SettingsCheckbox*)data;
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        PAINTSTRUCT ps{};
+        HDC dc = msg == WM_PAINT ? BeginPaint(hwnd, &ps) : (HDC)wp;
+        if (dc) checkbox->Paint(dc);
+        if (msg == WM_PAINT) EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, SettingsCheckboxProc, id);
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    if (msg == BM_SETCHECK || msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_UPDATEUISTATE || msg == WM_ENABLE)
+        InvalidateRect(hwnd, nullptr, FALSE);
+    return result;
+}
+
 struct SettingsViewport : ScrollBox {
+    struct ControlClip {
+        HWND hwnd = nullptr;
+        Size size{};
+        Rect clip{};
+        int dpi = 0;
+        HFONT font = nullptr;
+        bool valid = false;
+    };
+    Vec<ControlClip> clips;
+#if IS_DEBUG
+    int clipUpdates = 0;
+    int clipPasses = 0;
+#endif
     int wheelRemainder = 0;
+    bool moving = false;
+    WindowBase* themeWindow = nullptr;
     explicit SettingsViewport(ILayout* child) : ScrollBox(child) {}
-    void ClipControls(ILayout* node) {
-        if (auto* control = node->AsControl()) {
-            Rect bounds = ChildPosWithinParent(control->hwnd);
-            Rect clip = bounds.Intersect(lastBounds);
-            clip.x -= bounds.x;
-            clip.y -= bounds.y;
-            HRGN region = CreateRectRgn(clip.x, clip.y, clip.x + clip.dx, clip.y + clip.dy);
-            HRGN rounded = RoundedControlRegion(control->hwnd, bounds.Size());
-            if (rounded) {
-                CombineRgn(region, region, rounded, RGN_AND);
-                DeleteObject(rounded);
-            }
-            HRGN current = CreateRectRgn(0, 0, 0, 0);
-            bool unchanged = GetWindowRgn(control->hwnd, current) != ERROR && EqualRgn(current, region);
-            DeleteObject(current);
-            if (unchanged || !SetWindowRgn(control->hwnd, region, FALSE))
-                DeleteObject(region);
-            else
-                InvalidateRect(control->hwnd, nullptr, FALSE);
+    void ClipControl(ControlBase* control) {
+        if (!control->hwnd) return;
+        int index = 0;
+        while (index < len(clips) && clips[index].hwnd != control->hwnd) index++;
+        bool outside = control->lastBounds.Intersect(lastBounds).IsEmpty();
+        if (outside && index < len(clips) && clips[index].valid && clips[index].clip.IsEmpty()) return;
+        Rect bounds = ChildPosWithinParent(control->hwnd);
+        Rect logical = control->lastBounds;
+        Rect clip = logical.Intersect(lastBounds).IsEmpty() ? Rect{} : bounds.Intersect(lastBounds);
+        clip.x -= bounds.x;
+        clip.y -= bounds.y;
+        if (clip.IsEmpty()) clip = {};
+        if (index == len(clips)) VecAppend(clips, {.hwnd = control->hwnd});
+        auto& cached = clips[index];
+        int dpi = DpiGetForHwnd(control->hwnd);
+        HFONT font = (HFONT)SendMessageW(control->hwnd, WM_GETFONT, 0, 0);
+        if (cached.valid && cached.size == bounds.Size() && cached.clip == clip && cached.dpi == dpi &&
+            cached.font == font)
+            return;
+#if IS_DEBUG
+        clipUpdates++;
+#endif
+        HRGN region = CreateRectRgn(clip.x, clip.y, clip.x + clip.dx, clip.y + clip.dy);
+        if (!region) return;
+        HRGN rounded = RoundedControlRegion(control->hwnd, bounds.Size());
+        if (rounded) {
+            CombineRgn(region, region, rounded, RGN_AND);
+            DeleteObject(rounded);
         }
+        HRGN current = CreateRectRgn(0, 0, 0, 0);
+        bool unchanged = GetWindowRgn(control->hwnd, current) != ERROR && EqualRgn(current, region);
+        DeleteObject(current);
+        bool applied = unchanged || SetWindowRgn(control->hwnd, region, FALSE);
+        if (unchanged || !applied)
+            DeleteObject(region);
+        else
+            InvalidateRect(control->hwnd, nullptr, FALSE);
+        cached = {control->hwnd, bounds.Size(), clip, dpi, font, applied};
+    }
+    void ClipControls(ILayout* node) {
+#if IS_DEBUG
+        if (node == child) clipPasses++;
+#endif
+        if (auto* control = node->AsControl()) ClipControl(control);
         for (int i = 0; i < node->LayoutChildCount(); i++) ClipControls(node->LayoutChildAt(i));
     }
     void SetBounds(Rect bounds) override {
+        moving = true;
+        SettingsMoveBatch batch;
+        batch.viewport = bounds;
+        batch.themeWindow = themeWindow;
         ScrollBox::SetBounds(bounds);
+        batch.Apply();
         ClipControls(child);
+        moving = false;
+        Repaint();
+    }
+    void Repaint() {
+        RECT area = ToRECT(lastBounds);
+        RedrawWindow(GetHwnd(), &area, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    }
+    bool ScrollTo(int y) {
+        if (moving) return false;
+        moving = true;
+        SettingsMoveBatch batch;
+        batch.viewport = lastBounds;
+        batch.themeWindow = themeWindow;
+        bool changed = ScrollBox::ScrollTo(y);
+        batch.Apply();
+        if (changed) ClipControls(child);
+        moving = false;
+        if (changed) Repaint();
+        return changed;
+    }
+    bool ScrollBy(int dy) { return ScrollTo((int)std::clamp<int64_t>((int64_t)scrollY + dy, 0, MaxScrollY())); }
+    void OnVScroll(WPARAM wp) {
+        if (moving) return;
+        int previous = scrollY;
+        moving = true;
+        SettingsMoveBatch batch;
+        batch.viewport = lastBounds;
+        batch.themeWindow = themeWindow;
+        ScrollBox::OnVScroll(wp);
+        batch.Apply();
+        if (scrollY != previous) ClipControls(child);
+        moving = false;
+        if (scrollY != previous) Repaint();
     }
     void Wheel(int delta) {
         UINT lines = 3;
@@ -316,14 +519,19 @@ struct SettingsViewport : ScrollBox {
         int64_t pixels = (int64_t)wheelRemainder - (int64_t)delta * step;
         int dy = (int)std::clamp<int64_t>(pixels / WHEEL_DELTA, INT_MIN, INT_MAX);
         wheelRemainder = (int)(pixels % WHEEL_DELTA);
-        if (ScrollBy(dy)) ClipControls(child);
+        ScrollBy(dy);
     }
 };
 
 // Section headers, labels and OK/Cancel are VirtCtrl; layout/zoom/command
 // combos and the checkboxes are HWNDs. Same WindowBase layout as Inverse Search.
 struct SettingsWnd : WindowBase {
-    ~SettingsWnd() override { str::Free(colorFile); }
+    ~SettingsWnd() override {
+        str::Free(colorFile);
+        delete captionPixmap;
+        str::Free(cacheKey);
+        for (auto& value : savedValues) str::Free(value.text);
+    }
 
     MainWindow* win = nullptr;
     Str colorFile;
@@ -381,6 +589,21 @@ struct SettingsWnd : WindowBase {
 
     VirtButton* btnCancel = nullptr;
     VirtButton* btnOk = nullptr;
+    HBox* caption = nullptr;
+    VirtText* captionTitle = nullptr;
+    VirtCloseButton* captionClose = nullptr;
+    Pixmap* captionPixmap = nullptr;
+    struct SavedValue {
+        ControlBase* control;
+        Str text;
+        int selection;
+        bool checked;
+        bool checkbox;
+    };
+    Vec<SavedValue> savedValues;
+    Str cacheKey;
+    void SaveValues();
+    void RestoreValues();
 
     bool Create(MainWindow* win, SettingsView view = SettingsView::Visible);
     void FillLayout();
@@ -544,6 +767,81 @@ void SettingsWnd::RestoreDataFolder(VirtMouseEvent*) {
 
 static SettingsWnd* gSettingsWnd = nullptr;
 
+static TempStr SettingsCacheKey(MainWindow* win) {
+    double values[] = {gSettings->defaultZoomFloat,
+                       gSettings->interfaceScale,
+                       gSettings->uIFontSize,
+                       gSettings->treeFontSize,
+                       gSettings->homePageThumbnailSize,
+                       gSettings->toolbarSize,
+                       gSettings->homePageMaxRecentItems,
+                       gSettings->tabListVisibleItems,
+                       gSettings->scrollbarWidth,
+                       gSettings->minTabWidth,
+                       gSettings->citationHoverDelay,
+                       gSettings->penMinWidth,
+                       gSettings->penMaxWidth,
+                       gSettings->penWidthStep,
+                       (double)gSettings->showToc,
+                       (double)gSettings->rememberStatePerDocument,
+                       (double)gSettings->useTabs,
+                       (double)gSettings->checkForUpdates,
+                       (double)gSettings->rememberOpenedFiles,
+                       (double)gSettings->enableTeXEnhancements,
+                       (double)ThemeGetCurrentIndex(),
+                       (double)(win ? DpiGetForHwnd(win->hwndFrame) : DpiGet())};
+    str::Builder key;
+    for (double value : values) key.Append(fmt("%.17g|", value));
+    Str strings[] = {gSettings->defaultDisplayMode,   gSettings->uIFontFamily, gSettings->uiLanguage,
+                     gSettings->inverseSearchCmdLine, GetAppDataDirTemp(),     GetPendingDataDirTemp()};
+    for (Str value : strings) {
+        key.Append(fmt("%d:", len(value)));
+        key.Append(value);
+    }
+    auto* model = win ? win->AsFixed() : nullptr;
+    if (model && EngineUsesDocumentColorsFollowTheme(model->GetEngine()) &&
+        !EngineUsesReflowThemeCss(model->GetEngine())) {
+        Str file = model->GetFilePath();
+        key.Append(fmt("%d:", len(file)));
+        key.Append(file);
+        key.Append(fmt("|%u|%u", model->pageTextColor, model->pageBackgroundColor));
+    }
+    return ToStrTemp(key);
+}
+
+void SettingsWnd::SaveValues() {
+    for (auto& value : savedValues) str::Free(value.text);
+    VecReset(savedValues);
+    DropDown* drops[] = {dropLayout,       dropZoom,           dropInverse,       dropUiFamily,    dropInterfaceScale,
+                         dropUiSize,       dropTreeSize,       dropThumbnailSize, dropToolbarSize, dropRecentCount,
+                         dropTabListCount, dropScrollbarWidth, dropMinTabWidth,   dropHoverDelay,  dropPenMin,
+                         dropPenMax,       dropPenStep,        dropPageText,      dropPageBg};
+    for (auto* drop : drops)
+        if (drop)
+            VecAppend(savedValues, {drop, str::Dup(drop->GetTextTemp()), CbGetCurrentSelection(drop), false, false});
+    Checkbox* checks[] = {chkReferenceHover, chkShowToc,      chkRememberState,
+                          chkUseTabs,        chkCheckUpdates, chkRememberOpened};
+    for (auto* check : checks) VecAppend(savedValues, {check, {}, -1, check->IsChecked(), true});
+    str::ReplaceWithCopy(&cacheKey, SettingsCacheKey(win));
+}
+
+void SettingsWnd::RestoreValues() {
+    for (auto& value : savedValues) {
+        if (value.checkbox) {
+            ((Checkbox*)value.control)->SetState(value.checked ? Checkbox::State::Checked : Checkbox::State::Unchecked);
+            continue;
+        }
+        auto* drop = (DropDown*)value.control;
+        if (CbGetCurrentSelection(drop) == value.selection && str::Eq(drop->GetTextTemp(), value.text)) continue;
+        if (value.selection >= 0)
+            CbSetCurrentSelection(drop, value.selection);
+        else
+            drop->SetText(value.text);
+    }
+    OnReferenceHoverChanged();
+    OnRememberOpenedChanged();
+}
+
 static void ClearSettingsWnd() {
     gSettingsWnd = nullptr;
 }
@@ -652,7 +950,8 @@ void SettingsWnd::OnRememberOpenedChanged() {
 }
 
 void SettingsWnd::OnCancel(VirtMouseEvent*) {
-    ScheduleDelete();
+    SetIsVisible(false);
+    win = nullptr;
 }
 
 void SettingsWnd::OnOk(VirtMouseEvent*) {
@@ -675,7 +974,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         if (valid) continue;
         MessageBoxW(hwnd, CWStrTemp(Tr("Enter a color such as #202020, choose a color, or select Use theme.")),
                     CWStrTemp(Tr("Check color")), MB_OK | MB_ICONWARNING);
-        SetFocus(colorDrops[i]->hwnd);
+        colorDrops[i]->SetFocus();
         return;
     }
     struct NumberField {
@@ -695,7 +994,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         {dropToolbarSize, Tr("UI icon size"), StrL("px"), 8, 64},
         {dropRecentCount, Tr("Recent documents shown"), {}, 1, 200},
         {dropTabListCount, Tr("Visible open-file list rows"), {}, 1, 50},
-        {dropScrollbarWidth, Tr("Scrollbar width"), StrL("px"), 8, 40},
+        {dropScrollbarWidth, Tr("Scrollbar width"), StrL("px"), 8, 60},
         {dropMinTabWidth, Tr("Minimum tab width"), StrL("px"), 60, 400},
         {dropHoverDelay, Tr("Reference preview delay"), StrL("ms"), 0, 2000},
         {dropPenMin, Tr("Minimum width"), StrL("pt"), 0.1, 64, false, true},
@@ -713,7 +1012,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
             fmt("%s: %s %g–%g %s.%s", field.label, Tr("Enter a value in the range"), field.minimum, field.maximum,
                 field.unit, field.automatic ? fmt(" %s", Tr("Use Automatic (Windows) for the default size.")) : Str{});
         MessageBoxW(hwnd, CWStrTemp(message), CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
-        SetFocus(field.drop->hwnd);
+        field.drop->SetFocus();
         return;
     }
     Str family = dropUiFamily->GetTextTemp();
@@ -724,7 +1023,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     if (!str::EqI(family, StrL("system")) && !IsSettingsFont(family)) {
         MessageBoxW(hwnd, CWStrTemp(Tr("Choose a bundled font or enter the name of an installed Windows font.")),
                     CWStrTemp(Tr("Font unavailable")), MB_OK | MB_ICONWARNING);
-        SetFocus(dropUiFamily->hwnd);
+        dropUiFamily->SetFocus();
         return;
     }
     if (CbGetCurrentSelection(dropZoom) < 0) {
@@ -733,7 +1032,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
             Str message =
                 fmt("%s: %s %g–%g%%.", Tr("Default Zoom"), Tr("Enter a value in the range"), kZoomMin, kZoomMax);
             MessageBoxW(hwnd, CWStrTemp(message), CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
-            SetFocus(dropZoom->hwnd);
+            dropZoom->SetFocus();
             return;
         }
     }
@@ -742,7 +1041,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     if (maximum < minimum) {
         MessageBoxW(hwnd, CWStrTemp(Tr("Maximum pen width must be at least the minimum pen width.")),
                     CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
-        SetFocus(dropPenMax->hwnd);
+        dropPenMax->SetFocus();
         return;
     }
     int layoutIdx = CbGetCurrentSelection(dropLayout);
@@ -771,7 +1070,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->toolbarSize = (int)SelectedNumber(dropToolbarSize, gSettings->toolbarSize, 8, 64, StrL("px"));
     gSettings->homePageMaxRecentItems = (int)SelectedNumber(dropRecentCount, gSettings->homePageMaxRecentItems, 1, 200);
     gSettings->tabListVisibleItems = (int)SelectedNumber(dropTabListCount, gSettings->tabListVisibleItems, 1, 50);
-    gSettings->scrollbarWidth = (int)SelectedNumber(dropScrollbarWidth, gSettings->scrollbarWidth, 8, 40, StrL("px"));
+    gSettings->scrollbarWidth = (int)SelectedNumber(dropScrollbarWidth, gSettings->scrollbarWidth, 8, 60, StrL("px"));
     gSettings->minTabWidth = (int)SelectedNumber(dropMinTabWidth, gSettings->minTabWidth, 60, 400, StrL("px"));
     float penMin = (float)SelectedNumber(dropPenMin, gSettings->penMinWidth, 0.1, 64, StrL("pt"));
     float penMax = (float)SelectedNumber(dropPenMax, gSettings->penMaxWidth, penMin, 64, StrL("pt"));
@@ -819,6 +1118,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
             for (WindowTab* tab : window->Tabs()) {
                 auto* dm = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
                 if (!dm || !str::EqI(dm->GetFilePath(), colorFile)) continue;
+                if (dm->pageTextColor == colors[0] && dm->pageBackgroundColor == colors[1]) continue;
                 gRenderCache->CancelRenderingBlocking(dm);
                 gRenderCache->FreeForDisplayModel(dm);
                 dm->pageTextColor = colors[0];
@@ -835,7 +1135,12 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     ApplySettingsToOpenWindows();
     ScheduleSaveSettings();
     MaybeRedrawHomePage();
-    ScheduleDelete();
+    if (fontsChanged) {
+        ScheduleDelete();
+    } else {
+        startZoom = gSettings->defaultZoomFloat;
+        OnCancel();
+    }
 }
 
 void SettingsWnd::PickPageColor(DropDown* drop) {
@@ -852,9 +1157,10 @@ void SettingsWnd::PickPageColor(DropDown* drop) {
     if (DarkModeChooseColor(&cc)) drop->SetText(SerializeColorTemp(cc.rgbResult));
 }
 
-static void OnClose(WindowBase::CloseEvent* /*ev*/) {
+static void OnClose(WindowBase::CloseEvent* ev) {
     if (gSettingsWnd) {
         gSettingsWnd->OnCancel();
+        ev->e->didHandle = true;
     }
 }
 
@@ -864,19 +1170,38 @@ static void OnDestroy(WindowBase::DestroyEvent* /*ev*/) {
     }
 }
 
-static DropDown* MakeDropDown(HWND parent, PlatformFont* font, bool isRtl, bool editable) {
+static DropDown* MakeDropDown(SettingsWnd* window, PlatformFont* font, bool isRtl, bool editable) {
+#if IS_DEBUG
+    TimeStamp started = TimeGet();
+#endif
     DropDown::CreateArgs args;
-    args.parent = parent;
+    args.parent = window->hwnd;
     args.font = font;
     args.isRtl = isRtl;
     args.isEditable = editable;
     args.deferItems = true;
+    args.visible = false;
     auto* c = new SettingsDropDown();
-    c->Create(args);
+    c->window = window;
+    auto* sample = editable ? window->dropZoom : window->dropLayout;
+    if (sample) {
+        c->DeferCreate(args);
+        c->deferredHeight = sample->GetIdealSize().dy;
+        HWND edit = CbEditHwnd(sample);
+        c->deferredMargins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : 0;
+    } else {
+        c->Create(args);
+    }
+#if IS_DEBUG
+    settingsComboMs += TimeSinceInMs(started);
+#endif
     return c;
 }
 
 static Checkbox* MakeCheckbox(HWND parent, PlatformFont* font, Str text, bool isRtl, bool checked, int topPt) {
+#if IS_DEBUG
+    TimeStamp started = TimeGet();
+#endif
     Checkbox::CreateArgs args;
     args.parent = parent;
     args.text = text;
@@ -889,6 +1214,11 @@ static Checkbox* MakeCheckbox(HWND parent, PlatformFont* font, Str text, bool is
     c->SetInsetsPt(topPt, 0, 0, 0);
     c->Create(args);
     SetWindowLongPtrW(c->hwnd, GWL_STYLE, GetWindowLongPtrW(c->hwnd, GWL_STYLE) | BS_MULTILINE);
+    SetWindowSubclass(c->hwnd, SettingsCheckboxProc, 1, (DWORD_PTR)c);
+    DarkModeUseCustomCheckboxPaint(c->hwnd);
+#if IS_DEBUG
+    settingsCheckMs += TimeSinceInMs(started);
+#endif
     return c;
 }
 
@@ -897,10 +1227,12 @@ static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     if (msg == WM_SETFOCUS) {
         auto* wnd = (SettingsWnd*)data;
         auto* scroll = wnd->scroll;
-        Rect bounds = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, wnd->hwnd);
+        HWND owner = GetParent(hwnd) == wnd->hwnd ? hwnd : GetParent(hwnd);
+        auto* control = ControlFromHwnd(owner);
+        Rect bounds = control ? control->lastBounds : HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, wnd->hwnd);
         Rect view = scroll->lastBounds;
         int delta = bounds.y < view.y ? bounds.y - view.y : std::max(0, bounds.y + bounds.dy - view.y - view.dy);
-        if (delta && scroll->ScrollBy(delta)) scroll->ClipControls(scroll->child);
+        if (!scroll->moving && delta) scroll->ScrollBy(delta);
     }
     if (msg == WM_MOUSEWHEEL) {
         auto* wnd = (SettingsWnd*)data;
@@ -910,12 +1242,49 @@ static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
+static void SettingsFocusStop(SettingsWnd* wnd, ControlBase* control) {
+    if (!control || !control->hwnd) return;
+    ShowWindow(control->hwnd, SW_SHOWNOACTIVATE);
+    SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+    if (HWND edit = CbEditHwnd(control->hwnd)) SetWindowSubclass(edit, SettingsFocusProc, 1, (DWORD_PTR)wnd);
+}
+
 static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
-    if (auto* control = node->AsControl()) {
-        SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
-        if (HWND edit = CbEditHwnd(control->hwnd)) SetWindowSubclass(edit, SettingsFocusProc, 1, (DWORD_PTR)wnd);
-    }
+    if (auto* control = node->AsControl()) SettingsFocusStop(wnd, control);
     for (int i = 0; i < node->LayoutChildCount(); i++) SettingsFocusStops(wnd, node->LayoutChildAt(i));
+}
+
+bool SettingsDropDown::EnsureNative() {
+    if (hwnd) return true;
+    if (!EnsureCreated()) return false;
+    SetColors(ThemeWindowTextColor(), ThemeWindowBackgroundColor());
+    SettingsFocusStop(window, this);
+    if (SettingsMoveBatch::active) SettingsMoveBatch::active->createdControls = true;
+    return true;
+}
+
+void SettingsDropDown::SetBounds(Rect bounds) {
+    lastBounds = bounds;
+    if (!hwnd) {
+        auto* batch = SettingsMoveBatch::active;
+        if (!batch || batch->viewport.IsEmpty() || bounds.Intersect(batch->viewport).IsEmpty()) return;
+        if (!EnsureNative()) return;
+    }
+    SetSettingsControlBounds(this, bounds);
+}
+
+void SettingsDropDown::PrepareFocus() {
+    auto* view = window->scroll;
+    Rect bounds = lastBounds, viewport = view->lastBounds;
+    int delta = bounds.y < viewport.y ? bounds.y - viewport.y : std::max(0, bounds.Bottom() - viewport.Bottom());
+    if (delta) view->ScrollBy(delta);
+    if (hwnd) return;
+    if (!EnsureNative()) return;
+    if (!SettingsMoveBatch::active) {
+        SetSettingsControlBounds(this, lastBounds);
+        window->UpdateTheme();
+        view->ClipControl(this);
+    }
 }
 
 static void OnSettingsMessage(WindowBase::WndProcEvent* ev);
@@ -923,6 +1292,7 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev);
 bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 #if IS_DEBUG
     TimeStamp openingStart = TimeGet();
+    settingsComboMs = settingsCheckMs = 0;
     int measurementsBefore = settingsMetrics.measured, reuseBefore = settingsMetrics.reused;
 #endif
     autoLayout = false;
@@ -940,7 +1310,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         CreateCustomArgs args;
         args.title = Tr("Settings");
         args.visible = false;
-        args.style = WS_POPUPWINDOW | WS_CAPTION | WS_THICKFRAME | WS_VSCROLL;
+        args.style = WS_POPUPWINDOW | WS_THICKFRAME | WS_VSCROLL;
         args.font = GetFont();
         args.icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
         CreateCustom(args);
@@ -951,6 +1321,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     }
     DpiScope dpi(hwnd);
     SetFont(GetAppFont());
+    SettingsMoveBatch initialMoves;
     bool isRtl = IsUIRtl();
 
     auto* vbox = new VBox();
@@ -981,7 +1352,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
             .prefix = true,
         });
         labelLayout = labLayout;
-        dropLayout = MakeDropDown(hwnd, GetFont(), isRtl, false);
+        dropLayout = MakeDropDown(this, GetFont(), isRtl, false);
 
         auto* labZoom = NewSettingsLabel({
             .s = Tr("Default &Zoom:"),
@@ -990,7 +1361,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
             .prefix = true,
         });
         labelZoom = labZoom;
-        dropZoom = MakeDropDown(hwnd, GetFont(), isRtl, true);
+        dropZoom = MakeDropDown(this, GetFont(), isRtl, true);
 
         auto* table = new SettingsForm();
         table->rtl = isRtl;
@@ -1031,7 +1402,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         for (int i = 0; i < 2; i++) {
             table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
                 CrossAxisAlign::CrossCenter;
-            auto* drop = MakeDropDown(hwnd, font, isRtl, true);
+            auto* drop = MakeDropDown(this, font, isRtl, true);
             *drops[i] = drop;
             StrVec presets;
             presets.Append(Tr("Use theme"));
@@ -1077,7 +1448,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                                  &dropHoverDelay,     &dropTabListCount, &dropScrollbarWidth};
         for (int row = 0; row < dimofi(names); row++) {
             auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
-            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, true);
+            auto* drop = MakeDropDown(this, GetFont(), isRtl, true);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
@@ -1108,7 +1479,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         FillNumberChoices(dropToolbarSize, StrL("12|16|18|24|28|32|40|48|64"), gSettings->toolbarSize);
         FillNumberChoices(dropRecentCount, StrL("10|20|30|50|100|200"), gSettings->homePageMaxRecentItems);
         FillNumberChoices(dropTabListCount, StrL("5|10|15|20|30|50"), gSettings->tabListVisibleItems);
-        FillNumberChoices(dropScrollbarWidth, StrL("8|12|16|20|24|28|32|40"), gSettings->scrollbarWidth);
+        FillNumberChoices(dropScrollbarWidth, StrL("8|12|16|20|24|30|36|42|48|60"), gSettings->scrollbarWidth);
         FillNumberChoices(dropHoverDelay, StrL("0|150|300|500|750|1000|2000"),
                           std::max(0, gSettings->citationHoverDelay));
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
@@ -1134,12 +1505,12 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
             dataLocation->AddPlainText(fmt("%s %s", Tr("After restart:"), GetPendingDataDirTemp()));
         }
         vbox->AddChild(dataLocation);
-        auto* details = new VirtRichText();
-        details->font = font;
-        details->AddPlainText(
-            Tr("Settings, dictionaries, saved vocabulary, practice progress and reading history use this folder. PDF "
-               "annotations remain in their PDF files. Folder changes apply after restart; originals are kept."));
-        vbox->AddChild(details);
+        vbox->AddChild(NewSettingsLabel(
+            {.s = Tr(
+                 "Settings, dictionaries, saved vocabulary, practice progress and reading history use this folder. PDF "
+                 "annotations remain in their PDF files. Folder changes apply after restart; originals are kept."),
+             .font = font,
+             .isRtl = isRtl}));
         auto* choose = NewThemedButton(hwnd, Tr("Choose data folder..."), font, false);
         choose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ChooseDataFolder>(this);
         auto* reset = NewThemedButton(hwnd, Tr("Use default folder"), font, false);
@@ -1154,12 +1525,11 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         folderActions->AddChild(reset);
         vbox->AddChild(folderActions);
         if (IsDataFolderOverridden() || gForTesting) {
-            auto* explanation = new VirtRichText();
-            explanation->font = font;
-            explanation->AddPlainText(
-                Tr("This session uses a command-line or testing data folder. Restart normally to change the persistent "
-                   "location."));
-            vbox->AddChild(explanation);
+            vbox->AddChild(NewSettingsLabel({.s = Tr("This session uses a command-line or testing data folder. Restart "
+                                                     "normally to change the persistent "
+                                                     "location."),
+                                             .font = font,
+                                             .isRtl = isRtl}));
         }
     }
 
@@ -1178,7 +1548,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         DropDown** controls[] = {&dropPenMin, &dropPenMax, &dropPenStep};
         for (int row = 0; row < 3; row++) {
             auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl});
-            auto* drop = MakeDropDown(hwnd, GetFont(), isRtl, true);
+            auto* drop = MakeDropDown(this, GetFont(), isRtl, true);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
@@ -1225,12 +1595,11 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     chkCheckUpdates = MakeCheckbox(hwnd, GetFont(), Tr("Check for Enhanced releases automatically"), isRtl,
                                    gSettings && gSettings->checkForUpdates, 0);
     vbox->AddChild(chkCheckUpdates);
-    auto* updateHelp = new VirtRichText();
-    updateHelp->font = font;
-    updateHelp->AddPlainText(
-        Tr("Checks GitHub at most once a day. Downloads start only when you choose them. Use Help > Check for updates "
-           "at any time."));
-    vbox->AddChild(updateHelp);
+    vbox->AddChild(NewSettingsLabel({.s = Tr("Checks GitHub at most once a day. Downloads start only when you choose "
+                                             "them. Use Help > Check for updates "
+                                             "at any time."),
+                                     .font = font,
+                                     .isRtl = isRtl}));
 
     chkRememberOpened = MakeCheckbox(hwnd, GetFont(), Tr("Remember &opened files"), isRtl,
                                      gSettings && gSettings->rememberOpenedFiles, 4);
@@ -1256,7 +1625,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         labelCmdLine = lab;
         vbox->AddChild(lab);
 
-        dropInverse = MakeDropDown(hwnd, GetFont(), isRtl, true);
+        dropInverse = MakeDropDown(this, GetFont(), isRtl, true);
         vbox->AddChild(dropInverse);
         FillInverse();
     }
@@ -1265,6 +1634,29 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
     root->gap = UiScalePx(12);
+    caption = new HBox();
+    caption->alignCross = CrossAxisAlign::CrossCenter;
+    caption->gap = UiScalePx(8);
+    int iconSize = PlatformFontLineHeight(font);
+    HICON icon = (HICON)LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, iconSize,
+                                   iconSize, 0);
+    captionPixmap = icon ? PixmapFromHICON(icon) : nullptr;
+    if (icon) DestroyIcon(icon);
+    if (captionPixmap) {
+        auto* badge = new VirtImage();
+        badge->pixmap = captionPixmap;
+        caption->AddChild(badge);
+    }
+    captionTitle = NewSettingsLabel({.s = Tr("Settings"), .font = font, .isRtl = isRtl});
+    caption->AddChild(captionTitle, 1);
+    captionClose = new VirtCloseButton();
+    int closeSize = std::max(UiScalePx(20), PlatformFontLineHeight(font));
+    captionClose->idealSize = {closeSize + UiScalePx(8), closeSize + UiScalePx(8)};
+    captionClose->padding = Insets{UiScalePx(4), UiScalePx(4), UiScalePx(4), UiScalePx(4)};
+    captionClose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::OnCancel>(this);
+    captionClose->SetTooltip(Tr("Close"));
+    caption->AddChild(captionClose);
+    root->AddChild(caption);
     scroll = new SettingsViewport(vbox);
     scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
     root->AddChild(scroll, 1);
@@ -1286,6 +1678,10 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 
     int pad = UiScalePx(16);
     layout = new Padding(root, Insets{pad, pad, pad, pad});
+    // The first layout positions visible controls. Drop provisional sizing
+    // moves so offscreen combo boxes do not resize their native edit/list twice.
+    VecReset(initialMoves.moves);
+    initialMoves.Apply();
 #if IS_DEBUG
     double controlsMs = TimeSinceInMs(openingStart);
     TimeStamp layoutStart = TimeGet();
@@ -1307,8 +1703,10 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     TimeStamp themeStart = TimeGet();
 #endif
     UpdateTheme();
+    scroll->themeWindow = this;
 
     SettingsFocusStops(this, scroll->child);
+    SaveValues();
     SetIsVisible(visible);
     if (visible && dropLayout) {
         HwndSetFocus(dropLayout->hwnd);
@@ -1319,6 +1717,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         "reused; %.3f ms total\n",
         controlsMs, layoutMs, TimeSinceInMs(themeStart), settingsMetrics.measured - measurementsBefore,
         settingsMetrics.reused - reuseBefore, TimeSinceInMs(openingStart));
+    logf("Settings native create: %.3f ms dropdowns, %.3f ms checkboxes\n", settingsComboMs, settingsCheckMs);
 #endif
     return true;
 }
@@ -1328,15 +1727,21 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     if (!window || !window->scroll) {
         return;
     }
-    if (ev->msg == WM_PRINTCLIENT && ev->wparam && window->vroot) {
-        PaintVirtTree(window->vroot, (HDC)ev->wparam, HwndClientRect(window->hwnd), ThemeWindowBackgroundColor());
+    if (ev->msg == WM_NCHITTEST && window->caption) {
+        Point pt = HwndScreenToClient(window->hwnd, {GET_X_LPARAM(ev->lparam), GET_Y_LPARAM(ev->lparam)});
+        if (window->caption->lastBounds.Contains(pt)) {
+            ev->result = window->captionClose->lastBounds.Contains(pt) ? HTCLIENT : HTCAPTION;
+            ev->didHandle = true;
+        }
+        return;
+    }
+    if (ev->msg == WM_NCLBUTTONDBLCLK && ev->wparam == HTCAPTION) {
         ev->result = 0;
         ev->didHandle = true;
         return;
     }
     if (ev->msg == WM_VSCROLL && ev->lparam == 0) {
         window->scroll->OnVScroll(ev->wparam);
-        window->scroll->ClipControls(window->scroll->child);
     } else if (ev->msg == WM_MOUSEWHEEL) {
         window->scroll->Wheel(GET_WHEEL_DELTA_WPARAM(ev->wparam));
     } else {
@@ -1346,13 +1751,32 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     ev->didHandle = true;
 }
 
-void ShowSettingsDialog(MainWindow* win) {
-    if (!HasPermission(Perm::SavePreferences)) {
-        return;
+static void OpenSettingsDialog(MainWindow* win, SettingsView view) {
+    if (gSettingsWnd) {
+        if (!gSettingsWnd->IsVisible()) {
+#if IS_DEBUG
+            TimeStamp reopenStart = TimeGet();
+#endif
+            if (!str::Eq(gSettingsWnd->cacheKey, SettingsCacheKey(win))) {
+                auto* previous = gSettingsWnd;
+                gSettingsWnd = nullptr;
+                previous->onBeforeDelete = {};
+                previous->onDestroy = {};
+                delete previous;
+            } else {
+                gSettingsWnd->win = win;
+                gSettingsWnd->RestoreValues();
+                gSettingsWnd->scroll->ScrollTo(0);
+                gSettingsWnd->SetIsVisible(view == SettingsView::Visible);
+#if IS_DEBUG
+                logf("Settings cached reopen: %.3f ms\n", TimeSinceInMs(reopenStart));
+#endif
+            }
+        }
     }
     if (gSettingsWnd) {
-        HwndSetFocus(gSettingsWnd->hwnd);
-        if (gSettingsWnd->dropLayout) {
+        if (view == SettingsView::Visible) HwndSetFocus(gSettingsWnd->hwnd);
+        if (view == SettingsView::Visible && gSettingsWnd->dropLayout) {
             HwndSetFocus(gSettingsWnd->dropLayout->hwnd);
         }
         return;
@@ -1364,12 +1788,17 @@ void ShowSettingsDialog(MainWindow* win) {
     wnd->onClose = MkFunc1Void<WindowBase::CloseEvent*>(OnClose);
     wnd->onDestroy = MkFunc1Void<WindowBase::DestroyEvent*>(OnDestroy);
     wnd->SetFont(GetAppFont());
-    bool ok = wnd->Create(win);
+    bool ok = wnd->Create(win, view);
     if (!ok) {
         delete wnd;
         return;
     }
     gSettingsWnd = wnd;
+}
+
+void ShowSettingsDialog(MainWindow* win) {
+    if (!HasPermission(Perm::SavePreferences)) return;
+    OpenSettingsDialog(win, SettingsView::Visible);
 }
 
 #if IS_DEBUG
@@ -1384,6 +1813,12 @@ struct SettingsMeasureProbe : SettingsLabel {
 };
 
 static void SettingsResponsivenessTests(SettingsWnd* wnd) {
+    utassert(Dpi_UnitTestsWindowQuery());
+    utassert(AppSettings_UnitTestsMenuMetrics());
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    int clipUpdates = wnd->scroll->clipUpdates;
+    for (int i = 0; i < 200; i++) wnd->scroll->ClipControls(wnd->scroll->child);
+    utassert(wnd->scroll->clipUpdates == clipUpdates);
     SettingsForm form;
     form.SetSize(1, 2);
     auto* probe = new SettingsMeasureProbe();
@@ -1423,8 +1858,34 @@ static void SettingsResponsivenessTests(SettingsWnd* wnd) {
     wnd->scroll->ScrollTo(0);
     wnd->scroll->ClipControls(wnd->scroll->child);
 
+    // Rapid alternating wheel/scrollbar input must not move the footer or
+    // auto-scroll back to a focused edit while native bounds are updated.
+    Rect footer = wnd->btnOk->lastBounds;
+    Rect caption = wnd->caption->lastBounds;
+    TimeStamp scrollingStart = TimeGet();
+    for (int i = 0; i < 100; i++) {
+        int target = (i & 1) ? 0 : wnd->scroll->MaxScrollY();
+        wnd->scroll->ScrollTo(target);
+        utassert(wnd->scroll->scrollY == target);
+        utassert(wnd->btnOk->lastBounds == footer && wnd->caption->lastBounds == caption);
+    }
+    logf("Settings rapid scroll: %.3f ms for 100 alternating positions\n", TimeSinceInMs(scrollingStart));
+    wnd->scroll->ScrollTo(0);
+
     auto* drop = (SettingsDropDown*)wnd->dropLayout;
     Size original = drop->GetIdealSize();
+    Rect originalBounds = ChildPosWithinParent(drop->hwnd);
+    int originalMeasurements = settingsMetrics.measured;
+    drop->ControlBase::SetBounds(
+        {originalBounds.x, originalBounds.y, originalBounds.dx, originalBounds.dy + DpiScale(20)});
+    Size taller = drop->GetIdealSize();
+    utassert(taller.dx == original.dx && taller.dy >= originalBounds.dy + DpiScale(20));
+    utassert(settingsMetrics.measured == originalMeasurements);
+    drop->ControlBase::SetBounds(originalBounds);
+    utassert(drop->GetIdealSize() == original);
+    int clipPasses = wnd->scroll->clipPasses;
+    for (int i = 0; i < 100; i++) SendMessageW(wnd->hwnd, WM_VSCROLL, SB_ENDSCROLL, 0);
+    utassert(wnd->scroll->clipPasses == clipPasses);
     StrVec choices;
     choices.Append(StrL("A much longer replacement setting choice for measurement invalidation"));
     drop->SetItems(choices);
@@ -1437,7 +1898,7 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     wnd->dropTabListCount->SetText(StrL("17"));
     utassert(SelectedNumber(wnd->dropTabListCount, 10, 1, 50) == 17);
     wnd->dropScrollbarWidth->SetText(StrL("26 px"));
-    utassert(SelectedNumber(wnd->dropScrollbarWidth, 20, 8, 40, StrL("px")) == 26);
+    utassert(SelectedNumber(wnd->dropScrollbarWidth, 30, 8, 60, StrL("px")) == 26);
     Color parsed;
     utassert(ParseColor(&parsed, StrL("#123456")) && parsed == MkRgb(0x12, 0x34, 0x56));
     utassert(!ParseColor(&parsed, StrL("#not-a-color")));
@@ -1561,7 +2022,11 @@ static void CaptureSettings(SettingsWnd* wnd, Str path) {
         return;
     }
     HGDIOBJ old = SelectObject(dc, bitmap);
-    SendMessageW(wnd->hwnd, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT);
+    {
+        GfxHdc gfx(dc);
+        gfx.FillRect(HwndClientRect(wnd->hwnd), ThemeWindowBackgroundColor());
+        wnd->vroot->Paint(&gfx, HwndClientRect(wnd->hwnd));
+    }
     SettingsPrintCtx args{dc, wnd->hwnd, wnd->scroll->lastBounds};
     EnumChildWindows(wnd->hwnd, PrintSettingsChild, (LPARAM)&args);
     GdiFlush();
@@ -1602,16 +2067,16 @@ static void SettingsSnapshots() {
             gRenderCache = nullptr;
         }
     };
-    for (int variant = 0; variant < 3; variant++) {
-        gSettings->uIFontSize = variant == 2 ? 28 : 0;
-        gSettings->interfaceScale = variant == 2 ? 150 : 100;
-        str::ReplaceWithCopy(&gSettings->theme, variant == 0 ? StrL("Sumatra Light") : StrL("Modern Green Dark"));
+    for (int variant = 0; variant < 6; variant++) {
+        gSettings->uIFontSize = 0;
+        gSettings->interfaceScale = 100 + (variant / 2) * 50;
+        str::ReplaceWithCopy(&gSettings->theme, variant % 2 == 0 ? StrL("Sumatra Light") : StrL("Modern Green Dark"));
         SetCurrentThemeFromSettings();
         RefreshUiFonts();
         auto* wnd = new SettingsWnd();
         wnd->SetFont(GetAppFont());
         utassert(wnd->Create(nullptr, SettingsView::Hidden));
-        if (variant == 2) {
+        if (variant >= 2) {
             ResizeHwndToClientArea(wnd->hwnd, DpiScale(640), DpiScale(760), false);
             wnd->DoLayout();
         }
@@ -1632,9 +2097,30 @@ static void SettingsOpeningTests() {
     auto* first = new SettingsWnd();
     first->SetFont(GetAppFont());
     utassert(first->Create(nullptr, SettingsView::Hidden));
+    utassert(first->dropLayout->hwnd);
+    utassert(!first->dropPenMin->hwnd);
+    utassert(str::Eq(first->dropPenMin->GetTextTemp(), fmt("%g", gSettings->penMinWidth)));
     int coldMeasurements = settingsMetrics.measured - before;
     int width = HwndClientRect(first->hwnd).dx;
     utassert(!IsWindowVisible(first->hwnd) && first->autoLayout);
+    first->dropPenMin->SetText(StrL("0.75 pt"));
+    utassert(!first->dropPenMin->hwnd);
+    utassert(SelectedNumber(first->dropPenMin, 1, 0.1, 64, StrL("pt")) == 0.75);
+    utassert(first->dropPenMin->IsEnabled());
+    first->dropPenMin->SetIsEnabled(false);
+    utassert(!first->dropPenMin->IsEnabled() && !first->dropPenMin->hwnd);
+    first->dropPenMin->SetIsEnabled(true);
+    Size penSize = first->dropPenMin->GetIdealSize();
+    first->dropPenMin->PrepareFocus();
+    utassert(first->dropPenMin->hwnd && first->dropPenMin->IsEnabled());
+    utassert(first->scroll->scrollY > 0);
+    Rect penBounds = first->dropPenMin->lastBounds, viewport = first->scroll->lastBounds;
+    utassert(penBounds.y >= viewport.y && penBounds.Bottom() <= viewport.Bottom());
+    utassert(first->dropPenMin->GetIdealSize() == penSize);
+    first->dropPenMin->EnsureItems();
+    utassert(str::Eq(first->dropPenMin->GetTextTemp(), StrL("0.75 pt")));
+    utassert(CbGetCurrentSelection(first->dropPenMin) == -1);
+    utassert(CbGetItemsCount(first->dropPenMin->hwnd) == len(first->dropPenMin->items));
     DestroyWindow(first->hwnd);
     delete first;
 
@@ -1648,8 +2134,85 @@ static void SettingsOpeningTests() {
     utassert(settingsMetrics.measured - before < coldMeasurements);
     utassert(settingsMetrics.reused > reused);
     utassert(len(settingsMetrics.entries) <= 64);
+    HWND originalControl = second->dropTabListCount->hwnd;
+    Str original = str::Dup(second->dropTabListCount->GetTextTemp());
+    second->dropPenStep->SetText(StrL("1.25 pt"));
+    utassert(!second->dropPenStep->hwnd);
+    utassert(SelectedNumber(second->dropPenStep, 1, 0.1, 16, StrL("pt")) == 1.25);
+    second->dropTabListCount->SetText(StrL("17"));
+    second->chkUseTabs->SetState(Checkbox::State::Unchecked);
+    second->OnCancel();
+    TimeStamp restoreStart = TimeGet();
+    gSettingsWnd = second;
+    OpenSettingsDialog(nullptr, SettingsView::Hidden);
+    logf("Settings cached restore: %.3f ms\n", TimeSinceInMs(restoreStart));
+    utassert(second->dropTabListCount->hwnd == originalControl);
+    utassert(!second->dropPenStep->hwnd);
+    utassert(str::Eq(second->dropPenStep->GetTextTemp(), fmt("%g", gSettings->penWidthStep)));
+    utassert(str::Eq(second->dropTabListCount->GetTextTemp(), original));
+    utassert(second->chkUseTabs->IsChecked() == gSettings->useTabs);
+    utassert(str::Eq(second->cacheKey, SettingsCacheKey(nullptr)));
+    int oldSize = gSettings->uIFontSize;
+    gSettings->uIFontSize = oldSize + 1;
+    utassert(!str::Eq(second->cacheKey, SettingsCacheKey(nullptr)));
+    gSettings->uIFontSize = oldSize;
+    gSettingsWnd = nullptr;
+    str::Free(original);
     DestroyWindow(second->hwnd);
     delete second;
+}
+
+static void SettingsScaledVisualTests() {
+    gSettings->interfaceScale = 200;
+    RefreshUiFonts();
+    auto* wnd = new SettingsWnd();
+    wnd->SetFont(GetAppFont());
+    utassert(wnd->Create(nullptr, SettingsView::Hidden));
+    utassert((GetWindowLongPtrW(wnd->hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION);
+    utassert(wnd->chkReferenceHover->GetIdealSize().dy >= UiScalePx(20));
+    utassert(wnd->captionTitle->font == GetAppFont());
+    utassert(wnd->captionClose->GetIdealSize().dy >= PlatformFontLineHeight(GetAppFont()));
+    utassert(wnd->caption->lastBounds.Bottom() <= wnd->scroll->lastBounds.y);
+    // Native controls request a plain parent background through PRINTCLIENT.
+    // Rendering the virtual labels into that shifted DC smears text on controls.
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), 200, -80, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    utassert(bitmap && pixels);
+    if (bitmap && pixels) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        Rect title = wnd->captionTitle->lastBounds;
+        SetViewportOrgEx(dc, -title.x, -title.y, nullptr);
+        SendMessageW(wnd->hwnd, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT);
+        GdiFlush();
+        Color background = wnd->bgColor;
+        bool solid = true;
+        auto* bytes = (u8*)pixels;
+        for (int i = 0; i < 200 * 80; i++)
+            solid &= bytes[i * 4] == GetBValue(background) && bytes[i * 4 + 1] == GetGValue(background) &&
+                     bytes[i * 4 + 2] == GetRValue(background);
+        utassert(solid);
+        SelectObject(dc, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    DeleteDC(dc);
+    bool checked = wnd->chkReferenceHover->IsChecked();
+    SendMessageW(wnd->chkReferenceHover->hwnd, BM_CLICK, 0, 0);
+    utassert(wnd->chkReferenceHover->IsChecked() != checked);
+    SendMessageW(wnd->chkReferenceHover->hwnd, BM_CLICK, 0, 0);
+    utassert(wnd->chkReferenceHover->IsChecked() == checked);
+    Rect title = wnd->captionTitle->lastBounds;
+    Point pt = HwndClientToScreen(wnd->hwnd, {title.x + title.dx / 2, title.y + title.dy / 2});
+    utassert(SendMessageW(wnd->hwnd, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCAPTION);
+    Rect close = wnd->captionClose->lastBounds;
+    pt = HwndClientToScreen(wnd->hwnd, {close.x + close.dx / 2, close.y + close.dy / 2});
+    utassert(SendMessageW(wnd->hwnd, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCLIENT);
+    DestroyWindow(wnd->hwnd);
+    delete wnd;
+    gSettings->interfaceScale = 100;
+    RefreshUiFonts();
 }
 
 bool SettingsDialog_UnitTestsSizing() {
@@ -1673,6 +2236,7 @@ bool SettingsDialog_UnitTestsSizing() {
         RefreshUiFonts();
     };
     utassert(gSettings);
+    SettingsScaledVisualTests();
     SettingsOpeningTests();
     auto* wnd = new SettingsWnd();
     wnd->SetFont(GetAppFont());

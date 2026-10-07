@@ -181,6 +181,7 @@ struct DisplayModel : DocController {
 
     int GetRotation() const;
     float GetZoomReal(int pageNo) const;
+    float ComputeZoomReal(int pageNo) const;
     float MaxZoomForDocument() const;
     void Relayout(float zoomVirtual, int rotation);
     bool ViewportReadyForRelayout() const;

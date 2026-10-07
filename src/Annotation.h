@@ -128,6 +128,9 @@ RectF GetBounds(Annotation*);
 RectF GetRect(Annotation*);
 void SetRect(Annotation*, RectF);
 bool TransformAnnotation(Annotation*, RectF from, RectF to);
+bool AnnotationCanBeRotated(AnnotationType);
+bool RotateAnnotation(Annotation*, PointF center, float degrees);
+Annotation* DuplicateAnnotation(Annotation*, PointF offset);
 void SetQuadPointsAsRect(Annotation*, const Vec<RectF>&);
 Vec<RectF> GetQuadPointsAsRect(Annotation*);
 
@@ -184,7 +187,9 @@ Vec<PointF> GetVertices(Annotation*);
 void SetVertices(Annotation*, const Vec<PointF>&);
 void GetInkList(Annotation*, Vec<int>&, Vec<PointF>&);
 bool EraseInkStrokes(Vec<int>&, Vec<PointF>&, PointF, float);
+bool EraseInkSegments(Vec<int>&, Vec<PointF>&, PointF, float);
 InkEraseResult EraseAnnotationInk(Annotation*, PointF, float);
+InkEraseResult EraseAnnotInkSegments(Annotation*, PointF, float);
 
 void SetFreeTextFont(Annotation*, Str family, int style);
 void SetDefaultAppearanceTextSize(Annotation*, int);

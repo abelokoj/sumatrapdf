@@ -45,12 +45,47 @@ pdf_remap_cmap_range(fz_context *ctx, pdf_cmap *ucs_from_gid,
 	}
 }
 
+/* This routine should check "Is a identity on all the places that b is defined?",
+ * but for now, we just spot the trivial identity case, and live with that. */
+static int
+is_effectively_identity(pdf_cmap *a, pdf_cmap *b)
+{
+	/* For now, just spot identity within the rlen's. */
+	if (b->mlen || a->mlen)
+		return 0;
+
+	if (a->rlen == 1)
+	{
+		if (a->ranges[0].low != 0 ||
+			a->ranges[0].high != 65535 ||
+			a->ranges[0].out != 0)
+			return 0;
+	}
+	else if (a->rlen > 1)
+		return 0;
+
+	if (a->usecmap)
+		return is_effectively_identity(a->usecmap, b);
+
+	return 1;
+}
+
 static pdf_cmap *
 pdf_remap_cmap(fz_context *ctx, pdf_cmap *gid_from_cpt, pdf_cmap *ucs_from_cpt)
 {
 	pdf_cmap *ucs_from_gid;
 	unsigned int a, b, x;
 	int i;
+
+	/* We have gid_from_cpt, and ucs_from_cpt. We want to form ucs_from_gid.
+	 * So: from cpt->gid and cpt->ucs, we need to form gid->ucs.
+	 * This means we need to reverse cpt->gid, so we can form gid->cpt->ucs.
+	 *
+	 * If cpt->gid is identity (at least for all the domain of cpt->ucs), then
+	 * we can just use cpt->ucs and save ourselves the hassle.
+	 */
+	if (is_effectively_identity(gid_from_cpt, ucs_from_cpt))
+		return pdf_keep_cmap(ctx, ucs_from_cpt);
 
 	ucs_from_gid = pdf_new_cmap(ctx);
 
@@ -122,6 +157,16 @@ unicode_from_coded_glyph_name(const char *name)
 	return 0;
 }
 
+/* ASCII-only: fz_strncasecmp asserts on the UTF-8 in a CJK font name. */
+static int
+name_has_prefix(const char *s, const char *lower_prefix)
+{
+	for (; *lower_prefix; s++, lower_prefix++)
+		if (fz_tolower((unsigned char)*s) != *lower_prefix)
+			return 0;
+	return 1;
+}
+
 /* Distiller Type1 ToUnicode is often identity Latin-1 even for CP1251
  * faces that reuse Latin Encoding names. Treat the font as CP1251 when
  * the name is a known family / has a Cyrillic tag, or the document
@@ -137,13 +182,13 @@ pdf_simple_font_looks_cp1251(fz_context *ctx, pdf_document *doc, pdf_font_desc *
 	if (strlen(name) > 7 && name[6] == '+')
 		name += 7;
 
-	if (fz_strncasecmp(name, "literaturnaya", 13) == 0)
+	if (name_has_prefix(name, "literaturnaya"))
 		return 1;
 	/* "Academy" / "Academy-Bold", but not "AcademyEngraved". */
-	if (fz_strncasecmp(name, "academy", 7) == 0 && (name[7] == 0 || name[7] == '-'))
+	if (name_has_prefix(name, "academy") && (name[7] == 0 || name[7] == '-'))
 		return 1;
 	for (i = 0; name[i]; i++)
-		if (fz_strncasecmp(name + i, "cyr", 3) == 0 || fz_strncasecmp(name + i, "1251", 4) == 0)
+		if (name_has_prefix(name + i, "cyr") || name_has_prefix(name + i, "1251"))
 			return 1;
 
 	if (!doc)

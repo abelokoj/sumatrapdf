@@ -14,6 +14,7 @@
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
 #include "gui/win/WinGui.h"
+#include "gui/VirtHost.h"
 
 //- DropDown
 
@@ -39,6 +40,10 @@ struct DropDownUpdate {
 
 DropDown::DropDown() {
     kind = kindDropDown;
+}
+
+DropDown::~DropDown() {
+    str::Free(pendingText);
 }
 
 static void SetDropDownItems(HWND hwnd, StrVec& items) {
@@ -68,11 +73,19 @@ static void ReplaceDropDownItems(HWND hwnd, StrVec& items) {
 // leaves all of it selected. Any relayout around us - the find bar's "n / m"
 // slot widening as the count comes in - would then wipe out what the user is
 // typing, so put the caret back where it was (issue #6068).
+static void PrepareDropDownList(DropDown* drop) {
+    drop->EnsureItems();
+    COMBOBOXINFO info{sizeof(info)};
+    // Prepare the scrollbar before native popup activation. Creating its windows
+    // during CB_SHOWDROPDOWN's show notifications can dismiss the native list.
+    if (gUiInstallScrollbar && GetComboBoxInfo(drop->hwnd, &info)) gUiInstallScrollbar(info.hwndList);
+}
+
 static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
     auto* drop = (DropDown*)data;
-    if (drop && (msg == CB_SHOWDROPDOWN && wp || msg == WM_MOUSEWHEEL ||
+    if (drop && ((msg == CB_SHOWDROPDOWN && wp) || msg == WM_LBUTTONDOWN || msg == WM_MOUSEWHEEL ||
                  (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_DOWN || wp == VK_HOME || wp == VK_END || wp == VK_F4))))
-        drop->EnsureItems();
+        PrepareDropDownList(drop);
     if (msg == WM_SETFONT) {
         LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
         EditSetDefaultMargins(CbEditHwnd(hwnd));
@@ -94,7 +107,7 @@ void DropDown::OnCommand(ControlBase::CommandEvent* ev) {
         return;
     }
     auto code = HIWORD(ev->wparam);
-    if (code == CBN_DROPDOWN) EnsureItems();
+    if (code == CBN_DROPDOWN) PrepareDropDownList(this);
     if (code == CBN_EDITCHANGE && itemsPending) pendingSelection = -1;
     if (code == CBN_EDITCHANGE && onTextChanged.IsValid()) {
         onTextChanged.Call();
@@ -203,6 +216,8 @@ void DropDown::OnMessageReflect(ControlBase::MessageReflectEvent* ev) {
 }
 
 HWND DropDown::Create(const CreateArgs& args) {
+    bool deferred = windowPending;
+    windowPending = false;
     onCommand = MkMethod1<DropDown, ControlBase::CommandEvent*, &DropDown::OnCommand>(this);
     onMessageReflect = MkMethod1<DropDown, ControlBase::MessageReflectEvent*, &DropDown::OnMessageReflect>(this);
     colorSwatches = args.colorSwatches;
@@ -223,6 +238,7 @@ HWND DropDown::Create(const CreateArgs& args) {
     }
     cargs.className = WC_COMBOBOX;
     cargs.font = args.font;
+    cargs.visible = args.visible;
 
     ControlBase::CreateControl(cargs);
     if (!hwnd) {
@@ -240,14 +256,54 @@ HWND DropDown::Create(const CreateArgs& args) {
         CbSetItemHeight(hwnd, -1, dy);
     }
 
-    SizeToIdealSize(this);
+    if (!deferred) SizeToIdealSize(this);
     return hwnd;
+}
+
+// Keep the complete value model without creating an offscreen native combo.
+// Create() retains its HWND-returning contract for existing callers.
+void DropDown::DeferCreate(const CreateArgs& args) {
+    ReportIf(hwnd || windowPending);
+    pendingCreate = args;
+    font = args.font ? args.font : GetDefaultGuiFont();
+    colorSwatches = args.colorSwatches;
+    deferItems = args.deferItems;
+    windowPending = true;
+}
+
+HWND DropDown::EnsureCreated() {
+    if (!windowPending) return hwnd;
+    int selection = pendingSelection;
+    pendingCreate.font = font;
+    if (!Create(pendingCreate)) {
+        windowPending = true;
+        return nullptr;
+    }
+    HwndBase::SetIsEnabled(pendingEnabled);
+    if (selection >= 0)
+        CbSetCurrentSelection(this, selection);
+    else
+        HwndBase::SetText(pendingText);
+    if (!deferItems) EnsureItems();
+    str::Free(pendingText);
+    pendingText = {};
+    return hwnd;
+}
+
+bool DropDown::IsFocusable() const {
+    if (windowPending) return IsVisible() && pendingEnabled && ::IsWindowVisible(pendingCreate.parent);
+    return ControlBase::IsFocusable();
+}
+
+void DropDown::PrepareFocus() {
+    EnsureCreated();
 }
 
 // Editable combos keep the keyboard focus on the inner Edit. Focusing the
 // ComboBox HWND itself uses the main accelerator table, so a leftover F from
 // Ctrl+F can fire CmdToggleFullscreen and take focus away.
 void DropDown::SetFocus() {
+    PrepareFocus();
     HWND edit = CbEditHwnd(hwnd);
     HwndSetFocus(edit ? edit : hwnd);
 }
@@ -264,7 +320,6 @@ bool DropDown::IsFocused() const {
 }
 
 void DropDown::SetItems(StrVec& newItems) {
-    DropDownUpdate update(hwnd);
     items.Reset();
     VecReset(itemColors);
     int n = len(newItems);
@@ -272,8 +327,14 @@ void DropDown::SetItems(StrVec& newItems) {
         Str s = newItems[i];
         items.Append(s);
     }
-    itemsPending = deferItems;
+    itemsPending = deferItems || windowPending;
     pendingSelection = -1;
+    if (!hwnd) {
+        str::Free(pendingText);
+        pendingText = {};
+        return;
+    }
+    DropDownUpdate update(hwnd);
     if (itemsPending)
         CbResetContent(hwnd);
     else
@@ -283,10 +344,28 @@ void DropDown::SetItems(StrVec& newItems) {
 
 void DropDown::SetText(Str text) {
     pendingSelection = -1;
+    if (windowPending) {
+        str::ReplaceWithCopy(&pendingText, text);
+        return;
+    }
     HwndBase::SetText(text);
 }
 
+TempStr DropDown::GetTextTemp() {
+    return windowPending ? str::DupTemp(pendingText) : HwndBase::GetTextTemp();
+}
+
+void DropDown::SetIsEnabled(bool enabled) const {
+    pendingEnabled = enabled;
+    if (hwnd) HwndBase::SetIsEnabled(enabled);
+}
+
+bool DropDown::IsEnabled() const {
+    return windowPending ? pendingEnabled : HwndBase::IsEnabled();
+}
+
 void DropDown::EnsureItems() {
+    if (windowPending && !EnsureCreated()) return;
     if (!itemsPending) return;
     DropDownUpdate update(hwnd);
     Str text = str::Dup(GetTextTemp());
@@ -370,10 +449,11 @@ Size DropDown::GetIdealSize() {
     // TODO: not sure if I want scrollbar. Only needed if a lot of items
     int dxPad = DpiGetSystemMetrics(SM_CXVSCROLL);
     int textPadding = DpiScale(8);
+    DWORD margins = deferredMargins;
     if (HWND edit = CbEditHwnd(hwnd)) {
-        DWORD margins = (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0);
-        textPadding = std::max(textPadding, (int)LOWORD(margins) + (int)HIWORD(margins));
+        margins = (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0);
     }
+    textPadding = std::max(textPadding, (int)LOWORD(margins) + (int)HIWORD(margins));
     int dx = s1.dx + dxPad + textPadding;
     if (idealDx > 0 && dx < idealDx) {
         dx = idealDx;
@@ -388,7 +468,7 @@ Size DropDown::GetIdealSize() {
     int dyPad = DpiScale(4);
     int dy = s1.dy + dyPad;
     Rect rc = HwndWindowRect(hwnd);
-    dy = std::max(rc.dy, dy);
+    dy = std::max(hwnd ? rc.dy : deferredHeight, dy);
     return {dx, dy};
 }
 
@@ -423,6 +503,11 @@ void CbSetCurrentSelection(DropDown* dd, int n) {
         return;
     }
     if (dd->itemsPending) {
+        if (dd->windowPending) {
+            dd->pendingSelection = n;
+            str::ReplaceWithCopy(&dd->pendingText, n >= 0 && n < len(dd->items) ? dd->items[n] : Str{});
+            return;
+        }
         bool previous = dd->suppressNotify;
         dd->suppressNotify = true;
         CbResetContent(dd->hwnd);
@@ -470,20 +555,36 @@ bool CbEditIsModified(DropDown* dd) {
 void DropDown_UnitTestsDeferred() {
     HWND parent =
         CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPED, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
-    for (bool editable : {false, true}) {
+    for (int variant = 0; variant < 4; variant++) {
+        bool editable = (variant & 1) != 0;
+        bool deferred = variant >= 2;
         DropDown drop;
         DropDown::CreateArgs args;
         args.parent = parent;
         args.font = GetPlatformFont((HFONT)GetStockObject(DEFAULT_GUI_FONT));
         args.isEditable = editable;
         args.deferItems = true;
-        drop.Create(args);
+        if (deferred)
+            drop.DeferCreate(args);
+        else
+            drop.Create(args);
         StrVec items;
         for (const char* label : {"First", "Second", "Third"}) items.Append(Str(label));
         drop.SetItems(items);
         CbSetCurrentSelection(&drop, 2);
         utassert(drop.itemsPending && CbGetCurrentSelection(&drop) == 2);
-        utassert(CbGetItemsCount(drop.hwnd) == 1 && str::Eq(drop.GetTextTemp(), StrL("Third")));
+        if (deferred) {
+            utassert(!drop.hwnd && str::Eq(drop.GetTextTemp(), StrL("Third")));
+            drop.SetIsEnabled(false);
+            utassert(!drop.IsEnabled() && !drop.hwnd);
+            if (editable) drop.SetText(StrL("Custom value"));
+            utassert(drop.EnsureCreated());
+            utassert(!drop.IsEnabled());
+            utassert(str::Eq(drop.GetTextTemp(), editable ? StrL("Custom value") : StrL("Third")));
+            drop.SetIsEnabled(true);
+        }
+        utassert(CbGetItemsCount(drop.hwnd) == (deferred && editable ? 0 : 1));
+        utassert(str::Eq(drop.GetTextTemp(), deferred && editable ? StrL("Custom value") : StrL("Third")));
         if (editable) drop.SetText(StrL("Custom value"));
         drop.EnsureItems();
         utassert(!drop.itemsPending && CbGetItemsCount(drop.hwnd) == 3);

@@ -109,8 +109,9 @@ static void UpdateTabTitle(WindowTab* tab) {
 int GetTabbarHeight(HWND hwnd, float factor) {
     DpiSetFromHwnd(hwnd);
     PlatformFont* font = GetAppFont();
+    int fontDy = PlatformFontLineHeight(font);
     int tabDy = UiScalePx(kTabBarDy);
-    int fontDyWithPadding = PlatformFontLineHeight(font) + UiScalePx(2);
+    int fontDyWithPadding = fontDy + UiScalePx(2);
     tabDy = std::max(fontDyWithPadding, tabDy);
     tabDy = std::max(tabDy, UiScalePx(limitValue(gSettings->toolbarSize, 8, 64) + 6));
     // Guard against the bad per-window DPI Wine reports (93e5b4e47: the tab bar
@@ -124,14 +125,11 @@ int GetTabbarHeight(HWND hwnd, float factor) {
         int minFontDy = PlatformFontLineHeight(font) + UiScalePxForDpi(DpiGetForHwnd(HWND_DESKTOP), 2);
         minDy = std::max(minFontDy, minDy);
         tabDy = std::max(tabDy, minDy);
-        int res = (int)((float)tabDy * factor);
-        logf(
-            "GetTabbarHeight: hwnd=%p factor=%g dpi=%d desktopDpi=%d tabDyScaled=%d fontDy=%d "
-            "minDy=%d result=%d\n",
-            hwnd, factor, DpiGetForHwnd(hwnd), DpiGetForHwnd(HWND_DESKTOP), UiScalePx(kTabBarDy), fontDyWithPadding,
-            minDy, res);
-        return res;
     }
+    // Halve the space above and below the centered titles. Keep enough room
+    // for tab controls when the toolbar icons are larger than the text.
+    tabDy = fontDy + (std::max(0, tabDy - fontDy) + 1) / 2;
+    tabDy = std::max(tabDy, UiScalePx(limitValue(gSettings->toolbarSize, 8, 64)));
     return (int)((float)tabDy * factor);
 }
 
@@ -734,11 +732,12 @@ static NO_INLINE void VerifyWindowTab(MainWindow* win, WindowTab* tdata) {
         }
     }
     // Heading TOC is generated after the document is shown. Until that finishes
-    // the sidebar stays hidden (uiState.tocVisible) but the tab keeps the
+    // the sidebar stays hidden (uiState.sidebarTopVisible) but the tab keeps the
     // caller's showToc preference so we can open it when headings arrive.
-    if (win->uiState.tocVisible != expectedTocVisibility) {
+    bool topVisible = win->uiState.sidebarTopVisible;
+    if (topVisible != expectedTocVisibility) {
         bool headingPending = EngineMupdfHeadingTocPending(tdata->GetEngine());
-        bool okPendingHide = headingPending && expectedTocVisibility && !win->uiState.tocVisible;
+        bool okPendingHide = headingPending && expectedTocVisibility && !topVisible;
         ReportDebugIf(!okPendingHide);
     }
     ReportIf(tdata->canvasRc != win->canvasRc);

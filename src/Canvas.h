@@ -10,6 +10,7 @@ LRESULT WndProcCanvasAbout(MainWindow*, HWND, UINT, WPARAM, LPARAM);
 bool IsDragDistance(int x1, int x2, int y1, int y2);
 void CancelDrag(MainWindow*);
 bool NudgeSelectedAnnotation(MainWindow*, WPARAM key);
+void FinishAnnotationNudge(MainWindow*);
 void StartAutoScrollAtCursor(MainWindow*);
 bool ShowImageOutlines();
 void ToggleShowImageOutlines();
@@ -28,6 +29,7 @@ void SetHandTool(MainWindow*, bool);
 void ToggleAnnotationLasso(MainWindow*);
 void CancelAnnotationLasso(MainWindow*);
 bool AnnotationLassoOnKeyDown(MainWindow*, WPARAM);
+bool HandleAnnotationLassoCommand(MainWindow*, int);
 void SetLaserPointerColor(MainWindow*, Color);
 void SetLaserPointerMode(MainWindow*, LaserPointerMode);
 void DeleteLaserPointerCursor();
@@ -62,6 +64,9 @@ constexpr UINT_PTR kTouchLongPressTimerID = 14;
 constexpr UINT_PTR kAnnotationResizeRerenderTimerID = 15;
 constexpr UINT_PTR kLaserTrailTimerID = 17;
 constexpr uint kAnnotationResizeRerenderDelayMs = 125;
+// Debounce re-rendering the page while arrow keys move an annotation
+constexpr UINT_PTR kAnnotationNudgeTimerID = 18;
+constexpr uint kAnnotationNudgeDelayMs = 150;
 
 void CancelAnnotationResizeRerender(MainWindow* win);
 

@@ -36,6 +36,10 @@
 #include "Notifications.h"
 #include "SelectionToolbar.h"
 
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
+
 // A small floating toolbar shown under/over a finished text selection with
 // the most common selection actions (copy, read aloud, highlight etc.).
 // Ported from dengxibo/sumatrapdf-plus (db0b32b7a and follow-ups); button
@@ -71,6 +75,13 @@ struct SelectionToolbar {
     // the popup window; owns the row of buttons and the virtual controls
     VirtHost* host = nullptr;
     PlatformFont* font = nullptr;
+    PlatformFont* layoutFont = nullptr;
+    int layoutIconSize = 0;
+    int layoutDpi = 0;
+    Color layoutBackground = kColorUnset;
+    Color layoutForeground = kColorUnset;
+    Color layoutMuted = kColorUnset;
+    Color layoutHover = kColorUnset;
     Size size;
     Rect lastPlaced;    // last screen rect we moved the window to (avoids redundant SetWindowPos)
     Rect lastSelBounds; // last canvas-space selection bounds used for placement
@@ -85,13 +96,7 @@ struct SelectionToolbar {
 // GetCommandVisibility (hidden buttons are dropped, disabled ones grayed)
 static const SelectionToolbarButton gCandidateButtons[] = {
     {CmdCopySelection, TrN("Copy to clipboard"), {}, Str(gIconCopy)},
-    {CmdDictionaryLookup,
-     TrN("Dictionary / Meaning (Shift+D)"),
-     {},
-     StrL("<svg width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>"
-          "<path d='M12 5C9 3 5 3 2 4v15c3-1 7-1 10 1 3-2 7-2 10-1V4c-3-1-7-1-10 1Z"
-          "M12 5v15M5 7h4M5 10h4M15 7h4M15 10h4' stroke='#000000' stroke-width='1.8' "
-          "stroke-linecap='round' stroke-linejoin='round'/></svg>")},
+    {CmdDictionaryLookup, TrN("Dictionary / Meaning (Shift+D)"), {}, Str(gIconDictionary)},
     {CmdTranslateSelection, StrL("Translate"), {}, Str(gIconTranslate)},
     {CmdReadAloudSelection, StrL("Read Aloud"), {}, Str(gIconSpeak)},
     {CmdCreateAnnotHighlight, StrL("Highlight"), {}, Str(gIconAnnotHighlight)},
@@ -484,6 +489,34 @@ static void LayoutToolbar(SelectionToolbar* tb) {
     }
     auto* content = new Padding(box, Insets{margin, margin, margin, margin});
     tb->size = tb->host->SetLayoutSizedToContent(content);
+    tb->layoutFont = tb->font;
+    tb->layoutIconSize = iconSize;
+    tb->layoutDpi = DpiGet();
+    tb->layoutBackground = bgCol;
+    tb->layoutForeground = textCol;
+    tb->layoutMuted = mutedCol;
+    tb->layoutHover = hoverBg;
+}
+
+static bool RefreshToolbarButtons(SelectionToolbar* tb, MainWindow* win) {
+    tb->font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
+    SelectionToolbar next;
+    InitButtons(&next, win);
+    bool same = tb->host->layout && len(tb->buttons) == len(next.buttons) && tb->layoutFont == tb->font &&
+                tb->layoutIconSize == ToolbarIconSize() && tb->layoutDpi == DpiGet() &&
+                tb->layoutBackground == SelBarBg() && tb->layoutForeground == SelBarTextColor() &&
+                tb->layoutMuted == SelBarMutedTextColor() && tb->layoutHover == SelBarHoverBg(SelBarBg());
+    for (int i = 0; same && i < len(next.buttons); i++) {
+        const auto& old = tb->buttons[i];
+        const auto& current = next.buttons[i];
+        same = old.cmdId == current.cmdId && old.enabled == current.enabled && str::Eq(old.label, current.label) &&
+               str::Eq(old.userLabel, current.userLabel) && str::Eq(old.svgIcon, current.svgIcon);
+    }
+    if (same) return false;
+    VecReset(tb->buttons);
+    for (const auto& button : next.buttons) VecAppend(tb->buttons, button);
+    LayoutToolbar(tb);
+    return true;
 }
 
 // Sticky-note (Text) annots are placed at a canvas point; use the selection end.
@@ -640,8 +673,7 @@ TempStr SelectionToolbarLayoutDumpTemp() {
         out.Append(StrL("buttons=0\n"));
         return ToStrTemp(out);
     }
-    InitButtons(tb, win);
-    LayoutToolbar(tb);
+    RefreshToolbarButtons(tb, win);
     int nSeparators = 0;
     for (const SelectionToolbarButton& b : tb->buttons) {
         if (b.cmdId == 0) {
@@ -724,11 +756,10 @@ static void ShowSelectionToolbarNow(MainWindow* win) {
     tb->tab = win->CurrentTab();
     tb->lastPositionUpdateTick = GetTickCount();
     tb->lastSelBounds = sel;
-    InitButtons(tb, win);
+    RefreshToolbarButtons(tb, win);
     if (len(tb->buttons) == 0) {
         return;
     }
-    LayoutToolbar(tb);
     // Force SetWindowPos + region even if lastPlaced matched (e.g. after hide).
     tb->lastPlaced = Rect();
     PositionToolbar(tb, sel);
@@ -837,9 +868,8 @@ void UpdateSelectionToolbarPosition(MainWindow* win) {
     tb->lastPositionUpdateTick = now;
     tb->lastSelBounds = sel;
 
-    InitButtons(tb, win);
-    LayoutToolbar(tb);
-    if (PositionToolbar(tb, sel)) {
+    bool changed = RefreshToolbarButtons(tb, win);
+    if (PositionToolbar(tb, sel) || changed) {
         tb->host->Invalidate(false);
     }
 }
@@ -867,6 +897,7 @@ void RefreshSelectionToolbarIcons(MainWindow* win) {
     if (!tb || !tb->host || !tb->host->IsVisible()) {
         return;
     }
+    tb->font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
     LayoutToolbar(tb);
     tb->host->Invalidate(false);
 }
@@ -912,3 +943,70 @@ void DeleteSelectionToolbar(MainWindow* win) {
     delete tb;
     win->selectionToolbar = nullptr;
 }
+
+#if IS_DEBUG
+void SelectionToolbar_UnitTests() {
+    Settings* savedSettings = gSettings;
+    gSettings = NewSettings({});
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+    };
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraSelectionRefreshTest");
+    args.isPopup = true;
+    args.visible = false;
+    SelectionToolbar toolbar;
+    toolbar.host = VirtHost::Create(args);
+    utassert(toolbar.host != nullptr);
+    if (!toolbar.host) return;
+    defer {
+        delete toolbar.host;
+    };
+    toolbar.font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
+    utassert(RefreshToolbarButtons(&toolbar, nullptr));
+    ILayout* initialLayout = toolbar.host->layout;
+    for (int i = 0; i < 100; i++) {
+        utassert(!RefreshToolbarButtons(&toolbar, nullptr));
+        utassert(toolbar.host->layout == initialLayout);
+    }
+    utassert(len(toolbar.buttons) > 0);
+    if (len(toolbar.buttons) > 0) {
+        toolbar.buttons[0].enabled = !toolbar.buttons[0].enabled;
+        utassert(RefreshToolbarButtons(&toolbar, nullptr));
+        utassert(!RefreshToolbarButtons(&toolbar, nullptr));
+    }
+
+    const SelectionToolbarButton* dictionary = FindCandidateButton(CmdDictionaryLookup);
+    utassert(dictionary != nullptr);
+    if (!dictionary) return;
+
+    int sizes[] = {24, 48, 72};
+    Color foregrounds[] = {kColWhite, kColBlack};
+    for (int size : sizes) {
+        for (Color fg : foregrounds) {
+            Color bg = fg == kColWhite ? kColBlack : kColWhite;
+            Pixmap* icon = GetCachedPixmapForSvg(dictionary->svgIcon, size, size, fg, bg);
+            utassert(icon != nullptr && icon->data != nullptr);
+            if (!icon || !icon->data) continue;
+
+            int visiblePixels = 0;
+            for (int y = 0; y < icon->height; y++) {
+                const u8* row = icon->data + y * icon->stride;
+                for (int x = 0; x < icon->width; x++) {
+                    const u8* pixel = row + x * 4;
+                    if (pixel[3] < 192) continue;
+                    bool visible = fg == kColWhite ? pixel[0] > 160 && pixel[1] > 160 && pixel[2] > 160
+                                                   : pixel[0] < 32 && pixel[1] < 32 && pixel[2] < 32;
+                    if (visible) visiblePixels++;
+                }
+            }
+            utassert(visiblePixels > size);
+        }
+    }
+}
+#endif

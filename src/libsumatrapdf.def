@@ -298,6 +298,12 @@ EXPORTS
 
 	pdf_drop_graft_map
 
+	pdf_graft_mapped_page
+
+	pdf_bake_document
+
+	pdf_rearrange_pages
+
 	pdf_graft_mapped_object
 
 	pdf_add_object
@@ -1901,6 +1907,10 @@ EXPORTS
 	pdf_enable_journal
 
 	pdf_begin_operation
+
+	pdf_begin_implicit_operation
+
+	pdf_save_snapshot
 
 	pdf_end_operation
 

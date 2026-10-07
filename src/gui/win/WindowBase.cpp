@@ -577,9 +577,11 @@ static void WindowBaseDefaultPaint(WindowBase* w, HDC hdc, PAINTSTRUCT* ps) {
 }
 
 void WindowBase::SetFocusTo(ControlBase* c) {
-    if (!c || !c->hwnd) {
+    if (!c) {
         return;
     }
+    c->PrepareFocus();
+    if (!c->hwnd) return;
     // the win32 focus moving away from us clears the virtual focus (WM_KILLFOCUS)
     HwndSetFocusForce(c->hwnd);
 }
@@ -766,14 +768,6 @@ struct MnemonicStop {
     bool focusable = false;
 };
 
-static bool IsCtrlHwndFocusable(HWND h) {
-    if (!h || !::IsWindowVisible(h) || !::IsWindowEnabled(h)) {
-        return false;
-    }
-    DWORD style = (DWORD)GetWindowLongW(h, GWL_STYLE);
-    return (style & WS_TABSTOP) != 0;
-}
-
 static void CollectMnemonicStopsVirt(VirtCtrl* w, Vec<MnemonicStop>& out) {
     if (!w || !w->IsHitTestable()) {
         return;
@@ -799,7 +793,7 @@ static void CollectMnemonicStops(ILayout* root, Vec<MnemonicStop>& out) {
     if (c) {
         MnemonicStop ms;
         ms.ctrl = c;
-        ms.focusable = IsCtrlHwndFocusable(c->hwnd);
+        ms.focusable = c->IsFocusable();
         if (c->hwnd && ::IsWindowVisible(c->hwnd) && ::IsWindowEnabled(c->hwnd)) {
             ms.mnemonic = MnemonicCharInStr(HwndGetTextTemp(c->hwnd));
         }
@@ -2189,7 +2183,9 @@ HWND ControlBase::CreateControl(const CreateControlArgs& args) {
     if (!hwnd) {
         return nullptr;
     }
-    HwndSetFont(hwnd, GetHFont());
+    // A hidden form is still assembling its children. Defer their first paint
+    // until it is shown instead of redrawing each combo's edit/list here.
+    SetWindowFont(hwnd, GetHFont(), IsWindowVisible(hwnd));
     DpiSetFromHwnd(hwnd);
 
     Subclass();
@@ -2225,6 +2221,13 @@ void ControlBase::SetInsetsPt(int top, int right, int bottom, int left) {
 bool ControlBase::IsFocused() const {
     return hwnd && HwndIsFocused(hwnd);
 }
+
+bool ControlBase::IsFocusable() const {
+    return hwnd && ::IsWindowVisible(hwnd) && ::IsWindowEnabled(hwnd) &&
+           (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_TABSTOP);
+}
+
+void ControlBase::PrepareFocus() {}
 
 void ControlBase::SetFocus() {
     if (hwnd) {

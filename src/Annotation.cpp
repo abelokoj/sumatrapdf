@@ -337,14 +337,12 @@ void SetRect(Annotation* annot, RectF r) {
     MarkNotificationAsModified(e, annot);
 }
 
-bool TransformAnnotation(Annotation* annot, RectF from, RectF to) {
-    if (!AnnotationIsLive(annot) || from.dx <= 0 || from.dy <= 0 || to.dx <= 0 || to.dy <= 0) return false;
+static bool MapAnnotation(Annotation* annot, fz_matrix matrix) {
+    if (!AnnotationIsLive(annot)) return false;
     if (!AnnotationCanBeMoved(annot->type) && !AnnotationIsTextMarkup(annot->type)) return false;
     auto* e = annot->engine;
     auto* a = annot->pdfannot;
-    auto map = [&](fz_point p) -> fz_point {
-        return {to.x + (p.x - from.x) * to.dx / from.dx, to.y + (p.y - from.y) * to.dy / from.dy};
-    };
+    auto map = [&](fz_point p) -> fz_point { return fz_transform_point(p, matrix); };
     Vec<fz_point> points;
     Vec<int> counts;
     Vec<fz_quad> quads;
@@ -404,6 +402,110 @@ bool TransformAnnotation(Annotation* annot, RectF from, RectF to) {
     annot->bounds = GetBounds(annot);
     MarkNotificationAsModified(e, annot);
     return true;
+}
+
+bool TransformAnnotation(Annotation* annot, RectF from, RectF to) {
+    if (from.dx <= 0 || from.dy <= 0 || to.dx <= 0 || to.dy <= 0) return false;
+    float sx = to.dx / from.dx, sy = to.dy / from.dy;
+    return MapAnnotation(annot, {sx, 0, 0, sy, to.x - from.x * sx, to.y - from.y * sy});
+}
+
+bool AnnotationCanBeRotated(AnnotationType type) {
+    return type == AnnotationType::Ink || type == AnnotationType::Line || type == AnnotationType::Polygon ||
+           type == AnnotationType::PolyLine || AnnotationIsTextMarkup(type);
+}
+
+bool RotateAnnotation(Annotation* annot, PointF center, float degrees) {
+    if (!AnnotationIsLive(annot) || !AnnotationCanBeRotated(annot->type) || !isfinite(degrees)) return false;
+    fz_matrix matrix = fz_rotate(degrees);
+    matrix.e = center.x - center.x * matrix.a - center.y * matrix.c;
+    matrix.f = center.y - center.x * matrix.b - center.y * matrix.d;
+    return MapAnnotation(annot, matrix);
+}
+
+static pdf_obj* CloneAnnotValue(fz_context* ctx, pdf_document* doc, pdf_obj* value, int depth) {
+    if (pdf_is_indirect(ctx, value)) return pdf_keep_obj(ctx, value);
+    if (!pdf_is_dict(ctx, value) && !pdf_is_array(ctx, value)) return pdf_keep_obj(ctx, value);
+    if (depth >= 64) fz_throw(ctx, FZ_ERROR_LIMIT, "Annotation dictionary nesting is too deep");
+    pdf_obj* copy = nullptr;
+    fz_var(copy);
+    fz_try(ctx) {
+        if (pdf_is_dict(ctx, value)) {
+            int n = pdf_dict_len(ctx, value);
+            copy = pdf_new_dict(ctx, doc, n);
+            for (int i = 0; i < n; i++) {
+                pdf_obj* child = CloneAnnotValue(ctx, doc, pdf_dict_get_val(ctx, value, i), depth + 1);
+                pdf_dict_put_drop(ctx, copy, pdf_dict_get_key(ctx, value, i), child);
+            }
+        } else {
+            int n = pdf_array_len(ctx, value);
+            copy = pdf_new_array(ctx, doc, n);
+            for (int i = 0; i < n; i++)
+                pdf_array_push_drop(ctx, copy, CloneAnnotValue(ctx, doc, pdf_array_get(ctx, value, i), depth + 1));
+        }
+    }
+    fz_catch(ctx) {
+        pdf_drop_obj(ctx, copy);
+        fz_rethrow(ctx);
+    }
+    return copy;
+}
+
+// Copy the native dictionary so pen tags, quadrilaterals and custom appearance resources survive duplication.
+Annotation* DuplicateAnnotation(Annotation* source, PointF offset) {
+    if (!AnnotationIsLive(source) || (!AnnotationCanBeCopied(source->type) && !AnnotationIsTextMarkup(source->type)))
+        return nullptr;
+    auto* engine = source->engine;
+    AutoEndEngineOperation operation(engine, "Duplicate annotation");
+    auto* pageInfo = engine->GetFzPageInfo(source->pageNo, true);
+    if (!pageInfo || !pageInfo->page) return nullptr;
+    pdf_annot* copy = nullptr;
+    pdf_page* page = nullptr;
+    fz_var(copy);
+    fz_var(page);
+    {
+        auto* ctx = engine->Ctx();
+        AutoUnlockRecursiveMutex lock(&engine->docLock);
+        fz_try(ctx) {
+            page = pdf_page_from_fz_page(ctx, pageInfo->page);
+            copy = pdf_create_annot(ctx, page, (enum pdf_annot_type)source->type);
+            pdf_obj* src = pdf_annot_obj(ctx, source->pdfannot);
+            pdf_obj* dst = pdf_annot_obj(ctx, copy);
+            for (int i = 0; i < pdf_dict_len(ctx, src); i++) {
+                pdf_obj* key = pdf_dict_get_key(ctx, src, i);
+                const char* name = pdf_to_name(ctx, key);
+                if (str::Eq(Str(name), StrL("P")) || str::Eq(Str(name), StrL("Popup")) ||
+                    str::Eq(Str(name), StrL("Parent")) || str::Eq(Str(name), StrL("IRT")) ||
+                    str::Eq(Str(name), StrL("NM")))
+                    continue;
+                pdf_obj* value = pdf_dict_get_val(ctx, src, i);
+                if (!pdf_is_stream(ctx, value)) value = pdf_resolve_indirect(ctx, value);
+                pdf_dict_put_drop(ctx, dst, key, CloneAnnotValue(ctx, engine->pdfdoc, value, 0));
+            }
+            pdf_update_annot(ctx, copy);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+            if (copy) {
+                pdf_delete_annot(ctx, page, copy);
+                pdf_drop_annot(ctx, copy);
+                copy = nullptr;
+            }
+        }
+    }
+    if (!copy) return nullptr;
+    auto* result = MakeAnnotationWrapper(engine, copy, source->pageNo);
+    MarkNotificationAsModified(engine, result, AnnotationChange::Add);
+    pdf_drop_annot(engine->Ctx(), copy);
+    RectF from = GetBounds(result), to = from;
+    to.x += offset.x;
+    to.y += offset.y;
+    if (!TransformAnnotation(result, from, to)) {
+        DeleteAnnotation(result);
+        return nullptr;
+    }
+    SetModificationDateToNow(result);
+    return result;
 }
 
 static Str MupdfCStrDupTemp(const char* s) {
@@ -530,9 +632,7 @@ void SetQuadPointsAsRect(Annotation* annot, const Vec<RectF>& rects) {
         if (!quads) {
             return;
         }
-        defer {
-            free(quads);
-        };
+        AutoFree<fz_quad> freeQuads(quads);
         for (int i = 0; i < n; i++) {
             RectF rect = rects[i];
             fz_rect r = ToFzRect(rect);
@@ -2063,11 +2163,7 @@ static float PointSegmentDistSq(PointF p, PointF a, PointF b) {
     float t = 0.f;
     if (lengthSq > 0.f) {
         t = (((p.x - a.x) * dx) + ((p.y - a.y) * dy)) / lengthSq;
-        if (t < 0.f) {
-            t = 0.f;
-        } else if (t > 1.f) {
-            t = 1.f;
-        }
+        t = ClampF(t, 0.f, 1.f);
     }
     float px = a.x + (t * dx);
     float py = a.y + (t * dy);
@@ -2117,7 +2213,94 @@ bool EraseInkStrokes(Vec<int>& strokeCounts, Vec<PointF>& points, PointF pt, flo
     return erased;
 }
 
-InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
+bool EraseInkSegments(Vec<int>& counts, Vec<PointF>& points, PointF center, float radius) {
+    if (!isfinite(radius) || radius <= 0) return false;
+    int total = 0;
+    for (int count : counts) {
+        if (count < 0 || count > len(points) - total) return false;
+        total += count;
+    }
+    if (total != len(points)) return false;
+
+    Vec<int> remainingCounts;
+    Vec<PointF> remainingPoints;
+    Vec<PointF> fragment;
+    auto append = [&](PointF p) {
+        if (len(fragment) == 0 || VecLast(fragment) != p) VecAppend(fragment, p);
+    };
+    auto finish = [&]() {
+        if (len(fragment) > 0) {
+            VecAppend(remainingCounts, len(fragment));
+            for (PointF p : fragment) VecAppend(remainingPoints, p);
+            VecClear(fragment);
+        }
+    };
+    bool erased = false;
+    int start = 0;
+    float radiusSq = radius * radius;
+    for (int count : counts) {
+        if (count == 1) {
+            PointF p = points[start];
+            if (PointSegmentDistSq(center, p, p) < radiusSq)
+                erased = true;
+            else
+                append(p);
+        }
+        for (int i = 1; i < count; i++) {
+            PointF a = points[start + i - 1], b = points[start + i];
+            float dx = b.x - a.x, dy = b.y - a.y;
+            float lengthSq = dx * dx + dy * dy;
+            float ax = a.x - center.x, ay = a.y - center.y;
+            float c = ax * ax + ay * ay - radiusSq;
+            if (lengthSq <= 0) {
+                if (c < 0) {
+                    erased = true;
+                    finish();
+                } else
+                    append(a);
+                continue;
+            }
+            float dot = ax * dx + ay * dy;
+            float discriminant = dot * dot - lengthSq * c;
+            if (discriminant <= 0) {
+                append(a);
+                append(b);
+                continue;
+            }
+            float root = sqrtf(discriminant);
+            float enter = std::max(0.f, (-dot - root) / lengthSq);
+            float exit = std::min(1.f, (-dot + root) / lengthSq);
+            if (enter >= exit || enter >= 1 || exit <= 0) {
+                append(a);
+                append(b);
+                continue;
+            }
+            erased = true;
+            if (enter > 0) {
+                append(a);
+                append({a.x + dx * enter, a.y + dy * enter});
+            }
+            finish();
+            if (exit < 1) {
+                append({a.x + dx * exit, a.y + dy * exit});
+                append(b);
+            }
+        }
+        finish();
+        start += count;
+    }
+    if (!erased) return false;
+    counts = remainingCounts;
+    points = remainingPoints;
+    return true;
+}
+
+enum class InkEraseKind {
+    Stroke,
+    Segment
+};
+
+static InkEraseResult EraseAnnotInk(Annotation* annot, PointF pt, float radius, InkEraseKind kind) {
     if (!AnnotationIsLive(annot) || annot->type != AnnotationType::Ink) {
         return InkEraseResult::None;
     }
@@ -2126,7 +2309,9 @@ InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
     Vec<PointF> points;
     GetInkList(annot, strokeCounts, points);
     radius += BorderWidthF(annot) / 2.f;
-    if (!EraseInkStrokes(strokeCounts, points, pt, radius)) {
+    bool erased = kind == InkEraseKind::Segment ? EraseInkSegments(strokeCounts, points, pt, radius)
+                                                : EraseInkStrokes(strokeCounts, points, pt, radius);
+    if (!erased) {
         return InkEraseResult::None;
     }
     if (len(strokeCounts) == 0) {
@@ -2160,6 +2345,14 @@ InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
     annot->bounds = GetBounds(annot);
     MarkNotificationAsModified(e, annot);
     return InkEraseResult::Changed;
+}
+
+InkEraseResult EraseAnnotationInk(Annotation* annot, PointF pt, float radius) {
+    return EraseAnnotInk(annot, pt, radius, InkEraseKind::Stroke);
+}
+
+InkEraseResult EraseAnnotInkSegments(Annotation* annot, PointF pt, float radius) {
+    return EraseAnnotInk(annot, pt, radius, InkEraseKind::Segment);
 }
 
 float BorderWidthF(Annotation* annot) {
@@ -3274,7 +3467,33 @@ bool Annotation_UnitTestFontRoundtrip() {
 #endif
 
 #if IS_DEBUG
+static bool TestInkSegmentGeometry() {
+    Vec<int> counts;
+    Vec<PointF> points;
+    VecAppend(counts, 2);
+    VecAppend(points, {-10, 0});
+    VecAppend(points, {10, 0});
+    bool ok = EraseInkSegments(counts, points, {0, 0}, 2) && len(counts) == 2 && len(points) == 4;
+    if (!ok) return false;
+    ok = counts[0] == 2 && counts[1] == 2 && fabsf(points[1].x + 2) < 0.001f && fabsf(points[2].x - 2) < 0.001f &&
+         points[0] == PointF{-10, 0} && points[3] == PointF{10, 0};
+    VecReset(counts);
+    VecReset(points);
+    VecAppend(counts, 2);
+    VecAppend(points, {0, 0});
+    VecAppend(points, {10, 0});
+    ok = ok && EraseInkSegments(counts, points, {0, 0}, 2) && len(counts) == 1 && len(points) == 2 &&
+         fabsf(points[0].x - 2) < 0.001f;
+    ok = ok && !EraseInkSegments(counts, points, {5, 2}, 2);
+    ok = ok && EraseInkSegments(counts, points, {5, 0}, 20) && len(counts) == 0 && len(points) == 0;
+    VecAppend(counts, 3);
+    VecAppend(points, {1, 1});
+    ok = ok && !EraseInkSegments(counts, points, {1, 1}, 1) && len(counts) == 1 && len(points) == 1;
+    return ok;
+}
+
 bool Annotation_UnitTestInkRoundtrip() {
+    if (!TestInkSegmentGeometry()) return false;
     const char* objects[] = {
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
@@ -3331,6 +3550,44 @@ bool Annotation_UnitTestInkRoundtrip() {
                 ok = fabsf(restored[i].x - original[i].x) < 0.001f && fabsf(restored[i].y - original[i].y) < 0.001f;
             ok = ok && EngineMupdfRedo(engine, removed);
         }
+        if (ok) {
+            EngineMupdfGetAnnotations(engine, annotations);
+            annot = annotations[0];
+            Vec<PointF> before;
+            GetInkList(annot, counts, before);
+            EngineMupdfBeginOperation(engine, "Rotate selection");
+            ok = RotateAnnotation(annot, {50, 50}, 90);
+            EngineMupdfEndOperation(engine);
+            Vec<PointF> rotated;
+            GetInkList(annot, counts, rotated);
+            for (int i = 0; ok && i < len(before); i++)
+                ok = fabsf(rotated[i].x - (100 - before[i].y)) < 0.001f && fabsf(rotated[i].y - before[i].x) < 0.001f;
+            EngineMupdfBeginOperation(engine, "Duplicate and style selection");
+            Annotation* copy = DuplicateAnnotation(annot, {12, 12});
+            ok = ok && copy && InkPenStyleTag(copy) == 3 && Opacity(copy) == Opacity(annot);
+            if (copy) {
+                Vec<PointF> copied;
+                GetInkList(copy, counts, copied);
+                ok = ok && len(copied) == len(rotated);
+                for (int i = 0; ok && i < len(rotated); i++)
+                    ok = fabsf(copied[i].x - rotated[i].x - 12) < 0.001f &&
+                         fabsf(copied[i].y - rotated[i].y - 12) < 0.001f;
+                SetBorderWidth(copy, 0.7f);
+                SetColor(copy, MkPdfColor(255, 0, 0, (u8)Opacity(copy)));
+                ok = ok && fabsf(BorderWidthF(annot) - 0.3f) < 0.001f && fabsf(BorderWidthF(copy) - 0.7f) < 0.001f;
+            }
+            EngineMupdfEndOperation(engine);
+            ok = ok && EngineMupdfUndo(engine, removed);
+            EngineMupdfGetAnnotations(engine, annotations);
+            ok = ok && len(annotations) == 1 && EngineMupdfRedo(engine, removed);
+            EngineMupdfGetAnnotations(engine, annotations);
+            ok = ok && len(annotations) == 2;
+            if (len(annotations) == 2) {
+                EngineMupdfBeginOperation(engine, "Remove duplicated selection");
+                DeleteAnnotation(annotations[1]);
+                EngineMupdfEndOperation(engine);
+            }
+        }
     }
     Str savedPath = str::Dup(GetTempFilePathTemp(StrL("enhanced-ink")));
     ok = ok && EngineMupdfSaveCopy(engine, savedPath);
@@ -3350,6 +3607,18 @@ bool Annotation_UnitTestInkRoundtrip() {
                 GetInkList(annot, counts, points);
                 ok = ok && len(counts) == 2 && len(points) == 4;
                 if (ok) {
+                    float y = points[0].y + (points[1].y - points[0].y) / 2;
+                    EngineMupdfBeginOperation(engine, "Partial erase");
+                    ok = EraseAnnotInkSegments(annot, {points[0].x, y}, 1.f) == InkEraseResult::Changed;
+                    EngineMupdfEndOperation(engine);
+                    GetInkList(annot, counts, points);
+                    ok = ok && len(counts) == 3 && len(points) == 6;
+                    Vec<Annotation*> removed;
+                    ok = ok && EngineMupdfUndo(engine, removed);
+                    EngineMupdfGetAnnotations(engine, annotations);
+                    annot = annotations[0];
+                    GetInkList(annot, counts, points);
+                    ok = ok && len(counts) == 2 && len(points) == 4;
                     ok = EraseAnnotationInk(annot, points[0], 0.1f) == InkEraseResult::Changed;
                     GetInkList(annot, counts, points);
                     ok = ok && len(counts) == 1 && len(points) == 2;

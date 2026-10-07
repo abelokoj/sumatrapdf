@@ -1401,6 +1401,7 @@
     <ClInclude Include="..\src\AnnotEditToolbar.h" />
     <ClInclude Include="..\src\AnnotFilterToolbar.h" />
     <ClInclude Include="..\src\AnnotPlacement.h" />
+    <ClInclude Include="..\src\AnnotRecovery.h" />
     <ClInclude Include="..\src\AnnotSearch.h" />
     <ClInclude Include="..\src\AnnotTextPopup.h" />
     <ClInclude Include="..\src\Annotation.h" />
@@ -1465,6 +1466,7 @@
     <ClInclude Include="..\src\MarkdownModel.h" />
     <ClInclude Include="..\src\MarkdownToc.h" />
     <ClInclude Include="..\src\Menu.h" />
+    <ClInclude Include="..\src\MergePdf.h" />
     <ClInclude Include="..\src\MobiDoc.h" />
     <ClInclude Include="..\src\NavFilesInFolder.h" />
     <ClInclude Include="..\src\Notifications.h" />
@@ -1473,6 +1475,7 @@
     <ClInclude Include="..\src\PagePosition.h" />
     <ClInclude Include="..\src\PageRenderPolicy.h" />
     <ClInclude Include="..\src\PageRenderService.h" />
+    <ClInclude Include="..\src\PageThumbnails.h" />
     <ClInclude Include="..\src\PalmDbReader.h" />
     <ClInclude Include="..\src\PdfCad.h" />
     <ClInclude Include="..\src\PdfCreator.h" />
@@ -1503,6 +1506,7 @@
     <ClInclude Include="..\src\Settings.h" />
     <ClInclude Include="..\src\ShellProviderRegistry.h" />
     <ClInclude Include="..\src\ShortcutParse.h" />
+    <ClInclude Include="..\src\SidebarPanel.h" />
     <ClInclude Include="..\src\SimpleBrowserWindow.h" />
     <ClInclude Include="..\src\StressTesting.h" />
     <ClInclude Include="..\src\StudyExport.h" />
@@ -1545,6 +1549,7 @@
     <ClInclude Include="..\src\gui\win\BrowserDocView.h" />
     <ClInclude Include="..\src\gui\win\FrameRateWnd.h" />
     <ClInclude Include="..\src\gui\win\HtmlWindow.h" />
+    <ClInclude Include="..\src\gui\win\ScrollableMenu.h" />
     <ClInclude Include="..\src\gui\win\TabsCtrl.h" />
     <ClInclude Include="..\src\gui\win\WebView.h" />
     <ClInclude Include="..\src\gui\win\WinGui.h" />
@@ -1607,6 +1612,7 @@
     <ClCompile Include="..\src\AnnotEditToolbar.cpp" />
     <ClCompile Include="..\src\AnnotFilterToolbar.cpp" />
     <ClCompile Include="..\src\AnnotPlacement.cpp" />
+    <ClCompile Include="..\src\AnnotRecovery.cpp" />
     <ClCompile Include="..\src\AnnotSearch.cpp" />
     <ClCompile Include="..\src\AnnotTextPopup.cpp" />
     <ClCompile Include="..\src\Annotation.cpp" />
@@ -1648,6 +1654,7 @@
     <ClCompile Include="..\src\EngineCreate.cpp" />
     <ClCompile Include="..\src\EngineDjvuDec.cpp" />
     <ClCompile Include="..\src\EngineDump.cpp" />
+    <ClCompile Include="..\src\EngineDvi.cpp" />
     <ClCompile Include="..\src\EngineEbook.cpp" />
     <ClCompile Include="..\src\EngineImages.cpp" />
     <ClCompile Include="..\src\EngineMupdf.cpp">
@@ -1696,6 +1703,7 @@
     <ClCompile Include="..\src\MarkdownModel.cpp" />
     <ClCompile Include="..\src\MarkdownToc.cpp" />
     <ClCompile Include="..\src\Menu.cpp" />
+    <ClCompile Include="..\src\MergePdf.cpp" />
     <ClCompile Include="..\src\MobiDoc.cpp" />
     <ClCompile Include="..\src\NavFilesInFolder.cpp" />
     <ClCompile Include="..\src\Notifications.cpp" />
@@ -1705,6 +1713,7 @@
     <ClCompile Include="..\src\PagePosition.cpp" />
     <ClCompile Include="..\src\PageRenderPolicy.cpp" />
     <ClCompile Include="..\src\PageRenderService.cpp" />
+    <ClCompile Include="..\src\PageThumbnails.cpp" />
     <ClCompile Include="..\src\PalmDbReader.cpp" />
     <ClCompile Include="..\src\PdfCad.cpp" />
     <ClCompile Include="..\src\PdfCreator.cpp" />
@@ -1751,8 +1760,10 @@
     <ClCompile Include="..\src\SelectionHandlers.cpp" />
     <ClCompile Include="..\src\SelectionToolbar.cpp" />
     <ClCompile Include="..\src\SelectionTranslate.cpp" />
+    <ClCompile Include="..\src\Settings.cpp" />
     <ClCompile Include="..\src\SettingsDialog.cpp" />
     <ClCompile Include="..\src\ShortcutParse.cpp" />
+    <ClCompile Include="..\src\SidebarPanel.cpp" />
     <ClCompile Include="..\src\SignDocumentDialog.cpp" />
     <ClCompile Include="..\src\SimpleBrowserWindow.cpp" />
     <ClCompile Include="..\src\StressTesting.cpp" />
@@ -2364,6 +2375,20 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile x64_asan|x64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="..\src\tests\ReadAloudHighlight_ut.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release x64_asan|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ReleaseAnalyze|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ReleaseAnalyze|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ReleaseAnalyze|ARM64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ReleaseAnalyze x64_asan|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile|ARM64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile x64_asan|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="..\src\tests\RenderCache_ut.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>

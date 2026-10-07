@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v0.1.2
+
+- Reduced first-opening work in Settings and Learning Hub by creating offscreen dropdowns and practice controls when needed.
+- Shortened PDF wheel easing and combined continuous-view line updates, preserving wheel distance and direction changes.
+- Matched dictionary dropdown and button heights across themes and interface scales. Image and bookmark editors now refresh selected fonts, colors and spacing without overflowing their controls.
+- Added lasso rotation, duplication, recoloring and thickness commands with undo, and segment erasing that preserves the remaining ink. Selection edits refresh the visible page and annotation lists.
+- Added background annotation recovery copies with atomic manifests, original-file checks and explicit recovery choices. Recovery copies preserve the original PDF and the active undo history; repaired PDFs that cannot be saved incrementally are excluded.
+- Added source and package checksum manifests, x64 ASan/UI validation and disposable installation coexistence checks to build-on-push.
+
+- Integrated upstream prerelease Build 22653 (`a2957304f`, October 5, 2026), retaining Enhanced features, custom settings and existing command IDs.
+- Added JPEG XL decoding in PDFs, MuPDF 1.28.5, MuJS 1.3.10 and the updated CHM decoder.
+- Added interchangeable bookmark/thumbnail/favorite sidebar panels, the Merge PDF page organizer, DPI choices for PDF-to-image conversion and cached DVI-to-PDF opening when a TeX converter is installed.
+- Included upstream fixes for search reopening, EPUB images, fullscreen session restoration, annotation snapping, window geometry and render/font/print thread lifetimes.
+- Corrected DVI cache validation and preserved keyboard traversal and shared-menu tooltip behavior in the combined Enhanced interface.
+
 - Reduced Settings opening work: dropdown choices load on first use, text measurements are reused across reopenings, and the completed form is laid out once during creation.
 - Added horizontal toolbar scrolling, left and right arrows and a scrollable command dropdown, keeping tools in a single row. Arrow and pinned-tool clicks remain usable when the toolbar shares the title bar.
 - Added a hand tool for dragging the page and a lasso for selecting, moving, resizing and deleting PDF annotations, with undo support. Hand dragging stops on release or capture loss, and switching tools clears pending selections.

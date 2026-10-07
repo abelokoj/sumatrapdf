@@ -11,6 +11,7 @@
 #include "VocabularyMeanings.h"
 #include "Vocabulary.h"
 #if IS_DEBUG
+#include "base/Timer.h"
 #include "base/tests/UtAssert.h"
 #endif
 
@@ -145,9 +146,16 @@ static void AddBuiltins(VocabularyData& target) {
         VecAppend(target.decks, deck);
     }
 }
+#if IS_DEBUG
+static int vocabularyIdComparisons = 0;
+#endif
 static VocabularyWord* FindIn(const Vec<VocabularyWord*>& words, Str id) {
-    for (auto* w : words)
+    for (auto* w : words) {
+#if IS_DEBUG
+        vocabularyIdComparisons++;
+#endif
         if (str::Eq(w->id, id)) return w;
+    }
     return nullptr;
 }
 static VocabularyWord* FindWord(const Vec<VocabularyWord*>& words, Str word, Str dictionary) {
@@ -398,9 +406,21 @@ static bool ParseVocab(Str bytes, VocabReader& r) {
             if (!len(w->dictionaryId)) w->dictionaryId = str::Dup(StrL("wmkeyboard-import"));
         }
     }
+    Vec<VocabularyWord*> byId;
+    for (auto* word : r.parsed.words) VecAppend(byId, word);
+    VecSort(byId, [](VocabularyWord* const* a, VocabularyWord* const* b) {
+#if IS_DEBUG
+        vocabularyIdComparisons++;
+#endif
+        return str::Cmp((*a)->id, (*b)->id);
+    });
+    for (int i = 1; i < len(byId); i++) {
+        if (str::Eq(byId[i - 1]->id, byId[i]->id))
+            return Fail(StrL("Vocabulary contains invalid words or duplicate IDs."));
+    }
     for (int i = 0; i < len(r.parsed.words); i++) {
         VocabularyWord* w = r.parsed.words[i];
-        if (!len(CleanWord(w->word)) || !len(w->id) || (FindIn(r.parsed.words, w->id) != w))
+        if (!len(CleanWord(w->word)) || !len(w->id))
             return Fail(StrL("Vocabulary contains invalid words or duplicate IDs."));
         AttachDeck(w, w->deckId);
         if (!isfinite(w->ease)) w->ease = 2.5;
@@ -1311,6 +1331,32 @@ static void DeckInstallationTests() {
     utassert(VocabularyDeckInstalled(restoredDeck->id, &count, &total));
 }
 void Vocabulary_UnitTests() {
+    {
+        constexpr int count = 4096;
+        str::Builder bytes;
+        bytes.Append(StrL("{\"format\":\"sumatrapdf-vocabulary\",\"version\":1,\"words\":["));
+        for (int i = 0; i < count; i++) {
+            if (i) bytes.Append(StrL(","));
+            bytes.Append(fmt("{\"id\":\"id-%d\",\"word\":\"term%d\",\"definition\":\"Definition\"}", i, i));
+        }
+        bytes.Append(StrL("]}"));
+        VocabReader reader;
+        int before = vocabularyIdComparisons;
+        TimeStamp started = TimeGet();
+        utassert(ParseVocab(ToStrTemp(bytes), reader));
+        printf("Vocabulary parse: %d words, %.3f ms, %d ID comparisons\n", count, TimeSinceInMs(started),
+               vocabularyIdComparisons - before);
+        utassert(len(reader.parsed.words) == count);
+        if (len(reader.parsed.words) == count) {
+            utassert(str::Eq(reader.parsed.words[0]->id, StrL("id-0")));
+            utassert(str::Eq(reader.parsed.words[count - 1]->id, fmt("id-%d", count - 1)));
+        }
+        utassert(vocabularyIdComparisons - before <= count * 32);
+        VocabReader duplicate;
+        utassert(!ParseVocab(StrL("{\"format\":\"sumatrapdf-vocabulary\",\"version\":1,\"words\":["
+                                  "{\"id\":\"same\",\"word\":\"first\"},{\"id\":\"same\",\"word\":\"last\"}]}"),
+                             duplicate));
+    }
     RemoveFailureTests();
     RemoveUndoTests();
     RemoveUndoLimitTests();

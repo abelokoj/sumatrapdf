@@ -151,6 +151,8 @@ extern int (*gUiScrollbarTrackPos)(HWND hwnd, int fallback, int bar);
 extern int (*gUiScrollbarInset)(HWND hwnd);
 extern int (*gUiScrollbarWidth)(int dpi);
 int UiScrollbarWidth(int dpi);
+Color UiScrollbarHoverColor(Color track);
+Color UiScrollbarHoverEdge(Color track);
 extern int (*gUiCornerRadius)(int dpi, int designRadius);
 int UiCornerDiameter(int dpi, int designRadius);
 // width of the 3d border the OS draws around a sunken control

@@ -5,6 +5,8 @@
 #include "base/DirScan.h"
 #include "base/File.h"
 #include "base/Win.h"
+#include "gui/UIModels.h"
+#include "gui/VirtHost.h"
 
 #include "base/HtmlTags.h"
 
@@ -426,7 +428,10 @@ static const char* kMarkdownScrollbarCss = R"(
 ::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
 ::-webkit-scrollbar-thumb { background: #8b8b8b; border: 2px solid var(--scrollbar-track); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #696969; }
+::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-hover); box-shadow: inset 0 0 0 1px var(--scrollbar-hover-edge); }
+::-webkit-scrollbar-button:single-button:hover, ::-webkit-scrollbar-button:single-button:active {
+  background-color: var(--scrollbar-hover); }
 ::-webkit-scrollbar-button:single-button { display: block; width: var(--scrollbar-size); height: var(--scrollbar-size);
   background-color: var(--scrollbar-track); background-repeat: no-repeat; background-position: center; background-size: 50%; }
 ::-webkit-scrollbar-button:vertical:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M0 8L5 2L10 8Z'/%3E%3C/svg%3E"); }
@@ -546,9 +551,11 @@ static TempStr MarkdownPageCssTemp() {
 
     TempStr cssVars =
         fmt("--bg:%s; --fg:%s; --link:%s; --muted:%s; --border:%s; --code-bg:%s; --scrollbar-size:%dpx; "
-            "--scrollbar-track:%s;",
+            "--scrollbar-track:%s; --scrollbar-hover:%s; --scrollbar-hover-edge:%s;",
             bg, fg, link, muted, border, codeBg, GetAppScrollbarWidth(96),
-            ColorToCssTemp(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol));
+            ColorToCssTemp(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol),
+            ColorToCssTemp(UiScrollbarHoverColor(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol)),
+            ColorToCssTemp(UiScrollbarHoverEdge(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol)));
     return str::JoinTemp(fmt(kMarkdownPageCssFmt, cssVars, GetUiFontCssTemp()), Str(kMarkdownScrollbarCss));
 }
 

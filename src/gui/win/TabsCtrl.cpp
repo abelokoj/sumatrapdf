@@ -17,6 +17,7 @@
 #include "base/tests/UtAssert.h"
 #endif
 #include "gui/win/TabsCtrl.h"
+#include "gui/win/ScrollableMenu.h"
 
 // Forward declaration - defined in MainWindow.cpp
 struct MainWindow;
@@ -732,9 +733,10 @@ static HMENU BuildTabListMenu(TabsCtrl* tc, TabListPopup& popup) {
         GetTextExtentPoint32W(dc, title.s, len(title), &size);
         popup.width = std::max(popup.width, (int)size.cx);
         MENUITEMINFOW item{sizeof(item)};
-        item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STRING;
+        item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STRING | MIIM_STATE;
         item.fType = MFT_OWNERDRAW;
         item.wID = i + 1;
+        item.fState = i == tc->selectedIdx ? MFS_CHECKED : MFS_UNCHECKED;
         item.dwItemData = i;
         item.dwTypeData = CWStrTemp(title);
         InsertMenuItemW(menu, i, TRUE, &item);
@@ -746,8 +748,9 @@ static HMENU BuildTabListMenu(TabsCtrl* tc, TabListPopup& popup) {
     MONITORINFO monitor{sizeof(monitor)};
     GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
     work = monitor.rcWork;
-    popup.width = std::min(std::max(tc->ScaleMetric(240), popup.width + popup.padding * 3 + popup.rowDy),
-                           std::max(1, (int)(work.right - work.left) - tc->ScaleMetric(16)));
+    popup.width =
+        std::min(std::max(tc->ScaleMetric(240), popup.width + popup.padding * 3 + popup.rowDy),
+                 std::min(tc->ScaleMetric(480), std::max(1, (int)(work.right - work.left) - tc->ScaleMetric(16))));
     int rows = std::min(tc->TabCount(), limitValue(tc->tabListVisibleItems, 1, 50));
     MENUINFO info{sizeof(info)};
     popup.brush = CreateSolidBrush(popup.background);
@@ -773,8 +776,9 @@ void TabsCtrl::ShowTabList() {
     tabListPopup = &popup;
     Rect rect = HwndClientRect(host);
     Point anchor = HwndMapWindowPoint(host, nullptr, {rect.Right(), rect.Bottom()});
-    UINT flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN | TPM_TOPALIGN;
-    int chosen = TrackPopupMenuEx(menu, flags, anchor.x, anchor.y, host, nullptr);
+    int chosen =
+        TrackScrollMenu(host, menu, anchor, popup.font, tabListVisibleItems, ScaleMetric(480), popup.background,
+                        popup.textColor, AccentColor(popup.selectedBackground, 18), popup.isRtl, true);
     DestroyMenu(menu);
     if (!IsWindow(host) || (TabsCtrl*)GetWindowLongPtrW(host, GWLP_USERDATA) != this) {
         return;
@@ -1524,6 +1528,41 @@ void TabsCtrl_UnitTests() {
     utassert(titleInfo.cch > 0);
     utassert(str::Eq(ToUtf8Temp(WStr(title)), StrL("Document 25.pdf")));
     DestroyMenu(menu);
+
+    tc.SetTextAndTooltip(0,
+                         StrL("A very long document filename that should be ellipsized instead of widening the entire "
+                              "file picker beyond a useful reading width.pdf"),
+                         {});
+    TabListPopup longPopup;
+    HMENU longMenu = BuildTabListMenu(&tc, longPopup);
+    utassert(longPopup.width <= tc.ScaleMetric(480));
+    DestroyMenu(longMenu);
+
+    ScrollMenu picker;
+    picker.font = popup.font;
+    picker.background = popup.background;
+    picker.foreground = popup.textColor;
+    TabListPopup pickerData;
+    HMENU pickerMenu = BuildTabListMenu(&tc, pickerData);
+    MeasureScrollMenu(picker, parent, pickerMenu, 10, tc.ScaleMetric(480));
+    utassert(len(picker.items) == 25 && picker.width <= tc.ScaleMetric(480));
+    utassert(picker.height == 10 * picker.rowDy + 4);
+    utassert(CreateScrollMenu(picker, parent, {-10000, -10000, picker.width, picker.height}));
+    HWND scrollbar = CreateWindowExW(WS_EX_NOACTIVATE, WC_STATICW, L"", WS_POPUP, -10000, -10000, 12, 100, picker.hwnd,
+                                     nullptr, GetInstance(), nullptr);
+    utassert(scrollbar != nullptr);
+    utassert(ScrollMenuContainsWindow(picker.hwnd, picker.list));
+    utassert(ScrollMenuContainsWindow(picker.hwnd, scrollbar));
+    utassert(!ScrollMenuContainsWindow(picker.hwnd, parent));
+    DestroyWindow(scrollbar);
+    utassert((GetWindowLongPtrW(picker.list, GWL_STYLE) & WS_VSCROLL) != 0);
+    utassert(SendMessageW(picker.list, LB_GETCOUNT, 0, 0) == 25);
+    SendMessageW(picker.list, WM_VSCROLL, SB_BOTTOM, 0);
+    utassert(SendMessageW(picker.list, LB_GETTOPINDEX, 0, 0) > 0);
+    SendMessageW(picker.list, LB_SETCURSEL, 24, 0);
+    SendMessageW(picker.list, WM_KEYDOWN, VK_RETURN, 0);
+    utassert(picker.done && picker.picked == 24);
+    DestroyMenu(pickerMenu);
 
     HDC dc = GetDC(parent);
     HDC memory = CreateCompatibleDC(dc);

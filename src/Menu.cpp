@@ -11,8 +11,10 @@
 #include "base/GdiPlusUtil.h"
 
 #include "gui/UIModels.h"
+#include "gui/Layout.h"
 #include "gui/Gfx.h"
 #include "gui/PlatformFont.h"
+#include "gui/VirtCtrl.h"
 
 #include "Settings.h"
 #include "AppSettings.h"
@@ -49,11 +51,18 @@
 #include "ReadAloud.h"
 #include "ReadingAutoScroll.h"
 #include "ReadingBar.h"
+#include "TableOfContents.h"
+#include "SidebarPanel.h"
 #include "Menu.h"
 
 // value associated with menu item for owner-drawn purposes
 struct MenuOwnerDrawInfo {
     Str text;
+    PlatformFont* measuredFont = nullptr;
+    Size measuredSize{};
+    int measuredDpi = 0;
+    int measuredCheckWidth = 0;
+    int measuredFontSize = 0;
     // copy of MENUITEMINFO fields
     uint fType = 0;
     uint fState = 0;
@@ -195,7 +204,7 @@ static MenuDef menuDefFile[] = {
     },
     {
         TrN("Open in &Foxit Reader"),
-        CmdOpenWithFoxIt,
+        CmdOpenWithFoxit,
     },
     {
         TrN("Open &in PDF-XChange"),
@@ -318,6 +327,10 @@ static MenuDef menuDefView[] = {
     {
         TrN("Show Book&marks"),
         CmdToggleBookmarks,
+    },
+    {
+        TrN("Sho&w Thumbnails"),
+        CmdToggleThumbnails,
     },
     {
         TrN("Show Me&nu"),
@@ -1220,7 +1233,7 @@ static MenuDef menuDefDocumentOperations[] = {
     },
     {
         TrN("Show PDF Info"),
-        CmdPdShowInfo,
+        CmdPdfShowInfo,
     },
     {
         TrN("Show Document Table Of Contents"),
@@ -1233,6 +1246,10 @@ static MenuDef menuDefDocumentOperations[] = {
     {
         TrN("Delete Pages From PDF"),
         CmdPdfDeletePages,
+    },
+    {
+        TrN("Merge PDF..."),
+        CmdMergePDF,
     },
     {
         TrN("Extract Text From Document"),
@@ -1341,6 +1358,10 @@ static MenuDef menuDefContext[] = {
         CmdEditBookmarks,
     },
     {
+        TrN("Show &Thumbnails"),
+        CmdToggleThumbnails,
+    },
+    {
         TrN("Sh&ow Toolbar"),
         CmdToggleToolbar,
     },
@@ -1421,7 +1442,7 @@ static int disableIfDirectoryOrBrokenPDF[] = {
     CmdDeleteFileAndOpenNext,
     CmdSendByEmail,
     CmdOpenWithAcrobat,
-    CmdOpenWithFoxIt,
+    CmdOpenWithFoxit,
     CmdOpenWithPdfXchange,
     CmdShowInFolder, // TODO: why?
 };
@@ -1593,9 +1614,7 @@ static void AppendExternalViewersToMenu(HMENU menuFile, Str filePath) {
         if (str::IsEmptyOrWhiteSpace(cmd->name)) {
             if (str::IsEmptyOrWhiteSpace(name)) {
                 StrNode* args = ParseCmdLine(ToWStrTemp(commandLine));
-                defer {
-                    FreeStrNode(nullptr, args);
-                };
+                AutoFreeStrNode freeArgs(args);
                 StrNode* arg0 = args;
                 for (int i = 0; arg0 && i < 2; i++) {
                     arg0 = arg0->next;
@@ -2118,10 +2137,13 @@ static void MenuUpdateStateForWindow(MainWindow* win, HMENU openingMenu) {
     MenuSetEnabled(win->menu, CmdToggleBookmarks, enabled);
 
     bool documentSpecific = win->IsDocLoaded();
-    bool checked = documentSpecific ? win->uiState.tocVisible : gSettings->showToc;
+    bool bookmarksShown = IsSidebarViewShown(win, SidebarView::Bookmarks);
+    bool checked = documentSpecific ? bookmarksShown : gSettings->showToc;
     MenuSetChecked(win->menu, CmdToggleBookmarks, checked);
+    MenuSetEnabled(win->menu, CmdToggleThumbnails, CanShowThumbnails(tab));
+    MenuSetChecked(win->menu, CmdToggleThumbnails, IsSidebarViewShown(win, SidebarView::Thumbnails));
 
-    MenuSetChecked(win->menu, CmdFavoriteToggle, gSettings->showFavorites);
+    MenuSetChecked(win->menu, CmdFavoriteToggle, IsSidebarViewShown(win, SidebarView::Favorites));
     MenuSetChecked(win->menu, CmdFavoriteShowInTab, FindFavoritesTab(win) != nullptr);
     {
         // checked when mode is not "hide" (show or overlay)
@@ -2434,10 +2456,12 @@ void OnWindowContextMenu(MainWindow* win, int x, int y) {
 
     MenuUpdatePrintItem(win, popup, true);
     MenuSetEnabled(popup, CmdToggleBookmarks, win->ctrl->HasToc());
-    MenuSetChecked(popup, CmdToggleBookmarks, win->uiState.tocVisible);
+    MenuSetChecked(popup, CmdToggleBookmarks, IsSidebarViewShown(win, SidebarView::Bookmarks));
+    MenuSetEnabled(popup, CmdToggleThumbnails, CanShowThumbnails(tab));
+    MenuSetChecked(popup, CmdToggleThumbnails, IsSidebarViewShown(win, SidebarView::Thumbnails));
 
     MenuSetEnabled(popup, CmdFavoriteToggle, HasFavorites());
-    MenuSetChecked(popup, CmdFavoriteToggle, gSettings->showFavorites);
+    MenuSetChecked(popup, CmdFavoriteToggle, IsSidebarViewShown(win, SidebarView::Favorites));
     MenuSetEnabled(popup, CmdFavoriteShowInTab, HasFavorites() && SettingsUseTabs());
     MenuSetChecked(popup, CmdFavoriteShowInTab, FindFavoritesTab(win) != nullptr);
 
@@ -2676,6 +2700,7 @@ bool CommandUsesContextMenuPoint(int cmdId) {
 static Vec<MenuOwnerDrawInfo*> g_menuDrawInfos;
 #if IS_DEBUG
 static int gMenuDrawAllocations = 0;
+static int gMenuMeasurements = 0;
 #endif
 
 void FreeAllMenuDrawInfos() {
@@ -2839,7 +2864,10 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/, MenuDrawScope scope) {
         modi->hbmpChecked = mii.hbmpChecked;
         modi->hbmpUnchecked = mii.hbmpUnchecked;
         TempStr text = ToUtf8Temp(buf);
-        if (!str::Eq(modi->text, text)) str::ReplaceWithCopy(&modi->text, text);
+        if (!str::Eq(modi->text, text)) {
+            str::ReplaceWithCopy(&modi->text, text);
+            modi->measuredSize = {};
+        }
         if (!hasData) {
             mii.fMask = MIIM_FTYPE | MIIM_DATA;
             mii.fType = modi->fType;
@@ -2885,10 +2913,22 @@ void MenuCustomDrawMesureItem(HWND hwnd, MEASUREITEMSTRUCT* mis) {
 
     Str text = modi && modi->text ? modi->text : StrL("Dummy");
     PlatformFont* font = GetAppMenuFont();
+    int dpi = DpiGet();
+    int fontSize = GetAppMenuFontSize();
+    int cxMenuCheckMark = GetMenuCheckMarkCx(hwnd);
+    if (modi->measuredSize.dy && modi->measuredFont == font && modi->measuredDpi == dpi &&
+        modi->measuredFontSize == fontSize && modi->measuredCheckWidth == cxMenuCheckMark) {
+        mis->itemWidth = modi->measuredSize.dx;
+        mis->itemHeight = modi->measuredSize.dy;
+        return;
+    }
     Str shortcutText = {};
     TempStr menuText = ParseMenuTextTemp(text, &shortcutText);
     MenuAccelText parsed = ParseMenuAccelTextTemp(menuText);
 
+#if IS_DEBUG
+    gMenuMeasurements++;
+#endif
     auto size = PlatformFontMeasureText(font, parsed.display);
     mis->itemHeight = size.dy;
     int dx = size.dx;
@@ -2902,9 +2942,13 @@ void MenuCustomDrawMesureItem(HWND hwnd, MEASUREITEMSTRUCT* mis) {
     auto padX = DpiScale(kMenuPaddingX);
     auto padY = DpiScale(kMenuPaddingY);
 
-    int cxMenuCheckMark = GetMenuCheckMarkCx(hwnd);
     mis->itemHeight += padY * 2;
     mis->itemWidth = uint(dx + cxMenuCheckMark + (padX * 2));
+    modi->measuredFont = font;
+    modi->measuredDpi = dpi;
+    modi->measuredFontSize = fontSize;
+    modi->measuredCheckWidth = cxMenuCheckMark;
+    modi->measuredSize = {(int)mis->itemWidth, (int)mis->itemHeight};
 }
 
 // https://gist.github.com/kjk/1df108aa126b7d8e298a5092550a53b7
@@ -3653,6 +3697,7 @@ void MenuOwnerDraw_UnitTests() {
     defer {
         gSettings = saved;
         DeleteSettings(settings);
+        RefreshUiFonts();
     };
     HMENU root = CreatePopupMenu();
     HMENU submenu = CreatePopupMenu();
@@ -3667,6 +3712,15 @@ void MenuOwnerDraw_UnitTests() {
     GetMenuItemInfoW(submenu, 0, TRUE, &info);
     auto* draw = (MenuOwnerDrawInfo*)info.dwItemData;
     utassert(draw && str::Eq(draw->text, StrL("Open")));
+    MEASUREITEMSTRUCT measure{};
+    measure.CtlType = ODT_MENU;
+    measure.itemData = (ULONG_PTR)draw;
+    MenuCustomDrawMesureItem(nullptr, &measure);
+    uint width = measure.itemWidth, height = measure.itemHeight;
+    int measured = gMenuMeasurements;
+    for (int i = 0; i < 100; i++) MenuCustomDrawMesureItem(nullptr, &measure);
+    utassert(gMenuMeasurements == measured);
+    utassert(measure.itemWidth == width && measure.itemHeight == height);
     MenuSetText(submenu, CmdOpenFile, StrL("Open changed"));
     MenuSetChecked(submenu, CmdOpenFile, true);
     MarkMenuOwnerDraw(submenu);
@@ -3674,6 +3728,17 @@ void MenuOwnerDraw_UnitTests() {
     draw = (MenuOwnerDrawInfo*)info.dwItemData;
     utassert(draw && str::Eq(draw->text, StrL("Open changed")));
     utassert(draw && (draw->fState & MFS_CHECKED));
+    MenuCustomDrawMesureItem(nullptr, &measure);
+    utassert(gMenuMeasurements == measured + 1);
+    utassert(measure.itemWidth > width && measure.itemHeight == height);
+    width = measure.itemWidth;
+    settings->uIFontSize = 28;
+    RefreshUiFonts();
+    MenuCustomDrawMesureItem(nullptr, &measure);
+    utassert(gMenuMeasurements == measured + 2);
+    utassert(measure.itemWidth > width && measure.itemHeight > height);
+    settings->uIFontSize = 22;
+    RefreshUiFonts();
     HMENU borrowed = CreatePopupMenu();
     AppendMenuW(borrowed, MF_POPUP | MF_STRING, (UINT_PTR)submenu, L"File");
     MarkMenuOwnerDraw(borrowed, false, MenuDrawScope::Level);

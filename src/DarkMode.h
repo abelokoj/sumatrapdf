@@ -17,12 +17,15 @@ Color DarkModeDialogBgColor();
 void DarkModeInit();
 void WindowCornersInit();
 bool WindowApplyRoundedCorners(HWND);
+void WindowApplyScaledCaption(HWND);
 // push the current theme's palette into darkmodelib
 void DarkModeApplyThemeColors();
 void DarkModeRememberTreeViewStyle();
 
 // a dialog or other window: theme it and its children
 void DarkModeApplyToWindow(HWND);
+// Keep a native checkbox's input/state while the app paints its scaled glyph.
+void DarkModeUseCustomCheckboxPaint(HWND);
 // ... and have it erase its own background, which stops the flicker
 void DarkModeApplyToWindowAndEraseBg(HWND);
 // ... for a window that also wants owner-draw notifications

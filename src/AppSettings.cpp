@@ -12,6 +12,9 @@
 #include "gui/Dpi.h"
 #include "gui/PlatformFont.h"
 #include "base/Timer.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
@@ -21,7 +24,6 @@
 #include "gui/win/TabsCtrl.h"
 #include "gui/win/WebView.h"
 
-#define INCLUDE_SETTINGSSTRUCTS_METADATA
 #include "Settings.h"
 #include "Commands.h"
 #include "DisplayMode.h"
@@ -35,6 +37,9 @@
 #include "SumatraPDF.h"
 #include "WindowTab.h"
 #include "MainWindow.h"
+#include "PageThumbnails.h"
+#include "SidebarPanel.h"
+#include "TableOfContents.h"
 #include "DisplayModel.h"
 #include "AppTools.h"
 #include "Favorites.h"
@@ -56,6 +61,7 @@
 #include "AIChatPanel.h"
 #include "MarkdownModel.h"
 #include "VocabularyDialog.h"
+#include "DocumentProperties.h"
 #include "AnnotEditToolbar.h"
 #include "KeyboardHelp.h"
 #include "NavFilesInFolder.h"
@@ -182,6 +188,7 @@ static bool MigrateDocumentColorsFollowThemeSetting(Str prefsData) {
 // are pixel sizes and used as-is at every DPI.
 struct UiFontsAtDpi {
     int dpi = 0;
+    int menuFontSize = 0;
     PlatformFont* appFont = nullptr;
     PlatformFont* biggerAppFont = nullptr;
     PlatformFont* appMenuFont = nullptr;
@@ -222,7 +229,6 @@ void RefreshUiFonts() {
         int dpi = win->frameDpi > 0 ? win->frameDpi : DpiGetForHwnd(win->hwndFrame);
         PlatformFont* appFont = GetAppFontForDpi(dpi);
         PlatformFont* treeFont = GetAppTreeFontForDpi(dpi);
-        PlatformFont* labelFont = GetAppSidebarLabelFontForDpi(dpi);
         if (win->tabsCtrl) {
             win->tabsCtrl->SetFont(appFont);
             UpdateTabWidth(win);
@@ -233,19 +239,11 @@ void RefreshUiFonts() {
         if (win->favTreeView && win->favTreeView->hwnd) {
             HwndSetTreeFontForDpi(win->favTreeView->hwnd, treeFont->GetHFont(), dpi);
         }
-        if (win->tocLabel) {
-            win->tocLabel->font = labelFont;
-        }
-        if (win->favLabel) {
-            win->favLabel->font = labelFont;
-        }
-        ApplySidebarUiScale(win->tocLabel, win->tocCloseBtn, dpi);
-        ApplySidebarUiScale(win->favLabel, win->favCloseBtn, dpi);
-        if (win->tocLayout) {
-            win->tocLayout->lastBounds = {};
-        }
-        if (win->favLayout) {
-            win->favLayout->lastBounds = {};
+        UpdateSidebarPanelsDpi(win, dpi);
+        if (win->pageThumbs) {
+            win->pageThumbs->font = appFont;
+            win->pageThumbs->dpi = dpi;
+            SidebarPagesChanged(win);
         }
         if (win->tocFilterEdit) {
             win->tocFilterEdit->SetFont(appFont);
@@ -253,11 +251,11 @@ void RefreshUiFonts() {
         if (win->favFilterEdit) {
             win->favFilterEdit->SetFont(appFont);
         }
-        if (win->hwndTocBox) {
-            SendMessageW(win->hwndTocBox, WM_SIZE, 0, 0);
-        }
-        if (win->hwndFavBox) {
-            SendMessageW(win->hwndFavBox, WM_SIZE, 0, 0);
+        SidebarPanel* panels[] = {win->sidebarTop, win->sidebarBottom, win->favoritesTabPanel};
+        for (SidebarPanel* panel : panels) {
+            if (panel) {
+                SendMessageW(panel->hwnd, WM_SIZE, 0, 0);
+            }
         }
         UpdateAIChatDpi(win, dpi);
         UpdateAIChatTheme(win);
@@ -492,6 +490,7 @@ void ApplySettingsToOpenWindows() {
         win->RedrawAll(true);
     }
     RefreshVocabularyDialogs();
+    RefreshPropertiesWindows();
     ReRegisterGlobalHotkeys();
 }
 
@@ -518,6 +517,7 @@ TabState* CloneTabState(const TabState* src) {
     dst->rotation = src->rotation;
     dst->scrollPos = src->scrollPos;
     dst->showToc = src->showToc;
+    str::ReplaceWithCopy(&dst->sidebarView, src->sidebarView);
     dst->tocState = new Vec<int>(*src->tocState);
     return dst;
 }
@@ -650,6 +650,7 @@ static void RememberSessionState() {
             FileState* fs = NewFileState(fp);
             tab->ctrl->GetDisplayState(fs);
             fs->showToc = tab->showToc;
+            str::ReplaceWithCopy(&fs->sidebarView, SidebarViewToStr(tab->sidebarView));
             *fs->tocState = tab->tocState;
             TabState* ts = NewTabState(fs);
             VecAppend(*windowState->tabStates, ts);
@@ -1294,8 +1295,8 @@ int GetAppCornerRadius(int dpi, int designRadius) {
 }
 
 int GetAppScrollbarWidth(int dpi) {
-    int width = gSettings ? gSettings->scrollbarWidth : 20;
-    return UiScalePxForDpi(dpi, limitValue(width, 8, 40));
+    int width = gSettings ? gSettings->scrollbarWidth : 30;
+    return UiScalePxForDpi(dpi, limitValue(width, 8, 60));
 }
 
 int UiFontSizePxForDpi(int dpi, int designPx) {
@@ -1322,7 +1323,13 @@ void ApplySidebarUiScale(VirtText* label, VirtCloseButton* close, int dpi) {
 }
 
 // metrics for an explicit DPI (system dpi when GetNonClientMetricsForDpi fails)
+#if IS_DEBUG
+static int uiMetricQueryCount = 0;
+#endif
 static void GetNonClientMetricsForDpiValue(int dpi, NONCLIENTMETRICS* ncm) {
+#if IS_DEBUG
+    uiMetricQueryCount++;
+#endif
     if (dpi <= 0) {
         dpi = 96;
     }
@@ -1339,14 +1346,33 @@ int GetAppMenuFontSizeForDpi(int dpi) {
     if (gSettings->uIFontSize >= kMinFontSize) {
         return ScaleUiPx(gSettings->uIFontSize);
     }
-    NONCLIENTMETRICS ncm{};
-    GetNonClientMetricsForDpiValue(dpi, &ncm);
-    return ScaleUiPx(std::abs(ncm.lfMenuFont.lfHeight));
+    auto* metrics = GetUiFontsAtDpi(dpi);
+    if (!metrics->menuFontSize) {
+        NONCLIENTMETRICS ncm{};
+        GetNonClientMetricsForDpiValue(dpi, &ncm);
+        metrics->menuFontSize = std::max(1, (int)std::abs(ncm.lfMenuFont.lfHeight));
+    }
+    return ScaleUiPx(metrics->menuFontSize);
 }
 
 int GetAppMenuFontSize() {
     return GetAppMenuFontSizeForDpi(DpiGet());
 }
+
+#if IS_DEBUG
+bool AppSettings_UnitTestsMenuMetrics() {
+    int oldSize = gSettings->uIFontSize;
+    gSettings->uIFontSize = 0;
+    ResetCachedFonts();
+    int before = uiMetricQueryCount;
+    int size = GetAppMenuFontSizeForDpi(96);
+    for (int i = 0; i < 200; i++) utassert(GetAppMenuFontSizeForDpi(96) == size);
+    bool cached = uiMetricQueryCount == before + 1;
+    gSettings->uIFontSize = oldSize;
+    ResetCachedFonts();
+    return cached;
+}
+#endif
 
 int GetAppFontSizeForDpi(int dpi) {
     return GetAppMenuFontSizeForDpi(dpi);
@@ -1567,6 +1593,17 @@ TempStr GetUiFontCssTemp() {
 }
 
 #if IS_DEBUG
+bool AppSettings_UnitTestsFontStartup() {
+    TimeStamp started = TimeGet();
+    utassert(!len(ResolveUiFontName(StrL("system"))));
+    utassert(str::Eq(ResolveUiFontName(StrL("Segoe UI")), StrL("Segoe UI")));
+    int loaded = 0;
+    for (HANDLE face : EnhancedUiFonts().handles) loaded += face != nullptr;
+    printf("Font startup: %d bundled faces, %.3f ms\n", loaded, TimeSinceInMs(started));
+    utassert(loaded == 0);
+    return true;
+}
+
 bool AppSettings_UnitTestsUiFonts() {
     Settings* savedSettings = gSettings;
     gSettings = NewSettings({});
@@ -2117,8 +2154,41 @@ void DeleteFavorite(Favorite* fav) {
 }
 
 Settings* NewSettings(Str data) {
-    return (Settings*)DeserializeStruct(&gSettingsInfo, data);
+    Settings* settings = (Settings*)DeserializeStruct(&gSettingsInfo, data);
+    if (settings && !settings->scrollbarWidthExpanded) {
+        // Expand a saved width once; fresh profiles already have the new default.
+        SquareTreeNode* root = ParseSquareTree(data);
+        if (root && root->GetValue(StrL("ScrollbarWidth"))) {
+            settings->scrollbarWidth = MulDiv(limitValue(settings->scrollbarWidth, 8, 40), 3, 2);
+        }
+        delete root;
+        settings->scrollbarWidthExpanded = true;
+    }
+    return settings;
 }
+
+#if IS_DEBUG
+bool AppSettings_UnitTestsScrollbars() {
+    for (int oldWidth : {8, 12, 20, 28, 40}) {
+        Settings* legacy = NewSettings(fmt("ScrollbarWidth = %d\n", oldWidth));
+        utassert(legacy->scrollbarWidth == MulDiv(oldWidth, 3, 2));
+        utassert(legacy->scrollbarWidthExpanded);
+        Str encoded = SerializeSettings(legacy, {});
+        Settings* reloaded = NewSettings(encoded);
+        utassert(reloaded->scrollbarWidth == legacy->scrollbarWidth);
+        DeleteSettings(reloaded);
+        str::Free(encoded);
+        DeleteSettings(legacy);
+    }
+    Settings* fresh = NewSettings({});
+    utassert(fresh->scrollbarWidth == 30);
+    DeleteSettings(fresh);
+    Settings* custom = NewSettings(StrL("ScrollbarWidth = 17\nScrollbarWidthExpanded = true\n"));
+    utassert(custom->scrollbarWidth == 17);
+    DeleteSettings(custom);
+    return true;
+}
+#endif
 
 // With file history turned off the only thing worth keeping about a file is a
 // favorite the user added on purpose. Everything else in a FileState is history
@@ -2238,6 +2308,7 @@ TabState* NewTabState(FileState* fs) {
     state->rotation = fs->rotation;
     state->scrollPos = fs->scrollPos;
     state->showToc = fs->showToc;
+    str::ReplaceWithCopy(&state->sidebarView, fs->sidebarView);
     *state->tocState = *fs->tocState;
     return state;
 }

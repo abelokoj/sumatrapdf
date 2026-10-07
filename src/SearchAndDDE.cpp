@@ -366,6 +366,21 @@ bool NeedsFindUI(MainWindow* win) {
     return true;
 }
 
+static bool HasFindText(MainWindow* win);
+
+// Ctrl+F with a term left in the box: highlight its matches on the pages in
+// view without moving to one; Enter is what restarts the search
+static void HighlightRestoredFindTerm(MainWindow* win) {
+    if (!win->findEdit || !HasFindText(win)) {
+        return;
+    }
+    // typing (or a copied selection) is about to start its own search
+    if (win->findDebouncePending || len(win->findMatches) > 0) {
+        return;
+    }
+    EnsureFindSnippets(win);
+}
+
 void FindFirst(MainWindow* win) {
     // Only open/focus the find UI here. The search-start favorite ("/") is set
     // when a real search begins (non-empty term in FindTextOnThread /
@@ -430,6 +445,7 @@ void FindFirst(MainWindow* win) {
         win->findEdit->SetFocus();
         CbEditSelectAll(win->findEdit);
     }
+    HighlightRestoredFindTerm(win);
 }
 
 // debounce delays (ms) for find-as-you-type. Short terms (1-2 chars) match a
@@ -1583,6 +1599,23 @@ void GoToFindMatch(MainWindow* win, int startPage, int startGlyph, int endPage, 
     ShowMatchCount(win);
 }
 
+// progressCb on the document's TextSearch points at ftd. Drop it before ftd is
+// deleted: a later search on the UI thread (DDE GotoPageWord) calls it.
+static void DropFindProgressCb(MainWindow* win, FindThreadData* ftd) {
+    if (!IsMainWindowValid(win)) {
+        return;
+    }
+    DisplayModel* dm = win->AsFixed();
+    if (!dm || !dm->textSearch) {
+        return;
+    }
+    ProgressUpdateCb& cb = dm->textSearch->progressCb;
+    if ((cb.userData & ~ProgressUpdateCb::kDropsArgBit) != (uintptr_t)ftd) {
+        return;
+    }
+    cb = {};
+}
+
 static void FindEndTask(FindEndTaskData* d) {
     auto* win = d->win;
     auto* ftd = d->ftd;
@@ -1591,6 +1624,7 @@ static void FindEndTask(FindEndTaskData* d) {
     auto loopedAround = d->loopedAround;
 
     AutoDelete delData(d);
+    DropFindProgressCb(win, ftd);
     if (!IsMainWindowValidAndNotClosing(win)) {
         return;
     }
@@ -1759,6 +1793,11 @@ void FindTextOnThread(MainWindow* win, TextSearch::Direction direction, Str text
         searchText = Str(searchText.s + 1, searchText.len - 1);
     }
     if (!str::Eq(searchText, dm->textSearch->lastText)) {
+        wasModified = true;
+    }
+    // closing the find UI dropped the search position: start over from the
+    // current page instead of continuing from nowhere
+    if (len(dm->textSearch->pageText) == 0) {
         wasModified = true;
     }
     // a new/changed term starts a search if the find UI didn't (e.g. F3 after

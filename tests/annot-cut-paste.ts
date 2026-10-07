@@ -30,12 +30,13 @@ import {
   killAndWait,
   launchControlled,
   openContextMenu,
-  pressEscape,
-  sendCommand,
+  pressKey,
+  sendCommandSync,
   waitForContextMenu,
 } from "./win-automation.ts";
 
 type Square = { x: number; y: number; dx: number; dy: number };
+type MarkupState = { raw: string; selected: boolean; annotations: number; squares: Square[] };
 
 function makePdf(): string {
   const objs = [
@@ -57,9 +58,7 @@ function parseSquares(raw: string): Square[] {
   return out;
 }
 
-async function markupState(
-  client: ControlClient,
-): Promise<{ raw: string; selected: boolean; annotations: number; squares: Square[] }> {
+async function markupState(client: ControlClient): Promise<MarkupState> {
   const deadline = Date.now() + 5_000;
   let raw = "";
   for (;;) {
@@ -82,6 +81,26 @@ async function markupState(
   }
 }
 
+// Selecting shows editing UI and can refit the page. Retry at the new center.
+async function selectSquare(client: ControlClient, canvas: number): Promise<{ state: MarkupState; square: Square }> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    let state = await markupState(client);
+    const square = state.squares[0];
+    if (state.squares.length === 1 && square && square.dx > 0 && square.dy > 0) {
+      await clickAt(canvas, square.x + Math.floor(square.dx / 2), square.y + Math.floor(square.dy / 2), 0);
+      state = await markupState(client);
+      if (state.selected && state.squares.length === 1) {
+        return { state, square: state.squares[0]! };
+      }
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`annot-cut-paste: could not select the square\n${state.raw}`);
+    }
+    await sleep(50);
+  }
+}
+
 // poll until the page holds `want` annotations, else report what it holds
 async function waitForAnnotCount(client: ControlClient, want: number, what: string) {
   const deadline = Date.now() + 5_000;
@@ -94,6 +113,20 @@ async function waitForAnnotCount(client: ControlClient, want: number, what: stri
       throw new Error(
         `annot-cut-paste: ${what} (annotations=${state.annotations} squares=${state.squares.length}, want ${want})\n${state.raw}`,
       );
+    }
+    await sleep(50);
+  }
+}
+
+async function waitForDeselection(client: ControlClient): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const state = await markupState(client);
+    if (!state.selected) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`annot-cut-paste: Escape did not deselect the annotation\n${state.raw}`);
     }
     await sleep(50);
   }
@@ -130,8 +163,8 @@ function findMenuItem(items: MenuItem[], text: string): MenuItem | null {
 // The hover card shows the annotation's date. It is not shown for the selected
 // annotation, so deselect first.
 async function hoverDate(client: ControlClient, frame: number, canvas: number, x: number, y: number): Promise<string> {
-  await pressEscape(frame);
-  await sleep(150);
+  await pressKey(frame, VK_ESCAPE, 0);
+  await waitForDeselection(client);
   const s = clientToScreen(canvas, x, y);
   setCursorPos(s.x, s.y);
   sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(x, y));
@@ -200,20 +233,12 @@ export async function testit(): Promise<void> {
     await client.setNotificationsEnabled(false);
     const canvas = findCanvas(frame);
 
-    sendCommand(frame, cmdId("CmdToggleEditPDF"));
-    await sleep(300);
+    sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
 
-    let state = await markupState(client);
-    if (state.squares.length !== 1) {
-      throw new Error(`annot-cut-paste: expected one square on the page\n${state.raw}`);
-    }
-    const original = state.squares[0]!;
+    const selected = await selectSquare(client, canvas);
+    let state = selected.state;
+    const original = selected.square;
     const mid = { x: original.x + Math.floor(original.dx / 2), y: original.y + Math.floor(original.dy / 2) };
-    await clickAt(canvas, mid.x, mid.y);
-    state = await markupState(client);
-    if (!state.selected) {
-      throw new Error(`annot-cut-paste: click did not select the square\n${state.raw}`);
-    }
 
     // the context menu offers Cut for the annotation under the cursor, with
     // the shortcuts that reach these commands
@@ -236,7 +261,6 @@ export async function testit(): Promise<void> {
 
     // cut: the annotation must still be there, it goes away on paste
     sendMessage(frame, WM_COMMAND, cmdId("CmdCutAnnotation"), packCoords(mid.x, mid.y));
-    await sleep(150);
     state = await markupState(client);
     if (state.annotations !== 1) {
       throw new Error(`annot-cut-paste: cut must not delete the annotation yet\n${state.raw}`);
@@ -303,7 +327,6 @@ export async function testit(): Promise<void> {
       y: doomed.y + Math.floor(doomed.dy / 2),
     };
     sendMessage(frame, WM_COMMAND, cmdId("CmdCutAnnotation"), packCoords(doomedMid.x, doomedMid.y));
-    await sleep(150);
     sendMessage(frame, WM_COMMAND, cmdId("CmdDeleteAnnotation"), packCoords(doomedMid.x, doomedMid.y));
     await client.waitForRenderIdle();
     await waitForAnnotCount(client, 1, "Delete must remove the cut annotation");
@@ -319,8 +342,7 @@ export async function testit(): Promise<void> {
       cmdId("CmdCutAnnotation"),
       packCoords(last.x + Math.floor(last.dx / 2), last.y + Math.floor(last.dy / 2)),
     );
-    await sleep(150);
-    sendCommand(frame, cmdId("CmdDiscardChanges"));
+    sendCommandSync(frame, cmdId("CmdDiscardChanges"));
     await client.waitForRenderIdle();
     await waitForAnnotCount(client, 1, "discarding changes must restore the file's single annotation");
     sendMessage(frame, WM_COMMAND, cmdId("CmdPasteAnnotation"), packCoords(paste.x, paste.y));

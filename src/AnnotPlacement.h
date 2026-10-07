@@ -37,6 +37,7 @@ bool AnnotationPlacementOnMouseMove(MainWindow*, Point, WPARAM);
 bool AnnotationPlacementOnSetCursor(MainWindow*);
 bool AnnotationPlacementOnKeyDown(MainWindow*, WPARAM);
 bool AnnotationPlacementEraseAt(MainWindow*, Point);
+void AnnotationPlacementCaptureLost(MainWindow*);
 bool HandlePenToolCommand(MainWindow*, int);
 InkPenProfile& GetInkPenProfile(InkPenStyle);
 InkPenProfile& GetInkPenProfile(MainWindow*);

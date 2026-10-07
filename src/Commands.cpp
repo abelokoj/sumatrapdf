@@ -117,8 +117,8 @@ static SeqStrings gCommandNames =
     "CmdOpenWithTotalCommander\0"
     "CmdOpenWithDoubleCommander\0"
     "CmdOpenWithAcrobat\0"
-    "CmdOpenWithFoxIt\0"
-    "CmdOpenWithFoxItPhantom\0"
+    "CmdOpenWithFoxit\0"
+    "CmdOpenWithFoxitPhantom\0"
     "CmdOpenWithPdfXchange\0"
     "CmdOpenWithXpsViewer\0"
     "CmdOpenWithHtmlHelp\0"
@@ -221,7 +221,7 @@ static SeqStrings gCommandNames =
     "CmdPdfEncrypt\0"
     "CmdPdfDecrypt\0"
     "CmdPdfBake\0"
-    "CmdPdShowInfo\0"
+    "CmdPdfShowInfo\0"
     "CmdDocumentExtractText\0"
     "CmdDocumentShowOutline\0"
     "CmdSetScreenshotHotkey\0"
@@ -361,6 +361,15 @@ static SeqStrings gCommandNames =
     "CmdEditBookmarks\0"
     "CmdAnnotationLasso\0"
     "CmdHandTool\0"
+    "CmdToggleThumbnails\0"
+    "CmdMergePDF\0"
+    "CmdInkSegmentEraser\0"
+    "CmdLassoRotateLeft\0"
+    "CmdLassoRotateRight\0"
+    "CmdLassoDuplicate\0"
+    "CmdLassoRecolor\0"
+    "CmdLassoThinner\0"
+    "CmdLassoThicker\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -467,8 +476,8 @@ static i32 gCommandIds[] = {
     CmdOpenWithTotalCommander,
     CmdOpenWithDoubleCommander,
     CmdOpenWithAcrobat,
-    CmdOpenWithFoxIt,
-    CmdOpenWithFoxItPhantom,
+    CmdOpenWithFoxit,
+    CmdOpenWithFoxitPhantom,
     CmdOpenWithPdfXchange,
     CmdOpenWithXpsViewer,
     CmdOpenWithHtmlHelp,
@@ -571,7 +580,7 @@ static i32 gCommandIds[] = {
     CmdPdfEncrypt,
     CmdPdfDecrypt,
     CmdPdfBake,
-    CmdPdShowInfo,
+    CmdPdfShowInfo,
     CmdDocumentExtractText,
     CmdDocumentShowOutline,
     CmdSetScreenshotHotkey,
@@ -711,6 +720,15 @@ static i32 gCommandIds[] = {
     CmdEditBookmarks,
     CmdAnnotationLasso,
     CmdHandTool,
+    CmdToggleThumbnails,
+    CmdMergePDF,
+    CmdInkSegmentEraser,
+    CmdLassoRotateLeft,
+    CmdLassoRotateRight,
+    CmdLassoDuplicate,
+    CmdLassoRecolor,
+    CmdLassoThinner,
+    CmdLassoThicker,
 };
 
 SeqStrings gCommandDescriptions =
@@ -749,7 +767,7 @@ SeqStrings gCommandDescriptions =
     "Toggle Menu Bar\0"
     "Copy Selection\0"
     "Translate Selection with Google\0"
-    "Translate Selection With DeepL\0"
+    "Translate Selection with DeepL\0"
     "Search Selection with Google\0"
     "Search Selection with Bing\0"
     "Search Selection with Wikipedia\0"
@@ -900,7 +918,7 @@ SeqStrings gCommandDescriptions =
     "Debug: Show Notification\0"
     "Debug: Start Stress Test\0"
     "Debug: Toggle Predictive Rendering\0"
-    "Debug: Toggle Rtl\0"
+    "Debug: Toggle RTL\0"
     "List Printers...\0"
     "Toggle Windows Previewer\0"
     "Toggle Windows Search Filter\0"
@@ -1061,6 +1079,15 @@ SeqStrings gCommandDescriptions =
     "Edit PDF Bookmarks...\0"
     "Lasso annotation selection\0"
     "Hand tool: drag to pan\0"
+    "Toggle Thumbnails\0"
+    "Merge PDF...\0"
+    "Eraser: Remove Ink Segments\0"
+    "Selected Annotations: Rotate Left\0"
+    "Selected Annotations: Rotate Right\0"
+    "Selected Annotations: Duplicate\0"
+    "Selected Annotations: Apply Pen Color\0"
+    "Selected Annotations: Thinner\0"
+    "Selected Annotations: Thicker\0"
     "\0";
 
 SeqStrings gCommandAltDescs =
@@ -1192,6 +1219,9 @@ int GetCommandIdByName(Str cmdName) {
     }
     if (str::EqI(cmdName, StrL("CmdAdvancedOptions"))) {
         return CmdAdvancedSettings;
+    }
+    if (str::EqI(cmdName, StrL("CmdPdShowInfo"))) {
+        return CmdPdfShowInfo;
     }
     return -1;
 }

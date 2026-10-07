@@ -24,6 +24,7 @@
 #include "ReadingBar.h"
 #include "Translations.h"
 #include "AnnotEditToolbar.h"
+#include "AnnotRecovery.h"
 #include "WindowTab.h"
 
 WindowTab::WindowTab(MainWindow* win) {
@@ -38,6 +39,7 @@ void WindowTab::SetFilePath(Str path) {
     }
     if (changed) {
         str::FreePtr(&pendingFindText);
+        recoveryChecked = false;
     }
     str::ReplaceWithCopy(&filePath, path);
 }
@@ -49,6 +51,22 @@ void WindowTab::SetDisplayName(Str name) {
 bool WindowTab::IsAboutTab() const {
     ReportIf(type == WindowTab::Type::None);
     return type == WindowTab::Type::About;
+}
+
+// the SidebarView / SidebarBottomView settings
+static const char* kSidebarViewNames[kSidebarViewCount] = {"bookmarks", "thumbnails", "favorites"};
+
+SidebarView SidebarViewFromStr(Str s, SidebarView def) {
+    for (int i = 0; i < kSidebarViewCount; i++) {
+        if (str::EqI(s, Str(kSidebarViewNames[i]))) {
+            return (SidebarView)i;
+        }
+    }
+    return def;
+}
+
+Str SidebarViewToStr(SidebarView v) {
+    return Str(kSidebarViewNames[(int)v]);
 }
 
 bool WindowTab::IsFavoritesTab() const {
@@ -68,6 +86,7 @@ WindowTab::~WindowTab() {
     ReadAloudForgetTab(this);
     ReadingAutoScrollForgetTab(this);
     ReadingBarForgetTab(this);
+    AnnotRecoveryClose(this);
     // Drop MainWindow pointers into this tab / its controller before we free
     // them: DestroyWindow during WebView teardown can re-enter the canvas
     // WndProc, which reads win->ctrl / CurrentTab().

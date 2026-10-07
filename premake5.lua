@@ -1,6 +1,6 @@
 --[[
 To generate Visual Studio files (in vs2019/ or vs2022/ directory), run:
-scripts\premake-regenerate-vs-projects.ps1
+bun cmd/premake.ts
 
 I'm using premake5 beta6 from https://premake.github.io/download/
 
@@ -875,7 +875,7 @@ workspace "SumatraPDF"
     includedirs { "ext/a-mujs" }
     disablewarnings { "4090", "4100", "4146", "4310", "4702", "4706" }
     files {
-      "ext/a-mujs/mujs.c", "ext/a-mujs/mujs.h", "ext/a-mujs/regexp.h",
+      "ext/a-mujs/mujs.c", "ext/a-mujs/mujs.h",
       "ext/a-mujs/version.txt", "ext/a-mujs/COPYING",
     }
 
@@ -898,6 +898,7 @@ workspace "SumatraPDF"
     }
 
   project "mupdf"
+    cppdialect "C++latest"
     static_intermediate_dirs()
     kind "StaticLib"
     language "C"
@@ -933,7 +934,10 @@ workspace "SumatraPDF"
 
     uses_zlib()
     includedirs {
+      "src",
       "src/mupdf",
+      "ext/mupdf/source/fitz",
+      "ext/jxldec",
       "ext/mupdf/include",
       "ext/mupdf/generated",
       "ext/a-jbig2dec",
@@ -959,7 +963,7 @@ workspace "SumatraPDF"
     -- / SumatraPDF-static pick them up via project references.
     links {
       "cmark-gfm", "a-mujs", "a-extract", "a-harfbuzz", "a-freetype", "a-brotli",
-      "a-lcms2", "a-openjpeg", "a-jbig2dec", "libjpeg-turbo", "a-libarchive", "a-gumbo",
+      "a-lcms2", "a-openjpeg", "a-jbig2dec", "libjpeg-turbo", "a-libarchive", "a-gumbo", "jxldec",
     }
 
     -- mupdf

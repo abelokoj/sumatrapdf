@@ -50,3 +50,6 @@ struct DpiScope {
 
 int DpiGetSystemMetrics(int index);
 int DpiGetSystemMetrics(int index, int dpi);
+#if IS_DEBUG
+bool Dpi_UnitTestsWindowQuery();
+#endif

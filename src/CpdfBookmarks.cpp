@@ -30,6 +30,9 @@
 #include "SumatraPDF.h"
 #include "Theme.h"
 #include "Translations.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "CpdfBookmarks.h"
 
 static const Str kCpdfRevision = StrL("38b2556dc111670acb427fd9789a94ada971b2df");
@@ -494,6 +497,10 @@ struct BookmarkViewport : ScrollBox {
 };
 
 struct BookmarkWnd : WindowBase {
+    VBox* content = nullptr;
+    VBox* root = nullptr;
+    Vec<Wrap*> spacedRows;
+    Vec<HBox*> inlineGroups;
     BookmarkSession* session = nullptr;
     BookmarkJob* job = nullptr;
     VirtListBox* list = nullptr;
@@ -557,6 +564,10 @@ struct BookmarkWnd : WindowBase {
         ScheduleDelete();
     }
     void OnDpi(WindowBase::DpiChangedEvent*);
+    void RefreshStyle(int dpi);
+    void OnActivate(WindowBase::ActivateEvent* ev) {
+        if (ev->state != WA_INACTIVE && scroll) RefreshStyle(GetDpi());
+    }
     void OnMessage(WindowBase::WndProcEvent* ev) {
         if (!scroll) return;
         if (ev->msg == WM_PRINTCLIENT && ev->wparam && vroot) {
@@ -875,8 +886,18 @@ void BookmarkWnd::OnDown(VirtMouseEvent*) {
 }
 
 void BookmarkWnd::OnDpi(WindowBase::DpiChangedEvent* ev) {
+    if (ev->suggested) {
+        RECT* r = ev->suggested;
+        SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    RefreshStyle((int)ev->dpiX);
+    ev->didHandle = true;
+}
+
+void BookmarkWnd::RefreshStyle(int dpi) {
     DpiScope scope(hwnd);
-    PlatformFont* font = GetAppFontForDpi((int)ev->dpiX);
+    PlatformFont* font = GetAppFontForDpi(dpi);
     SetFont(font);
     list->font = font;
     title->SetFont(font);
@@ -892,7 +913,14 @@ void BookmarkWnd::OnDpi(WindowBase::DpiChangedEvent* ev) {
     scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
     save->font = font;
     cancel->font = font;
+    root->gap = content->gap = UiScalePx(8);
+    for (auto row : spacedRows) row->colGap = row->rowGap = UiScalePx(8);
+    for (auto group : inlineGroups) group->gap = UiScalePx(4);
+    ((Padding*)layout)->insets = {UiScalePx(12), UiScalePx(12), UiScalePx(12), UiScalePx(12)};
+    list->dpi = dpi;
+    UpdateTheme();
     DoLayout();
+    HwndInvalidate(hwnd, true);
 }
 
 bool BookmarkWnd::Create(MainWindow* win, bool visible) {
@@ -906,10 +934,12 @@ bool BookmarkWnd::Create(MainWindow* win, bool visible) {
     args.font = font;
     args.icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
     onWndProc = MkMethod1<BookmarkWnd, WindowBase::WndProcEvent*, &BookmarkWnd::OnMessage>(this);
+    onActivate = MkMethod1<BookmarkWnd, WindowBase::ActivateEvent*, &BookmarkWnd::OnActivate>(this);
     CreateCustom(args);
     if (!hwnd) return false;
     DpiScope scope(hwnd);
     auto* column = new VBox();
+    content = column;
     column->alignCross = CrossAxisAlign::Stretch;
     column->gap = UiScalePx(8);
     help = new VirtRichText();
@@ -938,9 +968,11 @@ bool BookmarkWnd::Create(MainWindow* win, bool visible) {
     addLabel(column, Tr("Title:"));
     column->AddChild(title);
     auto* fields = new Wrap();
+    VecAppend(spacedRows, fields);
     fields->alignCross = CrossAxisAlign::CrossCenter;
     fields->colGap = fields->rowGap = UiScalePx(8);
     auto* pageGroup = new HBox();
+    VecAppend(inlineGroups, pageGroup);
     pageGroup->alignCross = CrossAxisAlign::CrossCenter;
     pageGroup->gap = UiScalePx(4);
     auto* pageLabel = NewVirtText({.s = Tr("Page:"), .font = font});
@@ -951,6 +983,7 @@ bool BookmarkWnd::Create(MainWindow* win, bool visible) {
     pageGroup->AddChild(page);
     fields->AddChild(pageGroup);
     auto* levelGroup = new HBox();
+    VecAppend(inlineGroups, levelGroup);
     levelGroup->alignCross = CrossAxisAlign::CrossCenter;
     levelGroup->gap = UiScalePx(4);
     auto* levelLabel = NewVirtText({.s = Tr("Level:"), .font = font});
@@ -965,6 +998,7 @@ bool BookmarkWnd::Create(MainWindow* win, bool visible) {
     fields->AddChild(opened);
     column->AddChild(fields);
     auto* editActions = new Wrap();
+    VecAppend(spacedRows, editActions);
     editActions->colGap = editActions->rowGap = UiScalePx(8);
     auto addAction = [&](Str text, const Func1<VirtMouseEvent*>& fn) {
         auto* button = NewThemedButton(hwnd, text, font, false);
@@ -982,13 +1016,14 @@ bool BookmarkWnd::Create(MainWindow* win, bool visible) {
     status->font = font;
     status->AddPlainText(Tr("Reading PDF bookmarks…"));
     column->AddChild(status);
-    auto* root = new VBox();
+    root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
     root->gap = UiScalePx(8);
     scroll = new BookmarkViewport(column);
     scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
     root->AddChild(scroll, 1);
     auto* actions = new Wrap();
+    VecAppend(spacedRows, actions);
     actions->colGap = actions->rowGap = UiScalePx(8);
     cancel = NewThemedButton(hwnd, Tr("Close"), font, false);
     cancel->onClick = MkMethod1<BookmarkWnd, VirtMouseEvent*, &BookmarkWnd::OnCancel>(this);
@@ -1336,6 +1371,43 @@ static bool CpdfRoundtripTests() {
     ExecuteBookmarkJob(&empty);
     ok &= !empty.success && !file::Exists(empty.target);
     return ok;
+}
+
+bool CpdfBookmarks_UnitTestsUi() {
+    Settings* previous = gSettings;
+    gSettings = NewSettings({});
+    RefreshUiFonts();
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = previous;
+        RefreshUiFonts();
+    };
+    auto* window = new BookmarkWnd();
+    window->session = new BookmarkSession();
+    window->session->pages = 10;
+    utassert(window->Create(nullptr, false));
+    if (!window->hwnd) {
+        delete window;
+        return false;
+    }
+    DpiScope scope(window->hwnd);
+    Rect original = HwndWindowRect(window->hwnd);
+    RECT suggested = ToRECT(Rect{original.x + 10, original.y + 10, original.dx - 40, original.dy - 60});
+    gSettings->interfaceScale = 150;
+    RefreshUiFonts();
+    WindowBase::DpiChangedEvent ev;
+    ev.w = window;
+    ev.dpiX = ev.dpiY = (UINT)DpiGetForHwnd(window->hwnd);
+    ev.suggested = &suggested;
+    window->OnDpi(&ev);
+    utassert(HwndWindowRect(window->hwnd) == ToRect(suggested));
+    auto* root = (VBox*)((Padding*)window->layout)->child;
+    utassert(root->gap == UiScalePx(8));
+    utassert(((Padding*)window->layout)->insets.top == UiScalePx(12));
+    utassert(window->title->font == GetAppFontForDpi((int)ev.dpiX));
+    utassert(!IsWindowVisible(window->hwnd));
+    delete window;
+    return true;
 }
 
 bool CpdfBookmarks_UnitTests() {

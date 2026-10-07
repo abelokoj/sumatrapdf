@@ -106,16 +106,31 @@ constexpr int kAboutLineOuterSize = 1;
 #endif
 constexpr int kAboutLineSepSize = 1;
 
+// one tip per line; cmd/trans-dl.ts extracts each line for translation
 static Str sumatraTips = StrL(R"tips(You can [customize scrollbar](CmdChangeScrollbar).
 You can [customize keyboard shortcuts](Help/Customize-keyboard-shortcuts).
 You can [customize toolbar](Help/Customize-toolbar).
-Press (Key/CmdCommandPalette) to open [command palette](CmdCommandPalette).
-To open file from history open [command palette](CmdCommandPalette) with (Key/CmdCommandPalette) and type `#`.
+Press (Kbd/(Key/CmdCommandPalette)) to open [command palette](CmdCommandPalette).
+To open file from history open [command palette](CmdCommandPalette) with (Kbd/(Key/CmdCommandPalette)) and type (Kbd/#).
 You can [extract text from PDF file](Help/Tool-x-extract-text-from-pdf).
-You can [toggle menu bar](CmdToggleMenuBar) with (Key/CmdToggleMenuBar).
-You can [toggle toolbar](CmdToggleToolbar) with (Key/CmdToggleToolbar).
+You can [toggle menu bar](CmdToggleMenuBar) with (Kbd/(Key/CmdToggleMenuBar)).
+You can [toggle toolbar](CmdToggleToolbar) with (Kbd/(Key/CmdToggleToolbar)).
 You can [edit PDF annotations](Help/Editing-annotations).
-You can preview where a citation, figure or footnote link points by hovering it — [Toggle Citation Hover Preview](CmdToggleHoverPreview) or set CitationHoverDelay in [advanced settings](CmdAdvancedSettings).
+You can enable [citation preview on hover](Help/Citation-hover-preview).
+You can [have documents read aloud](Help/Read-Aloud).
+You can [sign a PDF](Help/Sign-a-PDF).
+You can [fill PDF forms](Help/Fill-PDF-forms).
+You can [merge PDFs](Help/Merge-PDFs) and [reorder pages](Help/Reorder-PDF-pages).
+You can [split a PDF](Help/Split-a-PDF).
+You can [redact a PDF](Help/Redact-a-PDF).
+You can [present a PDF](Help/Present-a-PDF) full screen.
+You can [use SumatraPDF with LaTeX](Help/LaTeX-integration) for forward and inverse search.
+You can [read comics and manga](Help/Comics-and-manga) right to left.
+You can [bookmark pages as favorites](Help/Managing-favorites).
+You can [chat with AI about a document](Help/AI-Chat-with-document).
+You can [customize theme colors](Help/Customize-theme-colors).
+You can [save a page region as an image](Help/Save-page-region-as-image).
+You can [print selected pages](Help/Print-selected-pages).
 )tips");
 
 static Str sumatraPromos = StrL(R"promos(Try [Edna](https://edna.arslexis.io): a note taking web app for power users.
@@ -133,7 +148,7 @@ static bool gTipsParsed = false;
 static bool gSelectedIsPromo = false;
 static int gSelectedTipIdx = -1;
 
-static void CollectTipsFromString(Str src, Str prefix, StrVec* out) {
+static void CollectTipsFromString(Str src, StrVec* out) {
     StrVec lines;
     Split(&lines, src, StrL("\n"));
     for (int i = 0; i < len(lines); i++) {
@@ -141,11 +156,7 @@ static void CollectTipsFromString(Str src, Str prefix, StrVec* out) {
         if (str::IsEmptyOrWhiteSpace(line)) {
             continue;
         }
-        if (prefix) {
-            out->Append(str::JoinTemp(prefix, line));
-        } else {
-            out->Append(line);
-        }
+        out->Append(line);
     }
 }
 
@@ -158,7 +169,11 @@ static Str SelectedTipLine() {
     if (gSelectedTipIdx >= len(v)) {
         return {};
     }
-    return v[gSelectedTipIdx];
+    if (gSelectedIsPromo) {
+        return v[gSelectedTipIdx];
+    }
+    // translated when shown, so a language change applies without re-parsing
+    return str::JoinTemp(Tr("Tip:"), StrL(" "), Tr(v[gSelectedTipIdx]));
 }
 
 static void PickRandomTipOrPromo() {
@@ -176,8 +191,8 @@ static void EnsureTipsParsed() {
     if (gTipsParsed) {
         return;
     }
-    CollectTipsFromString(sumatraTips, StrL("Tip: "), &gTipLines);
-    CollectTipsFromString(sumatraPromos, {}, &gPromoLines);
+    CollectTipsFromString(sumatraTips, &gTipLines);
+    CollectTipsFromString(sumatraPromos, &gPromoLines);
     gTipsParsed = true;
     PickRandomTipOrPromo();
 }
@@ -353,7 +368,7 @@ SumatraLogo::~SumatraLogo() {
 }
 
 int SumatraLogo::BadgeSize() {
-    return homeIdentity ? Clamp(PlatformFontLineHeight(font), UiScalePx(32), UiScalePx(64)) : 0;
+    return homeIdentity ? ClampI(PlatformFontLineHeight(font), UiScalePx(32), UiScalePx(64)) : 0;
 }
 
 bool SumatraLogo::WrapTitle() {
@@ -1209,12 +1224,12 @@ struct HomeEntriesCtrl : VirtCtrl {
 };
 
 // the tip band at the bottom. The markup is its VirtRichText child, which draws
-// itself and runs its own links; clicking the band anywhere else picks another
+// itself and runs its own links; double-clicking the band anywhere else picks another
 // tip
 struct HomeTipCtrl : VirtCtrl {
     // for link commands inside the tip markup (like VirtRichText)
     HWND hwndForCmds = nullptr;
-    // onClick (VirtCtrl): band click outside a link picks another tip
+    // onDoubleClick (VirtCtrl): double-click outside a link picks another tip
     VirtRichText* rich = nullptr; // owned, as our only child
     Str richFor;                  // owned, the markup `rich` was parsed from
 
@@ -1324,7 +1339,7 @@ constexpr int kSearchEditDy = 28;
 constexpr int kSearchThumbnailsGapY = 12;
 
 static int HomeThumbPercent() {
-    return Clamp(gSettings->homePageThumbnailSize, 75, 250);
+    return ClampI(gSettings->homePageThumbnailSize, 75, 250);
 }
 
 static int HomeThumbDx() {
@@ -2881,11 +2896,14 @@ TempStr HomeSelectionResultTemp(int* exitCodeOut) {
     if (!HomePageIsListView() && len(c.thumbs) > 0) {
         lastCaption = c.thumbs[len(c.thumbs) - 1].rcText;
     }
+    // the tip shown (promo or tip, index) and its band, for picking another one
+    Rect tipRect = c.hasTip ? c.rcTip : Rect{};
     return finish(0, fmt("OK sel=%d entries=%d searchFocus=%d searchBox=%d search=%s outline=%s outlineFull=%s path=%s "
-                         "listView=%d listIcon=%s thumbsArea=%s lastCaption=%s",
+                         "listView=%d listIcon=%s thumbsArea=%s lastCaption=%s tip=%d,%d tipRect=%s",
                          sel, len(c.thumbs), searchFocus, searchBox, RectCsvTemp(search), RectCsvTemp(outline),
                          RectCsvTemp(outlineFull), path, HomePageIsListView() ? 1 : 0, RectCsvTemp(c.rcIconListView),
-                         RectCsvTemp(c.rcThumbsArea), RectCsvTemp(lastCaption)));
+                         RectCsvTemp(c.rcThumbsArea), RectCsvTemp(lastCaption), gSelectedIsPromo ? 1 : 0,
+                         gSelectedTipIdx, RectCsvTemp(tipRect)));
 }
 
 // What the home page list drew for each row: the path, the size text as drawn,
@@ -3153,7 +3171,7 @@ static void HomeViewModeClicked(MainWindow* win, VirtMouseEvent* ev) {
 }
 
 static void SetHomeThumbSize(MainWindow* win, int value) {
-    value = Clamp(value, 75, 250);
+    value = ClampI(value, 75, 250);
     if (value == HomeThumbPercent()) {
         return;
     }
@@ -3188,7 +3206,7 @@ static void HomeFeaturesClicked(MainWindow* win, VirtMouseEvent*) {
 static void HomeFeatureAction(MainWindow* win, VirtMouseEvent* ev) {
     int cmd = ev->target->id;
     if (!cmd) {
-        SumatraLaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf/releases"));
+        SumatraLaunchBrowser(StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases"));
         return;
     }
     if ((cmd == CmdInkPen || cmd == CmdExportStudyNotes) && !win->ctrl) {
@@ -3322,9 +3340,12 @@ static void HomePaletteClicked(MainWindow* win, VirtMouseEvent*) {
     HwndSendCommand(win->hwndFrame, CmdCommandPalette);
 }
 
-static void HomeTipBandClicked(MainWindow* win, VirtMouseEvent*) {
+static void HomeTipBandDoubleClicked(MainWindow* win, VirtMouseEvent* ev) {
+    ev->didHandle = true;
     PickAnotherRandomPromotion();
-    win->RedrawAll(true);
+    // painting reuses the layout, which holds the parsed tip
+    HomePageRelayout(win);
+    HwndInvalidate(win->hwndCanvas);
 }
 
 HomeListIconCtrl::HomeListIconCtrl() {
@@ -3480,6 +3501,10 @@ static int TooltipInitialDelayMs() {
 }
 
 constexpr UINT_PTR kHomeAboutHoverTimerID = 100;
+constexpr UINT_PTR kHomeAboutHoverHideTimerID = 102;
+// long enough to cross from the title onto the popup. The cursor is read when
+// the timer fires, not when the leave message was queued.
+constexpr UINT kAboutHoverHideDelayMs = 200;
 
 static HomeChromeCtrl* HomeChrome(MainWindow* win) {
     if (!win || !win->homeRoot) {
@@ -3516,6 +3541,7 @@ static bool CursorOverAboutHover(HomeChromeCtrl* chrome) {
 static void CancelHomeAboutHoverTimer(MainWindow* win) {
     if (win && win->hwndCanvas) {
         KillTimer(win->hwndCanvas, kHomeAboutHoverTimerID);
+        KillTimer(win->hwndCanvas, kHomeAboutHoverHideTimerID);
     }
 }
 
@@ -3527,12 +3553,36 @@ static void HideHomeAboutHover(MainWindow* win) {
     }
 }
 
-static void OnHomeAboutHoverLeave(MainWindow* win) {
-    // left the dropdown; keep it only if the cursor is back on the title
-    if (CursorOverHomeLogo(HomeChrome(win))) {
+static bool CursorOverAboutOrLogo(MainWindow* win) {
+    HomeChromeCtrl* chrome = HomeChrome(win);
+    return CursorOverHomeLogo(chrome) || CursorOverAboutHover(chrome);
+}
+
+static void CALLBACK HomeAboutHoverHideTimerProc(HWND hwnd, UINT, UINT_PTR id, DWORD) {
+    KillTimer(hwnd, id);
+    MainWindow* win = FindMainWindowByHwnd(hwnd);
+    if (!win || !IsMainWindowValidAndNotClosing(win)) {
+        return;
+    }
+    if (CursorOverAboutOrLogo(win)) {
         return;
     }
     HideHomeAboutHover(win);
+}
+
+static void ScheduleHideHomeAboutHover(MainWindow* win) {
+    if (!win || !win->hwndCanvas || CursorOverAboutOrLogo(win)) {
+        return;
+    }
+    HomeChromeCtrl* chrome = HomeChrome(win);
+    if (!chrome || !chrome->aboutHover || !chrome->aboutHover->IsVisible()) {
+        return;
+    }
+    SetTimer(win->hwndCanvas, kHomeAboutHoverHideTimerID, kAboutHoverHideDelayMs, HomeAboutHoverHideTimerProc);
+}
+
+static void OnHomeAboutHoverLeave(MainWindow* win) {
+    ScheduleHideHomeAboutHover(win);
 }
 
 static void CALLBACK HomeAboutHoverTimerProc(HWND hwnd, UINT, UINT_PTR id, DWORD) {
@@ -3557,11 +3607,7 @@ static void OnHomeLogoEnter(MainWindow* win) {
 }
 
 static void OnHomeLogoLeave(MainWindow* win) {
-    // still on the title→dropdown path (cursor already over the popup)
-    if (CursorOverAboutHover(HomeChrome(win))) {
-        return;
-    }
-    HideHomeAboutHover(win);
+    ScheduleHideHomeAboutHover(win);
 }
 
 // chrome-less About box under the home-page logo; links stay clickable
@@ -3615,6 +3661,7 @@ HomeChromeCtrl::~HomeChromeCtrl() {
     HWND hwnd = GetHwnd();
     if (hwnd) {
         KillTimer(hwnd, kHomeAboutHoverTimerID);
+        KillTimer(hwnd, kHomeAboutHoverHideTimerID);
     }
     delete aboutHover;
     aboutHover = nullptr;
@@ -3650,7 +3697,7 @@ static HomeChromeCtrl* EnsureHomeChrome(MainWindow* win) {
     // entries. Below everything else: the tip band sits at the bottom of the page
     chrome->tip = new HomeTipCtrl();
     chrome->tip->hwndForCmds = win->hwndFrame;
-    chrome->tip->onClick = MkFunc1(HomeTipBandClicked, win);
+    chrome->tip->onDoubleClick = MkFunc1(HomeTipBandDoubleClicked, win);
     chrome->AddChild(chrome->tip);
 
     chrome->searchBorder = new HomeSearchBorderCtrl();
@@ -3773,7 +3820,7 @@ bool HomePageOnCanvasMessage(MainWindow* win, UINT msg, WPARAM wp, LPARAM lp, LR
                 LRESULT ignored = 0;
                 root->OnMessage(msg, wp, lp, ignored);
             } else {
-                HideHomeAboutHover(win);
+                ScheduleHideHomeAboutHover(win);
             }
         }
         return false;
@@ -3788,9 +3835,9 @@ bool HomePageOnCanvasMessage(MainWindow* win, UINT msg, WPARAM wp, LPARAM lp, LR
                 entries->SetActiveEntry(-1);
             }
         }
-        // canvas got the mouse and it is not on the title: left the SumatraPDF area
+        // not on the title: the popup closes once the cursor has settled off it
         if (msg == WM_MOUSEMOVE && !IsVirtCtrlOfKind(root->hovered, kindSumatraLogo)) {
-            HideHomeAboutHover(win);
+            ScheduleHideHomeAboutHover(win);
         }
         return didHandle;
     }
@@ -4441,7 +4488,14 @@ void HomePageOnWindowActivate(MainWindow* win, bool active) {
         // Also when the frame is iconic: activate can fire while minimized and
         // ClientToScreen then pins the tip at the top-left of the desktop (#5928).
         win->DeleteToolTip();
-        HideHomeAboutHover(win);
+        // a click in the no-activate About popup can report WA_INACTIVE while
+        // the frame is still the foreground window; don't close it then
+        HWND fg = GetForegroundWindow();
+        HomeChromeCtrl* chrome = HomeChrome(win);
+        bool stillUs = fg == win->hwndFrame || (chrome && chrome->aboutHover && fg == chrome->aboutHover->native);
+        if (!stillUs) {
+            HideHomeAboutHover(win);
+        }
         return;
     }
     // only restore the selection tip (positioned at the active entry, not cursor)

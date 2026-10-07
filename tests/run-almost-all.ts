@@ -22,6 +22,7 @@ import { beginSharedControlledSession, endSharedControlledSession } from "./win-
 import { testit as themePresets } from "./theme-presets.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
 import { testit as lintMingwSources } from "./lint-mingw-sources.ts";
+import { testit as jpegXlPdf } from "./jpeg-xl-pdf.ts";
 import { testit as buildCli } from "./build-cli.ts";
 import { testit as combiningMarkFirst } from "./combining-mark-first.ts";
 import { testit as parseTipBrackets } from "./parse-tip-brackets.ts";
@@ -67,6 +68,7 @@ import { testit as findMatchSelect } from "./issue-find-match-select.ts";
 import { testit as findResultsSorted } from "./find-results-sorted.ts";
 import { testit as findWindowLayout } from "./find-window-layout.ts";
 import { testit as findUiState } from "./find-ui-state.ts";
+import { testit as gotoPageWordAfterFind } from "./goto-page-word-after-find.ts";
 import { testit as issue5874 } from "./issue-5874.ts";
 import { testit as issue6055 } from "./issue-6055.ts";
 import { testit as sessionRestoreSearch } from "./session-restore-search.ts";
@@ -144,6 +146,13 @@ import { testit as issue2258 } from "./issue-2258.ts";
 import { testit as issue2737 } from "./issue-2737.ts";
 import { testit as issue6030 } from "./issue-6030.ts";
 import { testit as issue6050 } from "./issue-6050.ts";
+import { testit as issue6265 } from "./issue-6265.ts";
+import { testit as issue6266 } from "./issue-6266.ts";
+import { testit as issue6276 } from "./issue-6276.ts";
+import { testit as issue6279 } from "./issue-6279.ts";
+import { testit as issue6280 } from "./issue-6280.ts";
+import { testit as issue6269 } from "./issue-6269.ts";
+import { testit as issue6270 } from "./issue-6270.ts";
 import { testit as issue5911 } from "./issue-5911.ts";
 import { testit as issue6088 } from "./issue-6088.ts";
 import { testit as annotContentsClickAway } from "./annot-contents-click-away.ts";
@@ -261,12 +270,23 @@ import { testit as polylineAnnotationPlacement } from "./polyline-annotation-pla
 import { testit as shapeAnnotationPlacement } from "./shape-annotation-placement.ts";
 import { testit as redactAnnotations } from "./redact-annotations.ts";
 import { testit as inkAnnotationPlacement } from "./ink-annotation-placement.ts";
+import { testit as advancedInk } from "./advanced-ink.ts";
 import { testit as issue5956 } from "./issue-5956.ts";
 import { testit as issue6113 } from "./issue-6113.ts";
 import { testit as imageOnlyPaletteItems } from "./image-only-palette-items.ts";
 import { testit as commandPaletteShortcutFilter } from "./command-palette-shortcut-filter.ts";
 import { testit as commandPaletteAltNames } from "./command-palette-alt-names.ts";
 import { testit as commandPaletteThumbnails } from "./command-palette-thumbnails.ts";
+import { testit as sidebarThumbnails } from "./sidebar-thumbnails.ts";
+import { testit as sidebarThumbnailsWheel } from "./sidebar-thumbnails-wheel.ts";
+import { testit as sidebarThumbnailsClose } from "./sidebar-thumbnails-close.ts";
+import { testit as issue6070 } from "./issue-6070.ts";
+import { testit as wheelWhileClosing } from "./wheel-while-closing.ts";
+import { testit as issue6259 } from "./issue-6259.ts";
+import { testit as fullscreenSessionRestore } from "./fullscreen-session-restore.ts";
+import { testit as stampEditToolbarName } from "./stamp-edit-toolbar-name.ts";
+import { testit as homeTipDoubleClick } from "./home-tip-double-click.ts";
+import { testit as issue6261 } from "./issue-6261.ts";
 import { testit as commandPaletteAnnotations } from "./command-palette-annotations.ts";
 import { testit as paletteDeleteAnnotation } from "./palette-delete-annotation.ts";
 import { testit as paletteCommandAvailability } from "./palette-command-availability.ts";
@@ -345,6 +365,7 @@ import { testit as issue6142 } from "./issue-6142.ts";
 import { testit as issue6143 } from "./issue-6143.ts";
 import { testit as issue6144 } from "./issue-6144.ts";
 import { testit as toolbarTabSwitchPos } from "./toolbar-tab-switch-pos.ts";
+import { testit as facingFitTinyViewport } from "./facing-fit-tiny-viewport.ts";
 import { testit as mdMissingFile } from "./ad-hoc-md-missing-file.ts";
 import { testit as issue6148 } from "./issue-6148.ts";
 import { testit as issue6184 } from "./issue-6184.ts";
@@ -372,9 +393,25 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["jpeg-xl-pdf", jpegXlPdf],
+  ["annotation clipboard tests", annotationClipboardTests],
+  ["issue-6276", issue6276],
+  ["issue-6269", issue6269],
+  ["polyline-annotation-placement", polylineAnnotationPlacement],
+  ["toolbar-hover-dropdown", toolbarHoverDropdown],
+  ["session-restore-tab-state", sessionRestoreTabState],
+  ["exit-edit-pdf-deselects", exitEditPdfDeselects],
+  ["issue-6113", issue6113],
+  ["issue-5933", issue5933],
+  ["issue-6117", issue6117],
+  ["custom-zoom-dialog", customZoomDialog],
+  ["annot-color-dropdown", annotColorDropdown],
+  ["annot-contents-click-away", annotContentsClickAway],
+  ["lint-mingw-sources", lintMingwSources],
   ["issue-2799", issue2799],
   ["ink-thickness", inkThickness],
   ["ink-annotation-placement", inkAnnotationPlacement],
+  ["advanced-ink", advancedInk],
   ["annot-moveable-types", annotMoveableTypes],
   ["move-polygon-polyline-ink", movePolygonPolylineInk],
   ["issue-5918", issue5918],
@@ -434,25 +471,20 @@ export const tests: NamedTest[] = [
   ["issue-6137", issue6137],
   ["free-text-edit-matches-render", freeTextEditMatchesRender],
   ["free-text-in-place-edit", freeTextInPlaceEdit],
-  ["lint-mingw-sources", lintMingwSources],
-  ["toolbar-hover-dropdown", toolbarHoverDropdown],
   ["issue-6103", issue6103],
   ["issue-6062", issue6062],
   ["issue-6101", issue6101],
   ["issue-5907", issue5907],
   ["issue-893", issue893],
-  ["annotation clipboard tests", annotationClipboardTests],
   ["cmyk-image-save", cmykImageSave],
   ["issue-6214", issue6214],
   ["issue-5868", issue5868],
   ["issue-2252", issue2252],
   ["issue-5944", issue5944],
   ["issue-6039", issue6039],
-  ["issue-5933", issue5933],
   ["issue-4398", issue4398],
   ["issue-5964", issue5964],
   ["issue-6013", issue6013],
-  ["issue-6113", issue6113],
   ["issue-5989", issue5989],
 
   // --- no Sumatra process -------------------------------------------------
@@ -489,11 +521,9 @@ export const tests: NamedTest[] = [
   ["issue-5771", issue5771],
   ["issue-6111", issue6111],
   ["annot-list-placement", annotListPlacement],
-  ["exit-edit-pdf-deselects", exitEditPdfDeselects],
   ["stamp-caret-annotation-placement", stampCaretAnnotationPlacement],
   ["issue-6112", issue6112],
   ["line-annotation-placement", lineAnnotationPlacement],
-  ["polyline-annotation-placement", polylineAnnotationPlacement],
   ["shape-annotation-placement", shapeAnnotationPlacement],
   ["redact-annotations", redactAnnotations],
   ["issue-1315", issue1315],
@@ -526,6 +556,7 @@ export const tests: NamedTest[] = [
   ["find-results-sorted", findResultsSorted],
   ["find-window-layout", findWindowLayout],
   ["find-ui-state", findUiState],
+  ["goto-page-word-after-find", gotoPageWordAfterFind],
   ["issue-5874", issue5874],
   ["issue-6055", issue6055],
   ["session-restore-search", sessionRestoreSearch],
@@ -589,10 +620,13 @@ export const tests: NamedTest[] = [
   ["issue-2737", issue2737],
   ["issue-6030", issue6030],
   ["issue-6050", issue6050],
+  ["issue-6265", issue6265],
+  ["issue-6266", issue6266],
+  ["issue-6279", issue6279],
+  ["issue-6280", issue6280],
+  ["issue-6270", issue6270],
   ["issue-5911", issue5911],
   ["issue-6088", issue6088],
-  ["annot-contents-click-away", annotContentsClickAway],
-  ["annot-color-dropdown", annotColorDropdown],
   ["issue-6137-contents", issue6137Contents],
   ["issue-6093", issue6093],
   ["issue-6095", issue6095],
@@ -600,7 +634,6 @@ export const tests: NamedTest[] = [
   ["show-chapters-in-ebooks", showChaptersInEbooks],
   ["epub-relayout-stale-page", epubRelayoutStalePage],
   ["issue-5943", issue5943],
-  ["issue-6117", issue6117],
   ["issue-6118", issue6118],
   ["issue-6120", issue6120],
   ["issue-6123", issue6123],
@@ -609,7 +642,6 @@ export const tests: NamedTest[] = [
   ["annot-filter-close-window", annotFilterCloseWindow],
   ["issue-6136", issue6136],
   ["issue-1930", issue1930],
-  ["custom-zoom-dialog", customZoomDialog],
   ["issue-1106", issue1106],
   ["issue-814", issue814],
   ["issue-1422", issue1422],
@@ -647,6 +679,16 @@ export const tests: NamedTest[] = [
   ["command-palette-shortcut-filter", commandPaletteShortcutFilter],
   ["command-palette-alt-names", commandPaletteAltNames],
   ["command-palette-thumbnails", commandPaletteThumbnails],
+  ["sidebar-thumbnails", sidebarThumbnails],
+  ["sidebar-thumbnails-wheel", sidebarThumbnailsWheel],
+  ["sidebar-thumbnails-close", sidebarThumbnailsClose],
+  ["issue-6070", issue6070],
+  ["wheel-while-closing", wheelWhileClosing],
+  ["issue-6259", issue6259],
+  ["fullscreen-session-restore", fullscreenSessionRestore],
+  ["stamp-edit-toolbar-name", stampEditToolbarName],
+  ["home-tip-double-click", homeTipDoubleClick],
+  ["issue-6261", issue6261],
   ["command-palette-annotations", commandPaletteAnnotations],
   ["palette-delete-annotation", paletteDeleteAnnotation],
   ["palette-command-availability", paletteCommandAvailability],
@@ -697,10 +739,10 @@ export const tests: NamedTest[] = [
   ["toc-show-on-open", tocShowOnOpen],
   ["issue-6132", issue6132],
   ["toolbar-tab-switch-pos", toolbarTabSwitchPos],
+  ["facing-fit-tiny-viewport", facingFitTinyViewport],
   ["issue-trim-margins", issueTrimMargins],
   ["trim-empty-margins-restore", trimEmptyMarginsRestore],
   ["issue-6220", issue6220],
-  ["session-restore-tab-state", sessionRestoreTabState],
   ["issue-6239", issue6239],
   ["tool-poster", toolPoster],
   ["tool-merge", toolMerge],

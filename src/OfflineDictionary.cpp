@@ -28,7 +28,7 @@ constexpr int kDictionaryMaxResults = 64;
 static RecursiveMutex gDictionaryLock;
 static Mutex gDictionaryInstallLock;
 static Str kWordNetId = StrL("wordnet-en");
-static Str kDictionaryDownloadRoot = StrL("https://raw.githubusercontent.com/abelokoj/sumatrapdf/master/");
+static Str kDictionaryDownloadRoot = StrL("https://raw.githubusercontent.com/abelokoj/sumatrapdf-enhanced/master/");
 static Str kWordNetTitle = StrL("Princeton WordNet 3.0 (English)");
 static const char* kWordNetFiles[] = {"data.noun", "data.verb", "data.adj", "data.adv"};
 static const char* kWordNetExceptions[] = {"noun.exc", "verb.exc", "adj.exc", "adv.exc"};
@@ -224,7 +224,27 @@ struct DictEntry {
 
 struct DictInflection {
     Str word, lemma;
+    int order = 0;
 };
+
+static void SortInflections(Vec<DictInflection>& inflections) {
+    VecSort(inflections, [](const DictInflection* a, const DictInflection* b) {
+        int comparison = str::Cmp(a->word, b->word);
+        return comparison ? comparison : a->order - b->order;
+    });
+}
+
+static int FindInflection(Vec<DictInflection>& inflections, Str word) {
+    int lo = 0, hi = len(inflections);
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (str::Cmp(inflections[mid].word, word) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
 
 struct DictionaryIndex {
     Arena* arena = ArenaNew();
@@ -267,7 +287,7 @@ struct DictionaryIndex {
             for (int i = 0; i < 32 && len(Trim(line)) > 0; i++) {
                 TempStr lemma = WordKey(NextToken(line));
                 if (len(lemma) > 0) {
-                    VecAppend(inflections, {str::Dup(arena, word), str::Dup(arena, lemma)});
+                    VecAppend(inflections, {str::Dup(arena, word), str::Dup(arena, lemma), len(inflections)});
                 }
             }
         }
@@ -577,7 +597,8 @@ static bool LoadWmJson(DictionaryIndex& index, Str text, Str title) {
         for (Str form : forms) {
             Str key = WordKey(form), lemma = WordKey(word->word);
             if (len(key) && len(lemma) && !str::Eq(key, lemma))
-                VecAppend(index.inflections, {str::Dup(index.arena, key), str::Dup(index.arena, lemma)});
+                VecAppend(index.inflections,
+                          {str::Dup(index.arena, key), str::Dup(index.arena, lemma), len(index.inflections)});
         }
         for (WmSense& sense : word->senses) {
             if (len(sense.definition) == 0) continue;
@@ -846,6 +867,7 @@ bool LookupOfflineWord(Str word, Vec<OfflineMeaning>& out, Str* error) {
             int comparison = str::Cmp(a->key, b->key);
             return comparison ? comparison : a->order - b->order;
         });
+        SortInflections(gDictionaryIndex->inflections);
     }
     if (len(gDictionaryIndex->entries) == 0 && len(VocabularyBuiltinMeaning(key)) == 0) {
         if (!AppendKaikkiMatches(key, out, error)) return false;
@@ -860,8 +882,9 @@ bool LookupOfflineWord(Str word, Vec<OfflineMeaning>& out, Str* error) {
     }
     MatchWord(*gDictionaryIndex, key, out, false, true);
     if (!len(out)) {
-        for (const DictInflection& inflection : gDictionaryIndex->inflections) {
-            if (str::Eq(inflection.word, key)) MatchWord(*gDictionaryIndex, inflection.lemma, out, false, true);
+        auto& inflections = gDictionaryIndex->inflections;
+        for (int i = FindInflection(inflections, key); i < len(inflections) && str::Eq(inflections[i].word, key); i++) {
+            MatchWord(*gDictionaryIndex, inflections[i].lemma, out, false, true);
         }
     }
     if (len(out)) return AppendKaikkiMatches(key, out, error);
@@ -886,10 +909,9 @@ bool LookupOfflineWord(Str word, Vec<OfflineMeaning>& out, Str* error) {
     MatchWord(*gDictionaryIndex, key, out, false);
     if (len(out) == 0) {
         StrVec candidates;
-        for (DictInflection& inflection : gDictionaryIndex->inflections) {
-            if (str::Eq(inflection.word, key)) {
-                candidates.Append(inflection.lemma);
-            }
+        auto& inflections = gDictionaryIndex->inflections;
+        for (int i = FindInflection(inflections, key); i < len(inflections) && str::Eq(inflections[i].word, key); i++) {
+            candidates.Append(inflections[i].lemma);
         }
         struct Suffix {
             const char* end;
@@ -1221,8 +1243,9 @@ static TempStr DictionaryUrl(Str word, DictionarySource source) {
 }
 
 static bool DictionaryHttpGet(Str url, str::Builder& body, DWORD& status) {
-    HINTERNET session = InternetOpenW(L"SumatraPDF-Enhanced dictionary (+https://github.com/abelokoj/sumatrapdf)",
-                                      INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    HINTERNET session =
+        InternetOpenW(L"SumatraPDF-Enhanced dictionary (+https://github.com/abelokoj/sumatrapdf-enhanced)",
+                      INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (!session) return false;
     DWORD connectTimeout = 8000, readTimeout = 12000;
     InternetSetOptionW(session, INTERNET_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
@@ -1307,8 +1330,9 @@ void GetDictionaryCatalog(Vec<OfflineDictPack>& packs) {
         VecAppend(packs,
                   {str::Dup(packId), str::Dup(Str(source.name)), str::Dup(StrL("English")),
                    str::Dup(StrL("Wiktionary CC BY-SA 3.0; WordNet license; lists MIT")),
-                   str::Dup(fmt("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/%s.wmvocab.json.gz",
-                                Str(source.id))),
+                   str::Dup(fmt(
+                       "https://github.com/abelokoj/sumatrapdf-enhanced/blob/master/data/vocabulary/%s.wmvocab.json.gz",
+                       Str(source.id))),
                    true, true});
     }
     bool bundled = HasEmbeddedWordNet() ||
@@ -1519,6 +1543,24 @@ bool RemoveDictionaryPack(Str id, Str* error) {
 
 #if IS_DEBUG
 bool OfflineDictionary_UnitTests() {
+    {
+        DictionaryIndex index;
+        for (int i = 8191; i >= 0; i--) {
+            Str word = str::Dup(index.arena, fmt("word%05d", i));
+            VecAppend(index.inflections, {word, StrL("first"), len(index.inflections)});
+        }
+        VecAppend(index.inflections, {StrL("word04000"), StrL("second"), len(index.inflections)});
+        SortInflections(index.inflections);
+        int found = FindInflection(index.inflections, StrL("word04000"));
+        utassert(found == 4000);
+        utassert(str::Eq(index.inflections[found].lemma, StrL("first")));
+        utassert(str::Eq(index.inflections[found + 1].lemma, StrL("second")));
+        utassert(FindInflection(index.inflections, StrL("word00000")) == 0);
+        utassert(FindInflection(index.inflections, StrL("zzzz")) == len(index.inflections));
+        utassert(FindInflection(index.inflections, StrL("word04000a")) == found + 2);
+        Vec<DictInflection> empty;
+        utassert(FindInflection(empty, StrL("word")) == 0);
+    }
     {
         int packCount = 0;
         const KaikkiPack* packs = GetKaikkiPacks(packCount);
@@ -1736,8 +1778,9 @@ bool OfflineDictionary_UnitTests() {
     for (const OfflineDictPack& pack : catalog) {
         if (pack.bundled && str::StartsWith(pack.id, StrL("wm-"))) {
             wmCount++;
-            ok = ok && str::StartsWith(pack.sourceUrl,
-                                       StrL("https://github.com/abelokoj/sumatrapdf/blob/master/data/vocabulary/"));
+            ok = ok &&
+                 str::StartsWith(pack.sourceUrl,
+                                 StrL("https://github.com/abelokoj/sumatrapdf-enhanced/blob/master/data/vocabulary/"));
             ok = ok && len(pack.license) > 0;
         }
     }

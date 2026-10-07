@@ -60,7 +60,7 @@ void ApplyFindEditScale(DropDown* edit, int dpi) {
     PlatformFont* font = GetAppFontForDpi(dpi);
     edit->SetFont(font);
     int lineHeight = PlatformFontLineHeight(font);
-    int fieldHeight = std::max(lineHeight, FindIconSize(dpi)) + UiScalePxForDpi(dpi, 2);
+    int fieldHeight = lineHeight + UiScalePxForDpi(dpi, 2);
     CbSetItemHeight(edit->hwnd, -1, fieldHeight);
     CbSetItemHeight(edit->hwnd, 0, lineHeight + UiScalePxForDpi(dpi, 6));
     CbEditSelectText(edit, start, end);
@@ -121,12 +121,12 @@ void FindBarLayout_UnitTests() {
         gSettings->toolbarSize = 40;
         ApplyFindEditScale(edit, 96);
         int large = (int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
-        utassert(large >= 40 && large > normal);
+        utassert(large == normal);
         utassert(HwndWindowRect(edit->hwnd).dy >= large);
         gSettings->interfaceScale = 150;
         ApplyFindEditScale(edit, 144);
         int scaledHeight = (int)SendMessageW(edit->hwnd, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
-        utassert(scaledHeight >= FindIconSize(144) && scaledHeight > large);
+        utassert(scaledHeight == PlatformFontLineHeight(GetAppFontForDpi(144)) + UiScalePxForDpi(144, 2));
         utassert((HFONT)SendMessageW(CbEditHwnd(edit), WM_GETFONT, 0, 0) == GetAppFontForDpi(144)->GetHFont());
         int start = 0, end = 0;
         CbEditGetSelection(edit, start, end);
@@ -351,7 +351,7 @@ void FindBarWnd::CreateButtons() {
     static const int cmds[7] = {
         CmdFindPrev,      CmdFindNext,        CmdFindToggleMatchCase, CmdFindToggleMatchWholeWord,
         kFindBarPinCmdId, kFindBarCloseCmdId, kFindBarOptionsCmdId};
-    int pad = UiScalePxForDpi(layoutDpi, 4);
+    int pad = UiScalePxForDpi(layoutDpi, 2);
     for (int i = 0; i < dimof(btns); i++) {
         auto* b = new VirtIconButton();
         b->id = cmds[i];
@@ -439,7 +439,7 @@ bool FindBarWnd::Create(MainWindow* mainWin) {
     return true;
 }
 
-constexpr int kFindBarPadding = 6;
+constexpr int kFindBarPadding = 2;
 constexpr int kFindBarGap = 4;
 constexpr int kFindBarDefaultEditDx = 220;
 constexpr int kFindBarMinEditDx = 80;
@@ -467,7 +467,7 @@ void FindBarWnd::BuildLayout() {
     for (VirtIconButton* b : btns) {
         row->AddChild(b);
     }
-    for (int i : {2, 3, 4}) btns[i]->SetVisibility(Visibility::Collapse);
+    for (int i : {2, 3}) btns[i]->SetVisibility(Visibility::Collapse);
     padLayout = new Padding(row, Insets{p, p, p, p});
     layout = padLayout;
 }
@@ -476,8 +476,9 @@ int FindBarWnd::MinBarDx() const {
     if (!layout) {
         return 0;
     }
-    int client =
-        layout->MinIntrinsicWidth(0) - edit->MinIntrinsicWidth(0) + UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
+    int client = 2 * UiScalePxForDpi(layoutDpi, kFindBarPadding) + gapAfterEdit->dx +
+                 UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
+    for (int i : {0, 1, 4, 5}) client += btns[i]->MinIntrinsicWidth(0);
     Rect wr = HwndWindowRect(hwnd);
     Rect cr = HwndClientRect(hwnd);
     return client + (wr.dx - cr.dx);
@@ -488,7 +489,7 @@ void FindBarWnd::Layout(int forceBarDx) {
     if (!layout) {
         return;
     }
-    for (VirtIconButton* b : {btns[5], btns[6]}) b->SetVisibility(Visibility::Visible);
+    for (VirtIconButton* b : {btns[4], btns[5], btns[6]}) b->SetVisibility(Visibility::Visible);
     status->SetVisibility(Visibility::Visible);
     statusBox->SetVisibility(Visibility::Visible);
     gapAfterStatus->SetVisibility(Visibility::Visible);
@@ -499,11 +500,10 @@ void FindBarWnd::Layout(int forceBarDx) {
         int nonClientDx = wr.dx - cr.dx;
         int clientDx = std::max(1, forceBarDx - nonClientDx);
         int fullFixed = layout->MinIntrinsicWidth(0) - edit->idealDx;
-        int navigationFixed = fullFixed - statusBox->dx - gapAfterStatus->dx - btns[5]->MinIntrinsicWidth(0) -
-                              btns[6]->MinIntrinsicWidth(0);
+        int navigationFixed = fullFixed - statusBox->dx - gapAfterStatus->dx - btns[6]->MinIntrinsicWidth(0);
         FindFieldFit fit = FitFindField(clientDx, fullFixed, navigationFixed, edit->idealDx);
         if (fit.compact) {
-            for (VirtIconButton* b : {btns[5], btns[6]}) b->SetVisibility(Visibility::Collapse);
+            btns[6]->SetVisibility(Visibility::Collapse);
             status->SetVisibility(Visibility::Collapse);
             statusBox->SetVisibility(Visibility::Collapse);
             gapAfterStatus->SetVisibility(Visibility::Collapse);
@@ -654,7 +654,7 @@ void FindBarWnd::UpdateDpi(int dpi) {
     if (statusBox && status) {
         statusBox->dx = FindStatusDx(status->font, statusTotalHits, statusCapped);
     }
-    int buttonPad = UiScalePxForDpi(dpi, 4);
+    int buttonPad = UiScalePxForDpi(dpi, 2);
     for (VirtIconButton* b : btns) {
         if (b) {
             b->padding = Insets{buttonPad, buttonPad, buttonPad, buttonPad};
@@ -707,7 +707,7 @@ void FindBarWnd::OnKeyDown(KeyEvent* ev) {
             if (CbIsDropped(edit))
                 SendMessageW(edit->hwnd, CB_SHOWDROPDOWN, FALSE, 0);
             else
-                CollapseFindBar(win);
+                HideFindBar(win);
             ev->didHandle = true;
             break;
         case VK_RETURN:
@@ -747,7 +747,7 @@ void FindBarWnd::OnCommand(WindowBase::CommandEvent* ev) {
             ToggleFloatingFindUI(win); // pop out into the floating window
             break;
         case kFindBarCloseCmdId:
-            CollapseFindBar(win);
+            HideFindBar(win);
             break;
         case kFindBarOptionsCmdId: {
             HMENU menu = CreatePopupMenu();
@@ -1143,8 +1143,30 @@ TempStr FindUiStateResultTemp(Str action, int* exitCodeOut) {
         floating += IsFindWindowVisible(w) ? 1 : 0;
     }
     int firstTextLen = gWindows[0]->findEdit ? CbGetTextLen(gWindows[0]->findEdit) : -1;
-    out.Append(fmt("OK windows=%d docs=%d pref=%d compact=%d floating=%d firstTextLen=%d\n", len(gWindows), docs,
-                   gSettings->searchUIFloating ? 1 : 0, compact, floating, firstTextLen));
+    // search state of the first window: highlighted matches, page of the
+    // active hit (0: none) and whether a search is still running
+    MainWindow* first = gWindows[0];
+    int matches = len(first->findMatches);
+    int hitPage = 0;
+    DisplayModel* dm = first->AsFixed();
+    if (dm && dm->textSearch && dm->textSearch->result.len > 0) {
+        hitPage = dm->textSearch->result.pages[0];
+    }
+    bool busy = first->findThread || first->findCountThread || first->findDebouncePending;
+    int page = first->ctrl ? first->ctrl->CurrentPageNo() : 0;
+    out.Append(
+        fmt("OK windows=%d docs=%d pref=%d compact=%d floating=%d firstTextLen=%d matches=%d hitPage=%d "
+            "busy=%d page=%d\n",
+            len(gWindows), docs, gSettings->searchUIFloating ? 1 : 0, compact, floating, firstTextLen, matches, hitPage,
+            busy ? 1 : 0, page));
+    if (first->findBar) {
+        auto* bar = first->findBar;
+        Rect slot = ToolbarFindScreenRect(first);
+        out.Append(fmt("METRICS bar=%d slot=%d font=%d icon=%d widen=%d close=%d options=%d hwnd=%lld\n", bar->barDy,
+                       slot.dy, FindBarFontHeight(first), FindIconSize(bar->layoutDpi),
+                       bar->btns[4]->IsVisible() ? 1 : 0, bar->btns[5]->IsVisible() ? 1 : 0,
+                       bar->btns[6]->IsVisible() ? 1 : 0, (i64)(LONG_PTR)bar->hwnd));
+    }
     return finish(0);
 }
 

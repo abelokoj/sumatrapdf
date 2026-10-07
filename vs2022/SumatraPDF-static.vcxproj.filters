@@ -126,6 +126,9 @@
     <ClInclude Include="..\src\AnnotPlacement.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\AnnotRecovery.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\AnnotSearch.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -318,6 +321,9 @@
     <ClInclude Include="..\src\Menu.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\MergePdf.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\MobiDoc.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -340,6 +346,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\PageRenderService.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\PageThumbnails.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\PalmDbReader.h">
@@ -430,6 +439,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\ShortcutParse.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\SidebarPanel.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\SimpleBrowserWindow.h">
@@ -558,6 +570,9 @@
     <ClInclude Include="..\src\gui\win\HtmlWindow.h">
       <Filter>src\gui\win</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\gui\win\ScrollableMenu.h">
+      <Filter>src\gui\win</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\gui\win\TabsCtrl.h">
       <Filter>src\gui\win</Filter>
     </ClInclude>
@@ -660,6 +675,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\AnnotPlacement.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\AnnotRecovery.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\AnnotSearch.cpp">
@@ -777,6 +795,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\EngineDump.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\EngineDvi.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\EngineEbook.cpp">
@@ -902,6 +923,9 @@
     <ClCompile Include="..\src\Menu.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\MergePdf.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\MobiDoc.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -927,6 +951,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\PageRenderService.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\PageThumbnails.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\PalmDbReader.cpp">
@@ -1067,10 +1094,16 @@
     <ClCompile Include="..\src\SelectionTranslate.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\Settings.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\SettingsDialog.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\ShortcutParse.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\SidebarPanel.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\SignDocumentDialog.cpp">
@@ -1362,6 +1395,9 @@
       <Filter>src\tests</Filter>
     </ClCompile>
     <ClCompile Include="..\src\tests\ReadAloudHighlight_ut.cpp">
+      <Filter>src\tests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\tests\RenderCache_ut.cpp">
       <Filter>src\tests</Filter>
     </ClCompile>
     <ClCompile Include="..\src\tests\ShortcutParse_ut.cpp">

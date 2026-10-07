@@ -27,6 +27,9 @@ void ForceReloadSettings();
 void ReloadDeferredSettings();
 void ApplySettingsToOpenWindows();
 void RefreshUiFonts();
+#if IS_DEBUG
+bool AppSettings_UnitTestsMenuMetrics();
+#endif
 void CleanUpSettings();
 void RegisterSettingsForFileChanges();
 void UnregisterSettingsForFileChanges();
