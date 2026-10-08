@@ -2366,9 +2366,11 @@ static bool LassoOnDown(MainWindow* win, Point pt) {
     return true;
 }
 
-static bool LassoOnMove(MainWindow* win, Point pt) {
+static bool LassoOnMove(MainWindow* win, Point pt, WPARAM key) {
     if (!ValidateLasso(win)) return false;
     auto& lasso = win->annotationLasso;
+    // Capture can post a hover sample at the real cursor during a drag.
+    if ((lasso.drawing || lasso.transforming) && !(key & MK_LBUTTON)) return true;
     auto* dm = win->AsFixed();
     PointF p = dm->CvtFromScreen(pt, lasso.pageNo);
     if (lasso.drawing) {
@@ -2436,7 +2438,7 @@ static void CommitLassoTransform(MainWindow* win) {
 static bool LassoOnUp(MainWindow* win, Point pt) {
     if (!ValidateLasso(win)) return false;
     auto& lasso = win->annotationLasso;
-    LassoOnMove(win, pt);
+    LassoOnMove(win, pt, MK_LBUTTON);
     if (lasso.drawing && len(lasso.path) >= 3) {
         Vec<Annotation*> annotations;
         EngineMupdfGetAnnotations(win->AsFixed()->GetEngine(), annotations);
@@ -2741,7 +2743,7 @@ static void OnMouseMove(MainWindow* win, int x, int y, WPARAM key) {
 
     if (win->handTool && win->mouseAction == MouseAction::None) return;
 
-    if (LassoOnMove(win, Point{x, y})) return;
+    if (LassoOnMove(win, Point{x, y}, key)) return;
 
     if (AnnotationPlacementOnMouseMove(win, Point{x, y}, key)) {
         return;

@@ -495,7 +495,7 @@ async function testToolbarButtons(): Promise<void> {
   );
 
   parkCursorAway();
-  const { proc, client, frame } = await launchControlled(["-appdata", appdata, pdf]);
+  const { proc, client, frame } = await launchControlled(["-appdata", appdata, "-window-pos", "1024x720@0x0", pdf]);
   const pid = proc.pid!;
   try {
     await client.waitForRenderIdle();

@@ -393,6 +393,7 @@ struct ToolbarLine : HBox {
             auto* child = children[i].layout;
             VecAppend(widths, IsCollapsed(child) ? 0 : child->MinIntrinsicWidth(0));
         }
+        bool showScrollButtons = true;
         if (lineKind == ToolbarLineKind::Main && tb->findExpanded && findGroupIdx >= 0 && findGroupIdx < len(widths)) {
             int withoutFind = widths[findGroupIdx] - tb->findSlot->dx;
             // Give active search priority; Open stays available in the toolbar picker.
@@ -403,6 +404,12 @@ struct ToolbarLine : HBox {
                     if (item && item->id == CmdOpenFile && item->IsVisible()) HideLayout(item);
                 }
                 withoutFind = group->MinIntrinsicWidth(0) - tb->findSlot->dx;
+            }
+            // Keep active search usable on narrow windows; the picker and wheel
+            // still provide access to the other groups while the arrows are hidden.
+            if (withoutFind + tb->findMinWidth + overflowDx + gap > available) {
+                overflowDx = 0;
+                showScrollButtons = false;
             }
             int searchDx = std::min(tb->findPreferredWidth,
                                     std::max(tb->findMinWidth, available - withoutFind - overflowDx - gap));
@@ -417,8 +424,8 @@ struct ToolbarLine : HBox {
             if (widths[i] > 0 && !visible[i]) HideLayout(children[i].layout);
         }
         overflowButton->SetVisibility(Visibility::Visible);
-        previousButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
-        nextButton->SetVisibility(overflow ? Visibility::Visible : Visibility::Collapse);
+        previousButton->SetVisibility(overflow && showScrollButtons ? Visibility::Visible : Visibility::Collapse);
+        nextButton->SetVisibility(overflow && showScrollButtons ? Visibility::Visible : Visibility::Collapse);
         previousButton->SetIsEnabled(canScrollBefore);
         nextButton->SetIsEnabled(canScrollAfter);
         Size size = HBox::Layout(bc);
@@ -2536,7 +2543,8 @@ void HideToolbarHoverDropdown(MainWindow* win) {
     HoverOpenScope openScope;
     VecReset(tb->hoverItems);
     GiveHoverButtonTooltipBack(win);
-    tb->hoverPendingCmdId = 0;
+    // A second dismissal after a tool command must preserve its hover suppression.
+    if (tb->hoverCmdId != 0) tb->hoverPendingCmdId = 0;
     tb->hoverCmdId = 0;
     tb->hoverSticky = false;
     tb->hoverMoveTick = 0;
@@ -5929,7 +5937,7 @@ static void ToolbarPaletteTests() {
         args.initialSize = {200, 50};
         tb.host = VirtHost::Create(args);
         auto* row = new HBox();
-        for (int command : {CmdCreateAnnotInk, CmdZoomIn}) {
+        for (int command : {CmdCreateAnnotInk, CmdZoomIn, CmdCreateAnnotLine}) {
             auto* button = new VirtButton(StrL("Tool"), GetAppFont());
             button->id = command;
             row->AddChild(button);
@@ -5943,6 +5951,7 @@ static void ToolbarPaletteTests() {
             return Point{bounds.x + bounds.dx / 2, bounds.y + bounds.dy / 2};
         };
         Point pen = point(tb.items[0]), zoom = point(tb.items[1]);
+        Point line = point(tb.items[2]);
         ToolbarHoverDropdownOnMouseMove(&win, &pen);
         utassert(tb.hoverPendingCmdId == 0 && tb.hoverHost == nullptr);
         ToolbarHoverDropdownOnMouseMove(&win, &zoom);
@@ -5954,6 +5963,15 @@ static void ToolbarPaletteTests() {
         ToolbarHoverDropdownOnMouseMove(&win, &zoom);
         utassert(tb.hoverCmdId == CmdCreateAnnotInk && tb.hoverSticky);
         HideToolbarHoverDropdown(&win);
+        tb.hoverPendingCmdId = CmdCreateAnnotLine;
+        HideToolbarHoverDropdown(&win);
+        utassert(tb.hoverPendingCmdId == CmdCreateAnnotLine && tb.hoverHost == nullptr);
+        ToolbarHoverDropdownOnMouseMove(&win, &line);
+        utassert(tb.hoverPendingCmdId == CmdCreateAnnotLine);
+        ToolbarHoverDropdownOnMouseMove(&win, &zoom);
+        utassert(tb.hoverPendingCmdId == CmdZoomIn);
+        ToolbarHoverDropdownOnMouseMove(&win, &pen);
+        utassert(tb.hoverPendingCmdId == 0);
         delete tb.host;
         win.toolbarVirt = nullptr;
     }

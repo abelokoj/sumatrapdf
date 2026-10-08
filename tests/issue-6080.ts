@@ -63,7 +63,10 @@ export async function testit(): Promise<void> {
     "CheckForUpdates = false\nRestoreSession = false\nShowStartPage = false\nShowToc = false\nShowFavorites = false\nUseTabs = true\nSidebarWindowSize = grow\n",
   );
 
-  const { proc, client, frame } = await launchControlled(["-appdata", appdata, pdfA]);
+  // Leave room for the sidebar: the hosted runner normally fills its work area.
+  const wa = getWorkArea();
+  const windowPos = `${Math.floor((wa.right - wa.left) * 0.65)}x${Math.min(650, wa.bottom - wa.top)}@${wa.left}x${wa.top}`;
+  const { proc, client, frame } = await launchControlled(["-appdata", appdata, "-window-pos", windowPos, pdfA]);
   try {
     await client.waitForRenderIdle();
 
@@ -89,7 +92,6 @@ export async function testit(): Promise<void> {
     if (frameFw1.dx < frameFw0.dx + tocFw.dx - 8) {
       throw new Error(`issue-6080: fit-width frame should grow by ~toc ${tocFw.dx}, ${frameFw0.dx} -> ${frameFw1.dx}`);
     }
-    const wa = getWorkArea();
     if (frameFw1.x < wa.left - 2 || frameFw1.x + frameFw1.dx > wa.right + 2) {
       throw new Error(
         `issue-6080: frame not fully in work area: x=${frameFw1.x} dx=${frameFw1.dx} work=${wa.left}..${wa.right}`,

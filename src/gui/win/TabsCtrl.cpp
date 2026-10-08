@@ -493,6 +493,7 @@ void TabsCtrl::LayoutTabs() {
     scrollButtonDx = std::max(ScaleMetric(32), tabIconDx + ScaleMetric(12));
     viewportDx = std::max(1, rect.dx - (hasOverflow ? scrollButtonDx * 3 : 0));
     scrollDx = limitValue(scrollDx, 0, std::max(0, dx * nTabs - viewportDx));
+    if (!hasOverflow) wheelRemainder = 0;
     tabSize = {dx, dy};
     if (IsRunningOnWine()) {
         logf("TabsCtrl::LayoutTabs: hwnd=%p client=(%d,%d) tabSize=(%d,%d) nTabs=%d\n", hwnd, rect.dx, rect.dy,
@@ -524,10 +525,18 @@ void TabsCtrl::LayoutTabs() {
 }
 
 void TabsCtrl::ScrollTabs(int direction) {
+    wheelRemainder = 0;
+    ScrollTabsBy(direction * std::max(tabSize.dx, 1));
+}
+
+void TabsCtrl::ScrollTabsBy(int pixels) {
     if (!hasOverflow) {
         return;
     }
-    scrollDx += direction * std::max(tabSize.dx, 1);
+    int maximum = std::max(0, tabSize.dx * TabCount() - viewportDx);
+    int next = (int)std::clamp<int64_t>((int64_t)scrollDx + pixels, 0, maximum);
+    if (next == scrollDx) return;
+    scrollDx = next;
     LayoutTabs();
     ScheduleRepaint();
 }
@@ -964,7 +973,17 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     if (hasOverflow && (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)) {
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        ScrollTabs(msg == WM_MOUSEHWHEEL ? (delta > 0 ? 1 : -1) : (delta > 0 ? -1 : 1));
+        if (msg == WM_MOUSEWHEEL) delta = -delta;
+        int maximum = std::max(0, tabSize.dx * TabCount() - viewportDx);
+        if ((delta < 0 && scrollDx == 0) || (delta > 0 && scrollDx == maximum)) {
+            wheelRemainder = 0;
+            return 0;
+        }
+        int64_t distance = (int64_t)wheelRemainder + (int64_t)delta * std::max(tabSize.dx, 1);
+        int pixels = (int)std::clamp<int64_t>(distance / WHEEL_DELTA, INT_MIN, INT_MAX);
+        wheelRemainder = (int)(distance % WHEEL_DELTA);
+        ScrollTabsBy(pixels);
+        if (pixels && (scrollDx == 0 || scrollDx == maximum)) wheelRemainder = 0;
         return 0;
     }
     if (hasOverflow && mousePos.x >= viewportDx && msg == WM_LBUTTONDOWN) {
@@ -1507,8 +1526,28 @@ void TabsCtrl_UnitTests() {
     utassert(tc.hasOverflow);
     utassert(tc.viewportDx == 800 - tc.scrollButtonDx * 3);
     utassert(tc.TabStateFromMousePosition({tc.viewportDx, 10}).tabIdx == -1);
+    for (int i = 1; i <= WHEEL_DELTA; i++) {
+        SendMessageW(tc.hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-1), 0);
+        utassert(tc.scrollDx == (int)((int64_t)i * tc.tabSize.dx / WHEEL_DELTA));
+    }
+    for (int i = 1; i <= WHEEL_DELTA; i++) {
+        SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, (WORD)-1), 0);
+        utassert(tc.scrollDx == tc.tabSize.dx - (int)((int64_t)i * tc.tabSize.dx / WHEEL_DELTA));
+    }
+    utassert(tc.scrollDx == 0);
+    SendMessageW(tc.hwnd, WM_MOUSEWHEEL, 0, 0);
+    utassert(tc.scrollDx == 0);
+    SendMessageW(tc.hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), 0);
+    utassert(tc.scrollDx == 0);
+    SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA), 0);
+    utassert(tc.scrollDx == tc.tabSize.dx);
     tc.SetSelected(24);
     utassert(tc.scrollDx + tc.viewportDx >= tc.tabSize.dx * tc.TabCount());
+    int end = tc.scrollDx;
+    SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, 1), 0);
+    utassert(tc.scrollDx == end && tc.wheelRemainder == 0);
+    SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 0);
+    utassert(tc.scrollDx == end - tc.tabSize.dx);
     tc.tabListVisibleItems = 10;
     TabListPopup popup;
     HMENU menu = BuildTabListMenu(&tc, popup);

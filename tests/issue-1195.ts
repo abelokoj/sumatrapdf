@@ -45,11 +45,18 @@ const WINDOW_POS = ["-window-pos", "900x700@40x40"];
 
 type Result = { zoom: number; dark: number };
 
-// the built-in zoom levels written out, which sumatra-website/www/docs/Scrolling-and-zooming.md
-// gives users as the ZoomLevels line to copy and edit
-const DEFAULT_LEVELS =
-  "ZoomLevels = 8.33 12.5 18 25 33.33 50 66.67 75 100 125 150 200 300 400 600 800 1000 " +
-  "1200 1600 2000 2400 3200 4800 6400";
+// The fork's default numeric levels use 25-point steps from 100% through 6400%.
+const DEFAULT_LEVELS = `ZoomLevels = ${[
+  8.33,
+  12.5,
+  18,
+  25,
+  33.33,
+  50,
+  66.67,
+  75,
+  ...Array.from({ length: (6400 - 100) / 25 + 1 }, (_, i) => 100 + i * 25),
+].join(" ")}`;
 
 // ZoomLevels replaces the built-in levels, so a custom list has to have the
 // ordinary ones too; the largest is what raises the limit
@@ -129,14 +136,14 @@ export async function testit(): Promise<void> {
     throw new Error(`expected the zoom to be capped at 6400% by default, got ${std.zoom}%`);
   }
 
-  // the levels documented as "the built-in ones, written out" must really be them:
+  // writing out the fork defaults must retain the same numeric zoom step:
   // zooming in from 3200% has to land on the same level either way
   const builtinStep = await openAtZoom(onePage, "", "3200", 1);
-  const documentedStep = await openAtZoom(onePage, DEFAULT_LEVELS, "3200", 1);
-  if (Math.round(builtinStep.zoom) !== 4800 || documentedStep.zoom !== builtinStep.zoom) {
+  const explicitStep = await openAtZoom(onePage, DEFAULT_LEVELS, "3200", 1);
+  if (Math.round(builtinStep.zoom) !== 3225 || explicitStep.zoom !== builtinStep.zoom) {
     throw new Error(
-      `the documented default ZoomLevels don't reproduce the built-in ones: zooming in from ` +
-        `3200% goes to ${builtinStep.zoom}% by default but to ${documentedStep.zoom}% with them`,
+      `the explicit default ZoomLevels don't reproduce the built-in ones: zooming in from ` +
+        `3200% goes to ${builtinStep.zoom}% by default but to ${explicitStep.zoom}% with them`,
     );
   }
 
@@ -176,7 +183,7 @@ export async function testit(): Promise<void> {
   console.log(
     `  default limit ${std.zoom}%, with custom ZoomLevels ${raised.zoom}% (${ratio.toFixed(1)}x the pixels) ✓`,
   );
-  console.log(`  the documented default ZoomLevels step like the built-in ones (3200% -> ${documentedStep.zoom}%) ✓`);
+  console.log(`  the explicit default ZoomLevels step like the built-in ones (3200% -> ${explicitStep.zoom}%) ✓`);
   console.log(`  zoom in steps to ${steps.zoom}%, the ceiling holds at ${ceiling.zoom}% ✓`);
   console.log(`  a 400 page document stops at ${long.zoom}%, as much as its canvas can hold ✓`);
 }

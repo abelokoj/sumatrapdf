@@ -7,7 +7,7 @@
 //
 // Run: bun tests/read-aloud-restyle-stale-page.ts [--no-build]
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlClient, ControlCommand, DEBUG_REPORT_EXIT_CODE, withControlledSumatra } from "./control.ts";
 import { makeEpub } from "./epub-relayout-stale-page.ts";
@@ -38,6 +38,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("read-aloud-restyle-stale-page-data");
   mkdirSync(dir, { recursive: true });
   const epub = join(dir, "chapters.epub");
+  const log = join(dir, "log.txt");
   writeFileSync(epub, makeEpub({ parasPerChapter: 12 }));
 
   // with the default DocumentColorsFollowTheme only the first toggle restyles
@@ -80,7 +81,14 @@ export async function testit(): Promise<void> {
           break;
         }
         if (Date.now() > deadline) {
-          throw new Error("read-aloud-restyle-stale-page: read aloud never started speaking");
+          const errors = readFileSync(log, "utf8")
+            .split("\n")
+            .filter((line) => line.includes("tts:"))
+            .slice(-6)
+            .join("\n");
+          throw new Error(
+            `read-aloud-restyle-stale-page: read aloud never started speaking (${JSON.stringify(st)})\n${errors}`,
+          );
         }
         await sleep(80);
       }
@@ -122,17 +130,7 @@ export async function testit(): Promise<void> {
 
       sendCommandSync(frame, cmdId("CmdStopReadAloud"));
     },
-    [
-      "-appdata",
-      appdata,
-      "-log-to-file",
-      join(dir, "log.txt"),
-      "-window-pos",
-      "1000x900@40x40",
-      "-view",
-      "continuous",
-      epub,
-    ],
+    ["-appdata", appdata, "-log-to-file", log, "-window-pos", "1000x900@40x40", "-view", "continuous", epub],
   );
 }
 

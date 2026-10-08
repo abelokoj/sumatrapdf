@@ -979,14 +979,23 @@ export function getControlText(hwnd: number, maxChars = 1 << 20): string {
   if (n <= 0) {
     return "";
   }
-  const cap = Math.min(n + 1, maxChars);
-  const buf = new Uint16Array(cap);
-  const got = Number(sendMessage(hwnd, WM_GETTEXT, cap, BigInt(ptr(buf))));
-  let s = "";
-  for (let i = 0; i < got; i++) {
-    s += String.fromCharCode(buf[i]);
+  // The UI can process a queued edit between the length and text messages.
+  // Leave room for short replacements, and retry a filled buffer before
+  // reporting a truncated value as a different level or selection.
+  let cap = Math.min(Math.max(n + 1, 512), maxChars);
+  for (;;) {
+    const buf = new Uint16Array(cap);
+    const got = Number(sendMessage(hwnd, WM_GETTEXT, cap, BigInt(ptr(buf))));
+    if (got >= cap - 1 && cap < maxChars) {
+      cap = Math.min(cap * 2, maxChars);
+      continue;
+    }
+    let s = "";
+    for (let i = 0; i < got; i++) {
+      s += String.fromCharCode(buf[i]);
+    }
+    return s;
   }
-  return s;
 }
 
 // Full window text (large buffer). For child controls of another process use

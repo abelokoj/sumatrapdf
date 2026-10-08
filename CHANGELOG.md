@@ -4,6 +4,11 @@
 
 ## v0.1.2
 
+- Reduced Settings opening and scrolling work while retaining native editing, keyboard navigation and screen-reader access.
+- Removed repeated Learning Hub font and layout updates, and reused unchanged rows while filtering vocabulary.
+- Preserved small wheel movements in horizontal tab scrolling and kept enlarged search controls usable in narrow toolbars.
+- Kept annotation palettes closed after choosing a tool, and made lasso drags ignore stale hover samples.
+
 - Added editable HEX, RGB, CMYK, HSV and HSL color entry, with a synchronized preview and independent opacity.
 - Preserved small touchpad movements across PDF views, lists and popup panels. Scrolling respects Windows wheel preferences, keeps direction changes within bounds and avoids redundant list redraws.
 - Reduced first-opening work in Settings and Learning Hub by creating offscreen dropdowns and practice controls when needed. Visible Settings dropdowns start at their final bounds without temporary list entries or a second resize.

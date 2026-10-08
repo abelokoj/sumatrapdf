@@ -19,11 +19,13 @@ import { join } from "node:path";
 import { tmpPath, assemblePdf } from "./util";
 import { findCanvas, launchControlled, killAndWait } from "./win-automation";
 import {
+  clientToScreen,
   getClientRect,
   getScrollPos,
   moveWindow,
   packCoords,
-  postMessage,
+  sendMessage,
+  setCursorPos,
   showWindow,
   sleep,
   SW_RESTORE,
@@ -82,21 +84,29 @@ export async function testit(): Promise<void> {
     const cx = Math.floor((rc.right - rc.left) / 2);
     const cy = Math.floor((rc.bottom - rc.top) / 2);
 
-    // enter auto-scroll mode, move well past the drag threshold (offset 50 -> speed 5)
-    postMessage(canvas, WM_MBUTTONDOWN, MK_MBUTTON, packCoords(cx, cy));
-    await sleep(50);
-    postMessage(canvas, WM_MOUSEMOVE, 0, packCoords(cx, cy + 50));
+    // Keep the real cursor at each synthetic position so OS mouse moves cannot
+    // replace the fractional speed with the previous test's cursor offset.
+    function moveCursor(y: number): void {
+      const screen = clientToScreen(canvas, cx, y);
+      setCursorPos(screen.x, screen.y);
+      sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(cx, y));
+    }
+
+    moveCursor(cy);
+    sendMessage(canvas, WM_MBUTTONDOWN, MK_MBUTTON, packCoords(cx, cy));
+    // move well past the drag threshold (offset 50 -> speed 5)
+    moveCursor(cy + 50);
     await sleep(400);
 
     // settle at offset 9: old code -> speed 0 (no move), new code -> speed 0.9
-    postMessage(canvas, WM_MOUSEMOVE, 0, packCoords(cx, cy + 9));
+    moveCursor(cy + 9);
     await sleep(200);
     const start = getScrollPos(canvas);
     await sleep(600);
     const end = getScrollPos(canvas);
 
     // stop auto-scroll (second middle-click toggles it off)
-    postMessage(canvas, WM_MBUTTONDOWN, MK_MBUTTON, packCoords(cx, cy + 9));
+    sendMessage(canvas, WM_MBUTTONDOWN, MK_MBUTTON, packCoords(cx, cy + 9));
 
     const moved = end - start;
     console.log(`  at cursor offset 9: scrolled ${moved}px in 0.6s (pos ${start} -> ${end})`);

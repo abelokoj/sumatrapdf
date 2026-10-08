@@ -16,8 +16,11 @@ import {
   findTopWindow,
   getClassName,
   getClientRect,
+  getControlText,
   getFocusedHwnd,
+  getWindowLong,
   getWindowPid,
+  GWL_STYLE,
   isWindowVisible,
   packCoords,
   sendMessage,
@@ -46,6 +49,7 @@ import {
 const TOOLBAR_CLASS = "SUMATRA_VIRT_TOOLBAR";
 const FLOAT_CLASS = "SUMATRA_ANNOT_FILTER_WND";
 const CANVAS_CLASS = "SUMATRA_PDF_CANVAS";
+const ES_NUMBER = 0x2000;
 
 type FilterState = {
   floatVisible: boolean;
@@ -191,15 +195,26 @@ export async function testit(): Promise<void> {
       throw new Error("annot-filter-toolbar: no toolbar");
     }
     captureWindowToPng(toolbar, join(dir, "toolbar.png"));
-    let nEdits = 0;
+    let nPageEdits = 0,
+      nZoomEdits = 0;
+    const unexpectedEdits: string[] = [];
     enumChildWindows(toolbar, (hwnd) => {
-      if (getClassName(hwnd) === "Edit" && isWindowVisible(hwnd)) {
-        nEdits++;
+      if (getClassName(hwnd) !== "Edit" || !isWindowVisible(hwnd)) return true;
+      const text = getControlText(hwnd).trim();
+      if (getWindowLong(hwnd, GWL_STYLE) & ES_NUMBER) {
+        nPageEdits++;
+      } else if (/^\d+(?:\.\d+)?%$/.test(text)) {
+        nZoomEdits++;
+      } else {
+        unexpectedEdits.push(text);
       }
       return true;
     });
-    if (nEdits > 1) {
-      throw new Error(`annot-filter-toolbar: toolbar still has a filter box (${nEdits} edits)`);
+    if (nPageEdits > 1 || nZoomEdits > 1 || unexpectedEdits.length) {
+      throw new Error(
+        `annot-filter-toolbar: toolbar still has a filter box or duplicate entry ` +
+          `(page=${nPageEdits}, zoom=${nZoomEdits}, extra=${JSON.stringify(unexpectedEdits)})`,
+      );
     }
     if (findTopWindow(pid, FLOAT_CLASS)) {
       throw new Error("annot-filter-toolbar: annotation list opened without being asked for");

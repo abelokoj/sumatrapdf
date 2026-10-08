@@ -825,15 +825,10 @@ void CollectTabStops(ILayout* root, Vec<TabStop>& out) {
     }
     VirtCtrl* w = root->AsVirtCtrl();
     if (w) {
-        // a virtual control can hold more than one stop: its children are part
-        // of the same tree
-        Vec<VirtCtrl*> focusable;
-        CollectFocusable(w, focusable);
-        for (VirtCtrl* f : focusable) {
-            VecAppend(out, TabStop{nullptr, f});
-        }
-        return;
+        if (!w->IsHitTestable()) return;
+        if (w->HasFlag(vwfFocusable) && !w->HasFlag(vwfSkipTabStop)) VecAppend(out, TabStop{nullptr, w});
     }
+    // ScrollBox hosts both native and virtual controls through its layout child.
     int n = root->LayoutChildCount();
     for (int i = 0; i < n; i++) {
         CollectTabStops(root->LayoutChildAt(i), out);

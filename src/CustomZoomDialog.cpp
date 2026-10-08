@@ -63,9 +63,7 @@ static void ClearCustomZoomWnd() {
     gCustomZoomWnd = nullptr;
 }
 
-// the fewest rows the list is allowed to shrink to when the screen is too
-// short for all of them
-constexpr int kZoomListMinLines = 6;
+constexpr int kZoomListMinLines = 1;
 
 void CustomZoomWnd::FillZoom() {
     if (!listBox || !model) {
@@ -306,26 +304,25 @@ bool CustomZoomWnd::Create(MainWindow* mainWin) {
     auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
     layout = padding;
 
+    UpdateTheme();
+    // Activation preserves the client height when installing the scaled caption.
+    WindowApplyScaledCaption(hwnd);
     int dx = DpiScale(240);
     LayoutAndSizeToContent(layout, dx, 0, hwnd);
-    {
-        // the list asked for all of its rows: give some back if that made the
-        // window taller than the screen it will open on
-        Rect wa = GetWorkAreaRect({}, win ? win->hwndFrame : hwnd);
+    Rect wa = GetWorkAreaRect({}, win ? win->hwndFrame : hwnd);
+    for (;;) {
         int dy = HwndWindowRect(hwnd).dy;
         int rowDy = listBox->GetItemHeight();
-        if (dy > wa.dy && rowDy > 0) {
-            int drop = ((dy - wa.dy) + rowDy - 1) / rowDy;
-            int lines = std::max(listBox->idealSizeLines - drop, kZoomListMinLines);
-            if (lines != listBox->idealSizeLines) {
-                listBox->idealSizeLines = lines;
-                LayoutAndSizeToContent(layout, dx, 0, hwnd);
-            }
-        }
+        if (dy <= wa.dy || rowDy <= 0) break;
+        int drop = ((dy - wa.dy) + rowDy - 1) / rowDy;
+        int lines = std::max(listBox->idealSizeLines - drop, kZoomListMinLines);
+        if (lines == listBox->idealSizeLines) break;
+        listBox->idealSizeLines = lines;
+        LayoutAndSizeToContent(layout, dx, 0, hwnd);
     }
     DoLayout(HwndClientRect(hwnd).Size());
+    listBox->EnsureVisible(listBox->GetCurrentSelection());
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
-    UpdateTheme();
 
     SetIsVisible(true);
     if (editZoom) {

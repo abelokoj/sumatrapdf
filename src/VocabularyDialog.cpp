@@ -791,7 +791,12 @@ static void WordDetails(LearningWindow* w) {
     text.Finish();
     Text(w, lcLearned, word->learned ? Tr("Mark unlearned") : Tr("Mark learned"));
 }
-static void RefreshLibrary(LearningWindow* w) {
+enum class LibraryRefresh {
+    Data,
+    Query
+};
+static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words, Str previous);
+static void RefreshLibrary(LearningWindow* w, LibraryRefresh refresh = LibraryRefresh::Data) {
     w->updating = true;
     Vec<VocabularyWord*> words;
     VocabularySearch(Read(w, lcQuery), CurrentDeck(w), false, words);
@@ -800,36 +805,19 @@ static void RefreshLibrary(LearningWindow* w) {
     defer {
         str::Free(previous);
     };
-    bool changed = len(words) != len(w->wordIds);
-    for (int i = 0; !changed && i < len(words); i++) {
-        VocabularyWord* word = words[i];
-        changed =
-            !str::Eq(word->id, w->wordIds[i]) || !str::Eq(ToUtf8Temp(LbGetTextTemp(Control(w, lcLibrary), i)),
-                                                          fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{}));
-    }
-    if (changed) {
-        w->wordIds.Reset();
-        SendMessageW(Control(w, lcLibrary), LB_RESETCONTENT, 0, 0);
-        for (VocabularyWord* word : words) {
-            w->wordIds.Append(word->id);
-            SendMessageW(Control(w, lcLibrary), LB_ADDSTRING, 0,
-                         (LPARAM)CWStrTemp(fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{})));
-        }
-        if (len(words)) {
-            SendMessageW(Control(w, lcLibrary), LB_SETCURSEL, std::max(0, w->wordIds.Find(previous)), 0);
-        }
-    }
+    bool changed = SetLibraryRows(w, words, previous);
     int due = VocabularyDueCount(CurrentDeck(w));
     Status(w,
            len(words)
                ? fmt("%d saved words · %d due for review", len(words), due)
                : Tr("Start by selecting a built-in deck and Install deck, or save a word while reading with Shift+D."));
-    w->updating = false;
-    if (!w->practice) {
+    VocabularyWord* selected = SelectedWord(w);
+    if (!w->practice && (refresh == LibraryRefresh::Data || !str::Eq(previous, selected ? selected->id : Str{}))) {
         WordDetails(w);
     }
-    UpdateLearningChrome(w);
-    LayoutLearning(w);
+    if (refresh == LibraryRefresh::Data) UpdateLearningChrome(w);
+    w->updating = false;
+    if (refresh == LibraryRefresh::Data || changed) LayoutLearning(w);
 }
 static TempStr ChoiceLabel(int index) {
     char letters[16]{};
@@ -1825,7 +1813,7 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
     }
     if (id == lcQuery && notification == EN_CHANGE && !w->dictionary) {
         if (!w->practice) {
-            RefreshLibrary(w);
+            RefreshLibrary(w, LibraryRefresh::Query);
         }
         return;
     }
@@ -2092,7 +2080,8 @@ struct ChoiceList {
     HFONT font = nullptr;
     Vec<int> tops;
     int measuredWidth = -1, measurePasses = 0, labelWidth = 0;
-    bool wrapDirty = true, topsDirty = true, wrapping = false;
+    bool wrapDirty = true, topsDirty = true, wrapping = false, partialWrap = false;
+    Vec<int> measureRows;
 };
 static void IndexChoiceRows(ChoiceList* list) {
     if (!list->topsDirty) return;
@@ -2176,14 +2165,20 @@ static void WrapChoices(HWND control) {
     HGDIOBJ old = SelectObject(dc, list->font ? list->font : GetAppFontForDpi(DpiGet())->GetHFont());
     for (int pass = 0; pass < 2; pass++) {
         GetClientRect(control, &client);
-        for (int i = 0; i < len(list->strings); i++) {
-            WStr text = ToWStrTemp(list->strings[i]);
+        bool all = !list->partialWrap || list->measuredWidth != client.right || pass > 0;
+        int next = 0, measured = 0, i = 0;
+        for (Str caption : list->strings) {
+            int row = i++;
+            if (!all && (next >= len(list->measureRows) || list->measureRows[next] != row)) continue;
+            if (!all) next++;
+            WStr text = ToWStrTemp(caption);
             RECT bounds{0, 0, std::max(1, (int)client.right - AppScrollbarInset(control) - label - UiScalePx(24)), 0};
             DrawTextW(dc, CWStrTemp(text), len(text), &bounds,
                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
-            list->heights[i] = std::max((int)bounds.bottom, GetAppFontSizeForDpi(DpiGet())) + UiScalePx(20);
+            list->heights[row] = std::max((int)bounds.bottom, GetAppFontSizeForDpi(DpiGet())) + UiScalePx(20);
+            measured++;
         }
-        list->measurePasses++;
+        if (measured) list->measurePasses++;
         list->topsDirty = true;
         if (anchor >= 0 && anchor < len(list->heights)) {
             list->scroll = ChoiceTop(list, anchor) + std::min(within, list->heights[anchor] - 1);
@@ -2195,7 +2190,8 @@ static void WrapChoices(HWND control) {
     }
     SelectObject(dc, old);
     list->measuredWidth = client.right;
-    list->wrapDirty = false;
+    list->wrapDirty = list->partialWrap = false;
+    VecReset(list->measureRows);
 }
 static void ChooseRow(ChoiceList* list, int index, bool notify) {
     if (index < -1 || index >= len(list->strings)) {
@@ -2218,6 +2214,67 @@ static void ChooseRow(ChoiceList* list, int index, bool notify) {
                      (LPARAM)list->hwnd);
     }
 }
+static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words, Str previous) {
+    HWND control = Control(w, lcLibrary);
+    auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
+    if (!list) return false;
+    bool changed = len(words) != len(w->wordIds) || len(words) != len(list->strings);
+    auto id = w->wordIds.begin();
+    int index = 0;
+    for (Str caption : list->strings) {
+        if (changed) break;
+        VocabularyWord* word = words[index++];
+        changed = !str::Eq(word->id, *id++) ||
+                  !str::Eq(caption, fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{}));
+    }
+    if (!changed) return false;
+
+    struct Row {
+        Str id, caption;
+        int height;
+    };
+    Vec<Row> rows;
+    id = w->wordIds.begin();
+    index = 0;
+    for (Str caption : list->strings) {
+        if (index >= len(w->wordIds) || index >= len(list->heights)) break;
+        VecAppend(rows, Row{*id++, caption, list->heights[index++]});
+    }
+    VecSort(rows, [](const Row* a, const Row* b) { return str::Cmp(a->id, b->id); });
+    RECT client;
+    GetClientRect(control, &client);
+    bool cached = !list->wrapDirty && list->measuredWidth == client.right;
+    StrVec ids, captions;
+    Vec<int> heights, measureRows;
+    for (VocabularyWord* word : words) {
+        Str caption = fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{});
+        int first = 0, last = len(rows);
+        while (first < last) {
+            int middle = (first + last) / 2;
+            if (str::Cmp(rows[middle].id, word->id) < 0)
+                first = middle + 1;
+            else
+                last = middle;
+        }
+        bool reuse =
+            cached && first < len(rows) && str::Eq(rows[first].id, word->id) && str::Eq(rows[first].caption, caption);
+        if (!reuse) VecAppend(measureRows, len(heights));
+        VecAppend(heights, reuse ? rows[first].height : GetAppFontSizeForDpi(DpiGet()) + UiScalePx(20));
+        ids.Append(word->id);
+        captions.Append(caption);
+    }
+    w->wordIds = ids;
+    list->strings = captions;
+    list->heights = heights;
+    list->measureRows = measureRows;
+    list->wrapDirty = list->topsDirty = true;
+    list->partialWrap = cached;
+    list->selected = list->hover = -1;
+    list->scroll = 0;
+    WrapChoices(control);
+    if (len(words)) ChooseRow(list, std::max(0, w->wordIds.Find(previous)), false);
+    return true;
+}
 static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     DpiScope dpi(hwnd);
     auto* list = (ChoiceList*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -2231,11 +2288,13 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     switch (msg) {
         case LB_ADDSTRING:
+            list->partialWrap = false;
             list->strings.Append(ToUtf8Temp(WStr((WCHAR*)lp)));
             list->wrapDirty = list->topsDirty = true;
             VecAppend(list->heights, GetAppFontSizeForDpi(DpiGet()) + DpiScale(20));
             return len(list->strings) - 1;
         case LB_RESETCONTENT:
+            list->partialWrap = false;
             list->strings.Reset();
             VecReset(list->heights);
             list->wrapDirty = list->topsDirty = true;
@@ -2247,6 +2306,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if ((int)wp < 0 || (int)wp >= len(list->strings)) {
                 return LB_ERR;
             }
+            list->partialWrap = false;
             list->strings.RemoveAt((int)wp);
             VecRemoveAt(list->heights, (int)wp);
             list->wrapDirty = list->topsDirty = true;
@@ -2292,6 +2352,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_GETFONT:
             return (LRESULT)list->font;
         case WM_SETFONT:
+            list->partialWrap = false;
             list->font = (HFONT)wp;
             list->wrapDirty = true;
             WrapChoices(hwnd);
@@ -3424,7 +3485,8 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
     }
     if (_wcsicmp(klass, L"EDIT") == 0)
         SendMessageW(child, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(DpiScale(10), DpiScale(10)));
-    SendMessageW(child, WM_SETFONT, (WPARAM)GetAppFontForDpi(DpiGet())->GetHFont(), false);
+    HFONT font = id == lcTitle && w->titleFont ? w->titleFont : GetAppFontForDpi(DpiGet())->GetHFont();
+    SendMessageW(child, WM_SETFONT, (WPARAM)font, false);
     if (_wcsicmp(klass, L"EDIT") == 0) EditSetDefaultMargins(child);
     if ((style & WS_VSCROLL) && _wcsicmp(klass, L"COMBOBOX") != 0) InstallAppScrollbar(child);
     return child;
@@ -3506,7 +3568,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     }
     DpiScope windowDpi(hwnd);
     InstallAppScrollbar(hwnd);
-    SetLearningIcons(w);
+    RefreshLearningStyle(w);
     MakeControl(w, lcTitle, L"STATIC", dictionary ? Tr("Dictionary") : Tr("Learning hub"), SS_OWNERDRAW | SS_NOPREFIX);
     MakeButton(w, lcGuideStart, Tr("Help / Start guide"));
     MakeControl(w, lcGuideText, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX);
@@ -3607,9 +3669,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     }
     MakeButton(w, lcManageToggle, dictionary ? Tr("Dictionaries…") : Tr("Deck tools…"));
     RefreshDecks(w);
-    w->ready = true;
     UpdateLearningChrome(w);
-    RefreshLearningStyle(w);
     UpdateGuide(w);
     for (int id : {lcLibrary}) {
         if (Control(w, id)) {
@@ -3622,6 +3682,9 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     }
     SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true,
                  (LPARAM)(dictionary ? L"Type a word…" : L"Search your vocabulary…"));
+    FormatDetails(w);
+    // The hidden window stays unlaid out until its controls, data and visibility are final.
+    w->ready = true;
     LayoutLearning(w);
     if (activate) {
         ShowWindow(hwnd, SW_SHOW);
@@ -3900,6 +3963,58 @@ static void LearningFieldPaintTest(LearningWindow* w) {
     if (dc) DeleteDC(dc);
 }
 
+static void LibraryRowsTest(HWND parent) {
+    HWND control = CreateWindowExW(0, kChoiceListClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 150, 120, parent,
+                                   (HMENU)(INT_PTR)lcLibrary, GetModuleHandleW(nullptr), nullptr);
+    utassert(control != nullptr);
+    if (!control) return;
+    defer {
+        DestroyWindow(control);
+    };
+    LearningWindow window;
+    window.hwnd = parent;
+    window.controls[lcLibrary] = control;
+    VocabularyWord first, second;
+    first.id = str::Dup(StrL("first"));
+    first.word = str::Dup(StrL("A long saved word that wraps across several lines"));
+    second.id = str::Dup(StrL("second"));
+    second.word = str::Dup(StrL("Second word"));
+    Vec<VocabularyWord*> words;
+    VecAppend(words, &first);
+    VecAppend(words, &second);
+    utassert(SetLibraryRows(&window, words, {}));
+    auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
+    int firstHeight = list->heights[0], secondHeight = list->heights[1];
+    int measured = list->measurePasses;
+    ChooseRow(list, 1, false);
+    int scroll = list->scroll;
+    ValidateRect(control, nullptr);
+    utassert(!SetLibraryRows(&window, words, second.id));
+    utassert(list->measurePasses == measured);
+    utassert(list->selected == 1 && list->scroll == scroll);
+    utassert(!GetUpdateRect(control, nullptr, FALSE));
+
+    VecRemoveAt(words, 0);
+    utassert(SetLibraryRows(&window, words, second.id));
+    utassert(list->measurePasses == measured && list->heights[0] == secondHeight);
+    utassert(list->selected == 0 && str::Eq(window.wordIds[0], second.id));
+    VecAppend(words, &first);
+    utassert(SetLibraryRows(&window, words, second.id));
+    utassert(list->heights[0] == secondHeight && list->heights[1] == firstHeight);
+    utassert(list->selected == 0 && str::Eq(window.wordIds[1], first.id));
+
+    SendMessageW(control, LB_SETITEMHEIGHT, 1, firstHeight + 37);
+    second.learned = true;
+    utassert(SetLibraryRows(&window, words, first.id));
+    utassert(str::Eq(list->strings[0], StrL("Second word  ✓")));
+    utassert(list->heights[1] == firstHeight + 37 && list->selected == 1);
+    MoveWindow(control, 0, 0, 450, 120, false);
+    utassert(list->heights[1] < firstHeight);
+    VecReset(words);
+    utassert(SetLibraryRows(&window, words, first.id));
+    utassert(len(window.wordIds) == 0 && len(list->strings) == 0 && len(list->heights) == 0);
+    utassert(list->selected == -1 && list->scroll == 0);
+}
 static void LearningRowTests(LearningWindow* w) {
     int size = gSettings->uIFontSize, scale = gSettings->interfaceScale;
     Str theme = str::Dup(gSettings->theme), family = str::Dup(gSettings->uIFontFamily);
@@ -3953,6 +4068,44 @@ static void LearningRowTests(LearningWindow* w) {
     }
 }
 
+struct LearningFontProbe {
+    HWND hwnd;
+    int messages = 0;
+};
+static Vec<LearningFontProbe>* learningFontProbes;
+static LRESULT CALLBACK LearningFontProbeProc(int code, WPARAM wp, LPARAM lp) {
+    if (code >= 0 && learningFontProbes) {
+        auto* message = (CWPRETSTRUCT*)lp;
+        if (message->message == WM_SETFONT) {
+            auto& probes = *learningFontProbes;
+            int index = 0;
+            while (index < len(probes) && probes[index].hwnd != message->hwnd) index++;
+            if (index == len(probes)) VecAppend(probes, {message->hwnd});
+            probes[index].messages++;
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+static LearningWindow* OpenLearningForTest(bool dictionary) {
+    Vec<LearningFontProbe> probes;
+    learningFontProbes = &probes;
+    HHOOK hook = SetWindowsHookExW(WH_CALLWNDPROCRET, LearningFontProbeProc, nullptr, GetCurrentThreadId());
+    utassert(hook);
+    LearningWindow* w = OpenLearningWindow(nullptr, dictionary, false);
+    if (hook) UnhookWindowsHookEx(hook);
+    learningFontProbes = nullptr;
+    if (!w) return nullptr;
+    for (HWND child : w->controls) {
+        if (!child || child == Control(w, lcTitle)) continue;
+        int messages = 0;
+        for (auto& probe : probes) {
+            if (probe.hwnd == child) messages = probe.messages;
+        }
+        utassert(messages == 1);
+    }
+    return w;
+}
+
 void VocabularyDialog_UnitTests() {
     RenderCache* originalCache = gRenderCache;
     if (!originalCache) gRenderCache = new RenderCache();
@@ -3992,7 +4145,7 @@ void VocabularyDialog_UnitTests() {
             str::Free(testData);
         };
         int originalScale = gSettings->interfaceScale;
-        auto* learning = OpenLearningWindow(nullptr, true, false);
+        auto* learning = OpenLearningForTest(true);
         utassert(learning != nullptr);
         if (learning) {
             utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
@@ -4019,7 +4172,7 @@ void VocabularyDialog_UnitTests() {
         }
         gSettings->interfaceScale = originalScale;
         RefreshUiFonts();
-        auto* hub = OpenLearningWindow(nullptr, false, false);
+        auto* hub = OpenLearningForTest(false);
         utassert(hub != nullptr);
         if (hub) {
             utassert(Control(hub, lcLibrary));
@@ -4084,6 +4237,7 @@ void VocabularyDialog_UnitTests() {
     defer {
         DestroyWindow(parent);
     };
+    LibraryRowsTest(parent);
     HWND control = CreateWindowExW(0, kChoiceListClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 150, 120, parent, nullptr,
                                    GetModuleHandleW(nullptr), nullptr);
     utassert(control != nullptr);

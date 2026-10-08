@@ -1,11 +1,14 @@
-// Regression test: toolbar Open/Print stay put when switching document <-> Home,
+// Regression test: a fixed Open/Print group stays put on document <-> Home,
 // and a background tab's GoToPage must not crash UpdateScrollbars.
+// Enhanced's default groups resize with page/chapter labels and availability;
+// put the fixed action group before those document-dependent groups.
 //
 // Run: bun tests/toolbar-tab-switch-pos.ts [--no-build]
 
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { ControlCommand, withControlledSumatra } from "./control.ts";
-import { cmdId, EXE, runStandalone } from "./util.ts";
+import { cmdId, EXE, ROOT, runStandalone, writeAppdata } from "./util.ts";
 import { sleep } from "./winapi.ts";
 
 function parseToolbarX(layoutOutput: string): number {
@@ -53,12 +56,23 @@ async function waitHiddenTabGoToPage(client: { hiddenTabGoToPage: () => Promise<
 
 export async function testit(): Promise<void> {
   const mobi = "C:\\Users\\kjk\\OneDrive\\!sumatra\\1000.mobi";
-  const docPath = existsSync(mobi) ? mobi : "tests/issue-5846.epub";
+  const docPath = existsSync(mobi) ? mobi : join(ROOT, "tests", "issue-5846.epub");
+  const appdata = writeAppdata(
+    "toolbar-tab-switch-pos",
+    [
+      "UiLanguage = en",
+      "RestoreSession = false",
+      "ShowStartPage = true",
+      "CheckForUpdates = false",
+      "ToolbarCustomLayout = CmdOpenFile CmdPrint | CmdGoToPrevPage PageInfo CmdGoToNextPage",
+    ].join("\n"),
+  );
   const cmdOpen = cmdId("CmdOpenFile");
   const cmdPrint = cmdId("CmdPrint");
   await withControlledSumatra(
     EXE,
     async (client) => {
+      await client.waitForRenderIdle();
       const [, layoutDoc] = await client.request(ControlCommand.TestLayout, []);
       const [, buttonsDoc] = await client.request(ControlCommand.TestToolbarButtons, []);
       const tbXDoc = parseToolbarX(String(layoutDoc));
@@ -90,7 +104,7 @@ export async function testit(): Promise<void> {
         throw new Error(`Print icon shifted: doc=${printScreenXDoc} home=${printScreenXHome}`);
       }
     },
-    [docPath],
+    ["-appdata", appdata, docPath],
   );
 }
 

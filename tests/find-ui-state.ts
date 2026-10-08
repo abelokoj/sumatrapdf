@@ -93,18 +93,20 @@ async function testToolbarSizing(): Promise<void> {
           return true;
         });
         if (!pageFont || pageFont !== searchFont) throw new Error("Search font differs from the toolbar font");
-        setWindowPos(frame, 60, 60, 1200, 1000);
-        const resized = await findUiRequest(client, "state");
-        const resizedMetrics = Object.fromEntries(
-          [...resized.raw.matchAll(/(\w+)=(\d+)/g)].map((m) => [m[1], Number(m[2])]),
-        );
-        if (
-          resizedMetrics.slot <= 0 ||
-          resizedMetrics.bar > resizedMetrics.slot ||
-          resizedMetrics.widen !== 1 ||
-          resizedMetrics.close !== 1
-        )
-          throw new Error(`Resizing clipped search controls: ${resized.raw}`);
+        for (const width of [1200, 1024, 800]) {
+          setWindowPos(frame, 60, 60, width, 720);
+          const resized = await findUiRequest(client, "state");
+          const resizedMetrics = Object.fromEntries(
+            [...resized.raw.matchAll(/(\w+)=(\d+)/g)].map((m) => [m[1], Number(m[2])]),
+          );
+          if (
+            resizedMetrics.slot <= 0 ||
+            resizedMetrics.bar > resizedMetrics.slot ||
+            resizedMetrics.widen !== 1 ||
+            resizedMetrics.close !== 1
+          )
+            throw new Error(`Resizing to ${width}px clipped search controls: ${resized.raw}`);
+        }
         setWindowPos(frame, 60, 60, 2400, 1000);
         await findUiRequest(client, "set-first-text");
         let switched = await findUiRequest(client, "toggle-first");

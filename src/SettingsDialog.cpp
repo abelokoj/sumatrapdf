@@ -3,6 +3,7 @@
 
 #include "base/Base.h"
 #include "base/Win.h"
+#include "base/AutoWin.h"
 #include "base/File.h"
 #include "base/Timer.h"
 #include "base/Pixmap.h"
@@ -16,6 +17,7 @@
 #include "gui/PlatformWindow.h"
 #include "gui/Gfx.h"
 #include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
 
 #include "Settings.h"
 #include "DisplayMode.h"
@@ -200,7 +202,26 @@ struct SettingsMetrics {
 static SettingsMetrics settingsMetrics;
 
 struct SettingsDropDown : DropDown {
+    struct IdleField : VirtCtrl {
+        SettingsDropDown* drop;
+        explicit IdleField(SettingsDropDown* owner) : drop(owner) {
+            onMouseDown = MkMethod1<IdleField, VirtMouseEvent*, &IdleField::Press>(this);
+            onMouseEnter = MkMethod0<IdleField, &IdleField::Repaint>(this);
+            onMouseLeave = MkMethod0<IdleField, &IdleField::Repaint>(this);
+            onSetCursor = MkMethod1<IdleField, VirtSetCursorEvent*, &IdleField::SetCursor>(this);
+        }
+        void Paint(VirtPaintCtx& ctx) override;
+        bool HitTest(Point pt) override { return !drop->hwnd && drop->IsEnabled() && VirtCtrl::HitTest(pt); }
+        void Press(VirtMouseEvent*);
+        void Repaint();
+        void SetCursor(VirtSetCursorEvent*);
+    } idle{this};
     SettingsWnd* window = nullptr;
+    ~SettingsDropDown() override;
+    VirtCtrl* AsVirtCtrl() override {
+        idle.SetFlag(vwfEnabled, IsEnabled());
+        return &idle;
+    }
     void SetBounds(Rect bounds) override;
     void PrepareFocus() override;
     bool EnsureNative();
@@ -645,6 +666,8 @@ struct SettingsWnd : WindowBase {
     Str cacheKey;
     void SaveValues();
     void RestoreValues();
+    bool exposingAccessibility = false;
+    void ExposeNativeFields();
 
     bool Create(MainWindow* win, SettingsView view = SettingsView::Visible);
     void FillLayout();
@@ -979,6 +1002,7 @@ float SettingsWnd::SelectedZoom() {
 void SettingsWnd::OnReferenceHoverChanged() {
     if (dropHoverDelay) {
         dropHoverDelay->SetIsEnabled(chkReferenceHover && chkReferenceHover->IsChecked());
+        ((SettingsDropDown*)dropHoverDelay)->idle.Repaint();
     }
 }
 
@@ -1195,7 +1219,10 @@ void SettingsWnd::PickPageColor(DropDown* drop) {
     cc.rgbResult = selected;
     cc.lpCustColors = customColors;
     cc.Flags = CC_FULLOPEN | CC_RGBINIT;
-    if (DarkModeChooseColor(&cc)) drop->SetText(SerializeColorTemp(cc.rgbResult));
+    if (DarkModeChooseColor(&cc)) {
+        drop->SetText(SerializeColorTemp(cc.rgbResult));
+        ((SettingsDropDown*)drop)->idle.Repaint();
+    }
 }
 
 static void OnClose(WindowBase::CloseEvent* ev) {
@@ -1224,14 +1251,17 @@ static DropDown* MakeDropDown(SettingsWnd* window, PlatformFont* font, bool isRt
     args.visible = false;
     auto* c = new SettingsDropDown();
     c->window = window;
-    auto* sample = editable ? window->dropZoom : window->dropLayout;
-    if (sample) {
-        c->DeferCreate(args);
-        c->deferredHeight = sample->GetIdealSize().dy;
-        HWND edit = CbEditHwnd(sample);
-        c->deferredMargins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : 0;
-    } else {
-        c->Create(args);
+    c->DeferCreate(args);
+    HDC dc = PlatformFontMeasurementDC();
+    if (dc) {
+        AutoRestoreFont selectFont(dc, font->GetHFont());
+        TEXTMETRICW metrics{};
+        if (GetTextMetricsW(dc, &metrics)) {
+            c->deferredHeight =
+                metrics.tmHeight + 2 * DpiGetSystemMetrics(SM_CYEDGE) + 2 * DpiGetSystemMetrics(SM_CYBORDER) + 2;
+            int margin = std::max(DpiScale(4), (int)((metrics.tmAveCharWidth + 1) / 2));
+            c->deferredMargins = MAKELONG(margin, margin);
+        }
     }
 #if IS_DEBUG
     settingsComboMs += TimeSinceInMs(started);
@@ -1328,14 +1358,92 @@ bool SettingsDropDown::EnsureNative() {
     return true;
 }
 
+SettingsDropDown::~SettingsDropDown() {
+    if (window && window->vroot) window->vroot->OnWndDestroyed(&idle);
+}
+
+void SettingsDropDown::IdleField::Paint(VirtPaintCtx& ctx) {
+    if (drop->hwnd) return;
+    bool enabled = drop->IsEnabled(), hot = HasFlag(vwfHovered);
+    Color text = enabled ? ThemeWindowTextColor() : ThemeWindowTextDisabledColor();
+    Color edge = enabled ? (hot ? ThemeHotEdgeColor() : ThemeEdgeColor()) : ThemeDisabledEdgeColor();
+    Color background = enabled ? ThemeWindowControlBackgroundColor() : ThemeWindowBackgroundColor();
+    LOGFONTW lf{};
+    GetObjectW(drop->font->GetHFont(), sizeof(lf), &lf);
+    int diameter = std::max(DpiScale(8), std::abs((int)lf.lfHeight) / 3);
+    ctx.gfx->FillRoundedRect(ctx.bounds, diameter, background, edge);
+
+    int arrowWidth = DpiGetSystemMetrics(SM_CXVSCROLL);
+    Rect arrow = ctx.bounds;
+    arrow.dx = std::min(arrowWidth, arrow.dx);
+    bool rtl = drop->pendingCreate.isRtl;
+    if (!rtl) arrow.x = ctx.bounds.Right() - arrow.dx;
+    Rect label = ctx.bounds;
+    int margin = std::max(DpiScale(4), (int)LOWORD(drop->deferredMargins));
+    label.SubLR(rtl ? arrow.dx + margin : margin, rtl ? margin : arrow.dx + margin);
+    u32 flags = gfxTextSingleLine | gfxTextVCenter | gfxTextEllipsis;
+    if (rtl) flags |= gfxTextRight | gfxTextRtl;
+    ctx.gfx->DrawText(drop->GetTextTemp(), label, flags, drop->font, text);
+    int half = std::max(2, DpiScale(3));
+    Point center{arrow.x + arrow.dx / 2, arrow.y + arrow.dy / 2};
+    float stroke = (float)std::max(1, DpiScale(1));
+    ctx.gfx->DrawLineAA({center.x - half, center.y - half / 2}, {center.x, center.y + half / 2}, text, stroke);
+    ctx.gfx->DrawLineAA({center.x, center.y + half / 2}, {center.x + half, center.y - half / 2}, text, stroke);
+}
+
+void SettingsDropDown::IdleField::Repaint() {
+    auto* wnd = drop->window;
+    if (!wnd->scroll) return;
+    HwndInvalidateRect(wnd->hwnd, drop->lastBounds.Intersect(wnd->scroll->lastBounds), false);
+}
+
+void SettingsDropDown::IdleField::SetCursor(VirtSetCursorEvent* ev) {
+    int width = DpiGetSystemMetrics(SM_CXVSCROLL);
+    bool arrow = drop->pendingCreate.isRtl ? ev->ptLocal.x < width : ev->ptLocal.x >= bounds.dx - width;
+    UiSetCursor(drop->pendingCreate.isEditable && !arrow ? CursorId::IBeam : CursorId::Arrow);
+    ev->didHandle = true;
+}
+
+void SettingsDropDown::IdleField::Press(VirtMouseEvent* ev) {
+    if (ev->button != 0 || !drop->IsEnabled()) return;
+    drop->PrepareFocus();
+    if (!drop->hwnd) return;
+    drop->SetFocus();
+    POINT pt{ev->ptWindow.x, ev->ptWindow.y};
+    MapWindowPoints(drop->window->hwnd, drop->hwnd, &pt, 1);
+    HWND target = ChildWindowFromPointEx(drop->hwnd, pt, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE);
+    if (!target) target = drop->hwnd;
+    MapWindowPoints(drop->hwnd, target, &pt, 1);
+    WPARAM modifiers = MK_LBUTTON | (ev->isCtrl ? MK_CONTROL : 0) | (ev->isShift ? MK_SHIFT : 0);
+    SendMessageW(target, WM_LBUTTONDOWN, modifiers, MAKELPARAM(pt.x, pt.y));
+    ev->didHandle = true;
+}
+
 void SettingsDropDown::SetBounds(Rect bounds) {
     lastBounds = bounds;
-    if (!hwnd) {
-        auto* batch = SettingsMoveBatch::active;
-        if (!batch || batch->viewport.IsEmpty() || bounds.Intersect(batch->viewport).IsEmpty()) return;
-        if (!EnsureNative()) return;
+    idle.SetBounds(SettingsControlWindowBounds(this, bounds, pendingCreate.parent));
+    if (hwnd) SetSettingsControlBounds(this, bounds);
+}
+
+static void ExposeSettingsFields(ILayout* node) {
+    if (auto* control = node->AsControl()) {
+        if (str::Eq(Str(control->GetKind()), StrL("dropdown"))) {
+            auto* drop = (SettingsDropDown*)control;
+            if (drop->EnsureNative()) drop->EnsureItems();
+        }
     }
-    SetSettingsControlBounds(this, bounds);
+    for (int i = 0; i < node->LayoutChildCount(); i++) ExposeSettingsFields(node->LayoutChildAt(i));
+}
+
+void SettingsWnd::ExposeNativeFields() {
+    if (exposingAccessibility || !scroll) return;
+    exposingAccessibility = true;
+    SettingsMoveBatch batch;
+    batch.themeWindow = this;
+    ExposeSettingsFields(scroll->child);
+    batch.Apply();
+    scroll->ClipControls(scroll->child);
+    exposingAccessibility = false;
 }
 
 void SettingsDropDown::PrepareFocus() {
@@ -1790,10 +1898,10 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 
     SettingsFocusStops(this, scroll->child);
     SaveValues();
+    BOOL screenReader = FALSE;
+    if (SystemParametersInfoW(SPI_GETSCREENREADER, 0, &screenReader, 0) && screenReader) ExposeNativeFields();
     SetIsVisible(visible);
-    if (visible && dropLayout) {
-        HwndSetFocus(dropLayout->hwnd);
-    }
+    if (visible) HwndSetFocus(hwnd);
 #if IS_DEBUG
     logf(
         "Settings opening: %.3f ms controls, %.3f ms layout, %.3f ms theme/show; %d dropdown measurements, %d "
@@ -1812,6 +1920,18 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
     auto* window = (SettingsWnd*)ev->w;
     if (!window || !window->scroll) {
+        return;
+    }
+    // Native accessibility enumeration creates the fields before the system provider walks children.
+    constexpr LONG kUiaRootObjectId = -25;
+    if (ev->msg == WM_GETOBJECT && ((LONG)ev->lparam == OBJID_CLIENT || (LONG)ev->lparam == kUiaRootObjectId)) {
+        window->ExposeNativeFields();
+        return;
+    }
+    if (ev->msg == WM_SETTINGCHANGE && ev->wparam == SPI_SETSCREENREADER) {
+        BOOL screenReader = FALSE;
+        if (SystemParametersInfoW(SPI_GETSCREENREADER, 0, &screenReader, 0) && screenReader)
+            window->ExposeNativeFields();
         return;
     }
     if (ev->msg == WM_NCHITTEST && window->caption) {
@@ -1864,7 +1984,7 @@ static void OpenSettingsDialog(MainWindow* win, SettingsView view) {
     if (gSettingsWnd) {
         if (view == SettingsView::Visible) HwndSetFocus(gSettingsWnd->hwnd);
         if (view == SettingsView::Visible && gSettingsWnd->dropLayout) {
-            HwndSetFocus(gSettingsWnd->dropLayout->hwnd);
+            if (gSettingsWnd->dropLayout->hwnd) HwndSetFocus(gSettingsWnd->dropLayout->hwnd);
         }
         return;
     }
@@ -1932,12 +2052,14 @@ static void SettingsResponsivenessTests(SettingsWnd* wnd) {
     utassert(lines ? wnd->scroll->scrollY > 0 : wnd->scroll->scrollY == 0);
     wnd->scroll->ScrollTo(0);
     wnd->scroll->ClipControls(wnd->scroll->child);
+    wnd->dropLayout->PrepareFocus();
     int selection = CbGetCurrentSelection(wnd->dropLayout);
     SendMessageW(wnd->dropLayout->hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 0);
     utassert(lines ? wnd->scroll->scrollY > 0 : wnd->scroll->scrollY == 0);
     utassert(CbGetCurrentSelection(wnd->dropLayout) == selection);
     wnd->scroll->ScrollTo(0);
     wnd->scroll->ClipControls(wnd->scroll->child);
+    wnd->dropZoom->PrepareFocus();
     HWND edit = CbEditHwnd(wnd->dropZoom);
     utassert(edit);
     SendMessageW(edit, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)-WHEEL_DELTA), 0);
@@ -2017,6 +2139,7 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     Vec<int>* choices[] = {&wnd->uiSizes, &wnd->treeSizes, &wnd->thumbnailSizes};
     const int values[] = {23, 37, 137};
     for (int i = 0; i < dimofi(fields); i++) {
+        fields[i]->PrepareFocus();
         utassert(CbEditHwnd(fields[i]));
         CbSetCurrentSelection(fields[i], -1);
         fields[i]->SetText(fmt("%d", values[i]));
@@ -2044,6 +2167,7 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     utassert(SelectedNumber(wnd->dropToolbarSize, 16, 8, 64) == 16);
     wnd->dropToolbarSize->SetText(StrL("24 px"));
     utassert(SelectedNumber(wnd->dropToolbarSize, 16, 8, 64, StrL("px")) == 24);
+    wnd->dropUiFamily->PrepareFocus();
     utassert(CbEditHwnd(wnd->dropUiFamily));
     utassert(IsSettingsFont(StrL("Manrope")));
     utassert(IsSettingsFont(StrL("Segoe UI")));
@@ -2203,6 +2327,19 @@ static LRESULT CALLBACK SettingsNativeResizeHook(int code, WPARAM wp, LPARAM lp)
     return CallNextHookEx(nullptr, code, wp, lp);
 }
 
+static bool SettingsTestTab(MSG& message) {
+    BYTE saved[256]{};
+    GetKeyboardState(saved);
+    BYTE keys[256];
+    memcpy(keys, saved, sizeof(keys));
+    for (int key : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU})
+        keys[key] = 0;
+    SetKeyboardState(keys);
+    bool handled = PreTranslateMessage(message);
+    SetKeyboardState(saved);
+    return handled;
+}
+
 static void SettingsOpeningTests() {
     for (auto* entry : settingsMetrics.entries) delete entry;
     VecReset(settingsMetrics.entries);
@@ -2214,25 +2351,41 @@ static void SettingsOpeningTests() {
     HHOOK resizeHook = SetWindowsHookExW(WH_CALLWNDPROCRET, SettingsNativeResizeHook, nullptr, GetCurrentThreadId());
     utassert(resizeHook);
     utassert(first->Create(nullptr, SettingsView::Hidden));
+    // Opening and scrolling paint idle fields without native combo creation.
+    for (auto& value : first->savedValues) {
+        if (!value.checkbox) utassert(!value.control->hwnd);
+    }
+    for (int i = 0; i < 10; i++) first->scroll->ScrollTo((i & 1) ? 0 : first->scroll->MaxScrollY());
+    for (auto& value : first->savedValues) {
+        if (!value.checkbox) utassert(!value.control->hwnd);
+    }
+    first->scroll->ScrollTo(0);
+    Size layoutSize = first->dropLayout->GetIdealSize(), zoomSize = first->dropZoom->GetIdealSize();
+    first->dropLayout->PrepareFocus();
+    Str zoomText = str::Dup(first->dropZoom->GetTextTemp());
+    Rect zoomField = first->dropZoom->lastBounds;
+    Point click{zoomField.x + DpiScale(8), zoomField.y + zoomField.dy / 2};
+    SendMessageW(first->hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(click.x, click.y));
+    HWND zoomEdit = CbEditHwnd(first->dropZoom);
+    utassert(first->dropZoom->hwnd && zoomEdit);
+    SendMessageW(zoomEdit, WM_LBUTTONUP, 0, 0);
+    utassert(str::Eq(first->dropZoom->GetTextTemp(), zoomText));
+    str::Free(zoomText);
+    utassert(first->dropLayout->GetIdealSize() == layoutSize);
+    utassert(first->dropZoom->GetIdealSize() == zoomSize);
     if (resizeHook) UnhookWindowsHookEx(resizeHook);
     settingsNativeResizeProbe = nullptr;
-    // A visible lazy combo must arrive at its final size. Resizing it again
-    // after WM_SETFONT repeats the native edit/list geometry work at opening.
-    int lazyControls = 0;
-    for (auto& value : first->savedValues) {
-        if (value.checkbox || !value.control->hwnd || value.control == first->dropLayout ||
-            value.control == first->dropZoom)
-            continue;
-        lazyControls++;
+    // Activation retains field geometry and the native font, without a second resize.
+    for (DropDown* drop : {first->dropLayout, first->dropZoom}) {
+        utassert((HFONT)SendMessageW(drop->hwnd, WM_GETFONT, 0, 0) == drop->font->GetHFont());
         bool recorded = false;
         for (auto& probe : nativeResizes) {
-            if (probe.hwnd != value.control->hwnd) continue;
+            if (probe.hwnd != drop->hwnd) continue;
             recorded = true;
             utassert(probe.resizes == 0);
         }
         utassert(recorded);
     }
-    utassert(lazyControls > 0);
     utassert(first->dropLayout->hwnd);
     utassert(!first->dropPenMin->hwnd);
     utassert(str::Eq(first->dropPenMin->GetTextTemp(), fmt("%g", gSettings->penMinWidth)));
@@ -2280,7 +2433,33 @@ static void SettingsOpeningTests() {
     utassert(settingsMetrics.measured - before < coldMeasurements);
     utassert(settingsMetrics.reused > reused);
     utassert(len(settingsMetrics.entries) <= 64);
+    second->SetIsVisible(true);
+    HwndSetFocus(second->hwnd);
+    MSG tab{second->hwnd, WM_KEYDOWN, VK_TAB};
+    utassert(SettingsTestTab(tab));
+    utassert(second->dropLayout->hwnd && second->dropLayout->IsFocused());
+    SendMessageW(second->dropLayout->hwnd, WM_KEYDOWN, VK_F4, 0);
+    utassert(CbIsDropped(second->dropLayout));
+    SendMessageW(second->dropLayout->hwnd, CB_SHOWDROPDOWN, FALSE, 0);
+    utassert(!CbIsDropped(second->dropLayout));
+    int selected = CbGetCurrentSelection(second->dropLayout);
+    SendMessageW(second->dropLayout->hwnd, WM_KEYDOWN, VK_DOWN, 0);
+    utassert(CbGetCurrentSelection(second->dropLayout) == std::min(selected + 1, len(second->dropLayout->items) - 1));
+    tab.hwnd = GetFocus();
+    utassert(SettingsTestTab(tab));
+    utassert(second->dropZoom->hwnd && second->dropZoom->IsFocused());
+    HWND edit = CbEditHwnd(second->dropZoom);
+    utassert(edit && GetFocus() == edit);
+    CbEditSelectAll(second->dropZoom);
+    SendMessageW(GetFocus(), WM_CHAR, '7', 0);
+    SendMessageW(GetFocus(), WM_CHAR, '5', 0);
+    utassert(str::Eq(second->dropZoom->GetTextTemp(), StrL("75")) && CbGetCurrentSelection(second->dropZoom) == -1);
+    utassert(second->TabNavigate(true) && second->dropLayout->IsFocused());
+    second->RestoreValues();
+    second->SetIsVisible(false);
+    second->dropTabListCount->PrepareFocus();
     HWND originalControl = second->dropTabListCount->hwnd;
+    utassert(originalControl);
     Str original = str::Dup(second->dropTabListCount->GetTextTemp());
     second->dropPenStep->SetText(StrL("1.25 pt"));
     utassert(!second->dropPenStep->hwnd);
@@ -2302,6 +2481,24 @@ static void SettingsOpeningTests() {
     gSettings->uIFontSize = oldSize + 1;
     utassert(!str::Eq(second->cacheKey, SettingsCacheKey(nullptr)));
     gSettings->uIFontSize = oldSize;
+    second->scroll->ScrollTo(0);
+    int accessibilityScroll = second->scroll->scrollY;
+    WindowBase::WndProcEvent query{};
+    query.w = second;
+    query.msg = WM_GETOBJECT;
+    query.lparam = OBJID_CLIENT;
+    OnSettingsMessage(&query);
+    utassert(!query.didHandle && second->scroll->scrollY == accessibilityScroll);
+    for (auto& value : second->savedValues) {
+        if (value.checkbox) continue;
+        auto* drop = (DropDown*)value.control;
+        utassert(drop->hwnd && CbGetItemsCount(drop->hwnd) == len(drop->items));
+        utassert(str::Eq(drop->GetTextTemp(), value.text));
+        utassert(CbGetCurrentSelection(drop) == value.selection);
+    }
+    query.lparam = -25;
+    OnSettingsMessage(&query);
+    utassert(!query.didHandle && second->scroll->scrollY == accessibilityScroll);
     gSettingsWnd = nullptr;
     str::Free(original);
     DestroyWindow(second->hwnd);

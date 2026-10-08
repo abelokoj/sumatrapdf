@@ -50,7 +50,11 @@ async function gesture(canvas: number, points: Point[], client?: ControlClient):
     if (!down.includes("lasso active=1 drawing=1"))
       throw new Error(`Lasso did not start at ${JSON.stringify(first)}\n${down}`);
   }
-  for (const point of points.slice(1)) sendMessage(canvas, WM_MOUSEMOVE, MK_LBUTTON, packCoords(point.x, point.y));
+  for (const [index, point] of points.slice(1).entries()) {
+    sendMessage(canvas, WM_MOUSEMOVE, MK_LBUTTON, packCoords(point.x, point.y));
+    // Capture can enqueue a hover at the real cursor after the drag sample.
+    if (client && index === 0) sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(first.x, first.y));
+  }
   const last = points.at(-1)!;
   sendMessage(canvas, WM_LBUTTONUP, 0, packCoords(last.x, last.y));
 }
@@ -96,7 +100,15 @@ export async function testit(): Promise<void> {
     "latin1",
   );
   const original = readFileSync(pdf);
-  const { proc, client, frame } = await launchControlled(["-appdata", appdata, "-zoom", "100", pdf]);
+  const { proc, client, frame } = await launchControlled([
+    "-appdata",
+    appdata,
+    "-window-pos",
+    "1024x720@0x0",
+    "-zoom",
+    "100",
+    pdf,
+  ]);
   try {
     const canvas = findCanvas(frame);
     if (!canvas) throw new Error("Ink canvas missing");

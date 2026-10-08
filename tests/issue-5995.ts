@@ -73,19 +73,19 @@ export async function testit(): Promise<void> {
   const settingsPath = join(appDataDir, "SumatraPDFEnhanced-settings.txt");
   writeFileSync(settingsPath, "UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nTheme = Light\n");
 
-  // Follow Windows is immediately above Light in the list.
+  // Follow Windows is immediately above Sumatra Light in the list.
   await chooseAdjacentTheme(appDataDir, VK_UP);
   const automatic = savedTheme(settingsPath);
   if (automatic !== "System") {
     throw new Error(`issue-5995: Follow Windows saved Theme = ${automatic}, expected System`);
   }
 
-  // System must reopen on Follow Windows. Moving down once should select Light;
-  // if the dialog highlighted the resolved concrete theme, it would select Dark.
+  // System must reopen on Follow Windows. Moving down once should select Sumatra Light;
+  // if the dialog highlighted the resolved concrete theme, it would select Sumatra Dark.
   await chooseAdjacentTheme(appDataDir, VK_DOWN);
   const concrete = savedTheme(settingsPath);
-  if (concrete !== "Light") {
-    throw new Error(`issue-5995: reopened System mode moved down to ${concrete}, expected Light`);
+  if (concrete !== "Sumatra Light") {
+    throw new Error(`issue-5995: reopened System mode moved down to ${concrete}, expected Sumatra Light`);
   }
 }
 

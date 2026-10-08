@@ -82,11 +82,12 @@ async function waitForHome(
 async function withHomePage(
   name: string,
   fn: (frame: number, canvas: number, searchEdit: number, client: ControlClient) => Promise<void>,
+  launchArgs: string[] = [],
 ): Promise<void> {
   // CI uses the whole work area, so a cursor left over the thumbnails changes
   // the keyboard selection through hover before the first test key.
   setCursorPos(0, 0);
-  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir(name)]);
+  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir(name), ...launchArgs]);
   try {
     const canvas = findCanvas(frame);
     if (!canvas) {
@@ -113,7 +114,12 @@ async function withHomePage(
 export async function testit(): Promise<void> {
   // arrows move the selection and Enter opens it. The first entry is selected
   // at startup, so two Rights land on the third document
-  await withHomePage("enter", async (frame, canvas, _searchEdit, client) => {
+  const checkEnter = async (
+    frame: number,
+    canvas: number,
+    _searchEdit: number,
+    client: ControlClient,
+  ): Promise<void> => {
     key(canvas, VK_RIGHT);
     await waitForHome(client, (h) => h.sel === 1, "Right did not move the selection to the second entry");
     key(canvas, VK_RIGHT);
@@ -123,7 +129,11 @@ export async function testit(): Promise<void> {
     if (!title.includes("doc-02.pdf")) {
       throw new Error(`Enter did not open the selected file, title: '${title}'`);
     }
-  });
+  };
+  await withHomePage("enter", checkEnter);
+  // The hosted desktop is 1024x720. Crossing to the third entry at this size
+  // also scrolls the thumbnails, which must preserve the keyboard selection.
+  await withHomePage("enter-hosted-size", checkEnter, ["-window-pos", "1024x720@0x0"]);
 
   // Up from the first row goes to the search box, Down there comes back to the
   // list; then filtering re-selects the first (only) match, so Enter opens it

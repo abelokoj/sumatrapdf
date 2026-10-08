@@ -113,6 +113,7 @@ struct TabsCtrl : VirtCtrl {
     float interfaceScale = 1.f;
     int scrollButtonDx = 32;
     int scrollDx = 0;
+    int wheelRemainder = 0;
     int viewportDx = 0;
     bool hasOverflow = false;
     Pixmap* tabListIcon = nullptr;
@@ -196,6 +197,7 @@ struct TabsCtrl : VirtCtrl {
 
     void LayoutTabs();
     void ScrollTabs(int direction);
+    void ScrollTabsBy(int pixels);
     void ShowTabList();
     void ScheduleRepaint();
     TabsCtrl::MouseState TabStateFromMousePosition(const Point& p);

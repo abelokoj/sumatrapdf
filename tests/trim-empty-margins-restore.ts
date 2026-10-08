@@ -57,10 +57,14 @@ function writeSettings(appdata: string, pdf: string, trim: boolean): void {
       "CheckForUpdates = false",
       "RestoreSession = false",
       "RememberStatePerDocument = true",
+      "DefaultDisplayMode = continuous",
+      "DefaultZoom = 100",
       "FileStates [",
       "\t[",
       `\t\tFilePath = ${pdf}`,
       `\t\tTrimEmptyMargins = ${trim ? "true" : "false"}`,
+      "\t\tDisplayMode = continuous",
+      "\t\tZoom = 100",
       "\t\tPageNo = 1",
       "\t]",
       "]",
@@ -76,7 +80,7 @@ async function scrollExtent(dir: string, pdf: string, trim: boolean): Promise<nu
   writeSettings(appdata, pdf, trim);
   let launched;
   try {
-    launched = await launchControlled(["-appdata", appdata, pdf]);
+    launched = await launchControlled(["-appdata", appdata, "-window-pos", "1024x720@0x0", pdf]);
   } catch (e) {
     // a debug report kills the app before the control pipe is up
     throw new Error(`trim-empty-margins-restore: the app died loading with TrimEmptyMargins=${trim}: ${e}`);

@@ -8,7 +8,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { ROOT, cmdId, runStandalone, tmpPath } from "./util.ts";
-import { captureWindowToPng, enumChildWindows, getClassName, getWindowText, isWindowVisible, sleep } from "./winapi.ts";
+import {
+  captureWindowDCToPng,
+  enumChildWindows,
+  getClassName,
+  getWindowText,
+  isWindowVisible,
+  sleep,
+} from "./winapi.ts";
 import { findCanvas, killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 
 const NOTIF_CLASS = "SumatraWgDefaultWinClass";
@@ -59,7 +66,7 @@ function paeth(a: number, b: number, c: number): number {
   return c;
 }
 
-// PrintWindow into an LTR DIB misses the RTL blit; captureWindowToPng does not.
+// Capture painted pixels: WM_PRINTCLIENT only supplies the themed background.
 function loadPng(path: string): Shot {
   const buf = readFileSync(path);
   let off = 8;
@@ -197,7 +204,7 @@ async function grabZoomToast(
   const png = tmpPath(`6113-${label}.png`);
   const deadline = Date.now() + TOAST_PAINT_TIMEOUT_MS;
   for (;;) {
-    if (!captureWindowToPng(hwnd, png)) {
+    if (!captureWindowDCToPng(hwnd, png)) {
       throw new Error(`issue-6113: capture failed (${label})`);
     }
     const shot = loadPng(png);

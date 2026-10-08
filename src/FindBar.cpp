@@ -48,6 +48,7 @@ constexpr int kFindBarCloseCmdId = (int)CmdLast + 50;
 constexpr int kFindBarPinCmdId = (int)CmdLast + 52;
 constexpr int kFindBarOptionsCmdId = (int)CmdLast + 53;
 constexpr UINT_PTR kFindBarCollapseTimer = 0x201;
+constexpr int kFindBarNarrowEditDx = 40;
 
 static int FindIconSize(int dpi) {
     return ToolbarIconSize(dpi);
@@ -477,7 +478,7 @@ int FindBarWnd::MinBarDx() const {
         return 0;
     }
     int client = 2 * UiScalePxForDpi(layoutDpi, kFindBarPadding) + gapAfterEdit->dx +
-                 UiScalePxForDpi(layoutDpi, kFindBarMinEditDx);
+                 UiScalePxForDpi(layoutDpi, kFindBarNarrowEditDx);
     for (int i : {0, 1, 4, 5}) client += btns[i]->MinIntrinsicWidth(0);
     Rect wr = HwndWindowRect(hwnd);
     Rect cr = HwndClientRect(hwnd);
