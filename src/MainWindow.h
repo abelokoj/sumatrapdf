@@ -646,6 +646,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     struct OverlayScrollbar* overlayScrollH = nullptr;
 
     int wheelAccumDelta = 0;
+    int wheelPixelRemainderY = 0;
+    int wheelPixelRemainderX = 0;
     LARGE_INTEGER wheelPageTurnTime{};
     UINT_PTR delayedRepaintTimer = 0;
 

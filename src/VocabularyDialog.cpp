@@ -2121,6 +2121,14 @@ static int ChoiceRowAt(ChoiceList* list, int y) {
     }
     return first;
 }
+static void InvalidateChoiceRow(ChoiceList* list, int index) {
+    if (index < 0 || index >= len(list->heights)) return;
+    RECT client;
+    GetClientRect(list->hwnd, &client);
+    int top = ChoiceTop(list, index) - list->scroll;
+    RECT row{0, top, client.right, top + list->heights[index]};
+    if (IntersectRect(&row, &row, &client)) InvalidateRect(list->hwnd, &row, false);
+}
 static void ScrollChoices(ChoiceList* list) {
     RECT rc;
     GetClientRect(list->hwnd, &rc);
@@ -2132,6 +2140,19 @@ static void ScrollChoices(ChoiceList* list) {
     si.nPos = list->scroll;
     SetScrollInfo(list->hwnd, SB_VERT, &si, true);
     InvalidateRect(list->hwnd, nullptr, false);
+}
+static bool ScrollChoiceTo(ChoiceList* list, int64_t requested) {
+    RECT client;
+    GetClientRect(list->hwnd, &client);
+    int total = ChoiceTop(list, len(list->heights));
+    int offset = (int)std::clamp<int64_t>(requested, 0, std::max(0, total - (int)client.bottom));
+    if (offset == list->scroll) return false;
+    list->scroll = offset;
+    SCROLLINFO si{sizeof(si), SIF_POS};
+    si.nPos = offset;
+    SetScrollInfo(list->hwnd, SB_VERT, &si, true);
+    InvalidateRect(list->hwnd, nullptr, false);
+    return true;
 }
 static void WrapChoices(HWND control) {
     if (!control) return;
@@ -2294,14 +2315,15 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             TrackMouseEvent(&tracking);
             int hover = ChoiceRowAt(list, GET_Y_LPARAM(lp) + list->scroll);
             if (hover != list->hover) {
+                InvalidateChoiceRow(list, list->hover);
                 list->hover = hover;
-                InvalidateRect(hwnd, nullptr, false);
+                InvalidateChoiceRow(list, hover);
             }
             return 0;
         }
         case WM_MOUSELEAVE:
+            InvalidateChoiceRow(list, list->hover);
             list->hover = -1;
-            InvalidateRect(hwnd, nullptr, false);
             return 0;
         case WM_LBUTTONDOWN: {
             SetFocus(hwnd);
@@ -2328,8 +2350,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     break;
                 case VK_PRIOR:
                 case VK_NEXT:
-                    list->scroll += wp == VK_PRIOR ? -rc.bottom : rc.bottom;
-                    ScrollChoices(list);
+                    ScrollChoiceTo(list, (int64_t)list->scroll + (wp == VK_PRIOR ? -rc.bottom : rc.bottom));
                     return 0;
                 default:
                     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -2358,41 +2379,43 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_MOUSEWHEEL: {
             RECT client;
             GetClientRect(hwnd, &client);
-            int before = list->scroll;
             int movement = WheelDistance(wp, WheelStep(client.bottom), list->wheelRemainder);
-            list->scroll -= movement;
-            ScrollChoices(list);
-            if (movement && before == list->scroll) SendMessageW(GetParent(hwnd), msg, wp, lp);
+            if (movement && !ScrollChoiceTo(list, (int64_t)list->scroll - movement)) {
+                SendMessageW(GetParent(hwnd), msg, wp, lp);
+            }
             return 0;
         }
         case WM_VSCROLL: {
             SCROLLINFO si{sizeof(si), SIF_ALL};
             GetScrollInfo(hwnd, SB_VERT, &si);
+            int64_t offset = list->scroll;
             switch (LOWORD(wp)) {
                 case SB_LINEUP:
-                    list->scroll -= UiScalePx(32);
+                    offset -= UiScalePx(32);
                     break;
                 case SB_LINEDOWN:
-                    list->scroll += UiScalePx(32);
+                    offset += UiScalePx(32);
                     break;
                 case SB_PAGEUP:
-                    list->scroll -= si.nPage;
+                    offset -= si.nPage;
                     break;
                 case SB_PAGEDOWN:
-                    list->scroll += si.nPage;
+                    offset += si.nPage;
                     break;
                 case SB_THUMBTRACK:
                 case SB_THUMBPOSITION:
-                    list->scroll = AppScrollbarTrackPos(hwnd, si.nTrackPos);
+                    offset = AppScrollbarTrackPos(hwnd, si.nTrackPos);
                     break;
                 case SB_TOP:
-                    list->scroll = 0;
+                    offset = 0;
                     break;
                 case SB_BOTTOM:
-                    list->scroll = si.nMax;
+                    offset = si.nMax;
                     break;
+                default:
+                    return 0;
             }
-            ScrollChoices(list);
+            ScrollChoiceTo(list, offset);
             return 0;
         }
         case WM_ERASEBKGND:
@@ -2404,8 +2427,16 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             HDC target = printing ? (HDC)wp : BeginPaint(hwnd, &ps);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            if (printing) ps.rcPaint = rc;
-            DoubleBuffer buffer(hwnd, {0, 0, rc.right, rc.bottom});
+            if (printing) {
+                RECT clip = rc;
+                if (GetClipBox(target, &clip) == ERROR) clip = rc;
+                IntersectRect(&ps.rcPaint, &rc, &clip);
+            }
+            if (IsRectEmpty(&ps.rcPaint)) {
+                if (!printing) EndPaint(hwnd, &ps);
+                return 0;
+            }
+            DoubleBuffer buffer(hwnd, ToRect(ps.rcPaint));
             HDC dc = buffer.GetDC();
             HBRUSH bg = CreateSolidBrush(ThemeControlBackgroundColor());
             FillRect(dc, &rc, bg);
@@ -3210,9 +3241,13 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC target = BeginPaint(hwnd, &ps);
+            if (IsRectEmpty(&ps.rcPaint)) {
+                EndPaint(hwnd, &ps);
+                return 0;
+            }
             RECT client;
             GetClientRect(hwnd, &client);
-            DoubleBuffer buffer(hwnd, {0, 0, client.right, client.bottom});
+            DoubleBuffer buffer(hwnd, ToRect(ps.rcPaint));
             HDC dc = buffer.GetDC();
             FillRect(dc, &client, w->background);
             DrawLearningFrames(w, dc);
@@ -4080,6 +4115,66 @@ void VocabularyDialog_UnitTests() {
     utassert(ChoiceRowAt(list, -1) == -1);
     utassert(ChoiceRowAt(list, ChoiceTop(list, 1)) == 1);
     utassert(ChoiceRowAt(list, ChoiceTop(list, len(list->heights))) == -1);
+    ShowWindow(parent, SW_SHOWNOACTIVATE);
+    ShowWindow(control, SW_SHOWNOACTIVATE);
+    UpdateWindow(parent);
+    UpdateWindow(control);
+    utassert(IsWindowVisible(control));
+    ValidateRect(control, nullptr);
+    for (int i = 0; i < 50; i++) {
+        SendMessageW(control, WM_VSCROLL, SB_TOP, 0);
+        SendMessageW(control, WM_VSCROLL, SB_ENDSCROLL, 0);
+        SendMessageW(control, WM_MOUSEWHEEL, 0, 0);
+    }
+    utassert(list->scroll == 0);
+    utassert(!GetUpdateRect(control, nullptr, FALSE));
+    SCROLLINFO beforeScroll{sizeof(beforeScroll), SIF_ALL}, afterScroll{sizeof(afterScroll), SIF_ALL};
+    utassert(GetScrollInfo(control, SB_VERT, &beforeScroll));
+    SendMessageW(control, WM_VSCROLL, SB_LINEDOWN, 0);
+    utassert(GetScrollInfo(control, SB_VERT, &afterScroll));
+    utassert(afterScroll.nMin == beforeScroll.nMin && afterScroll.nMax == beforeScroll.nMax);
+    utassert(afterScroll.nPage == beforeScroll.nPage);
+    utassert(afterScroll.nPos == list->scroll && list->scroll > 0);
+    ScrollChoiceTo(list, ChoiceTop(list, 1) - 60);
+    int secondTop = ChoiceTop(list, 1) - list->scroll;
+    ValidateRect(control, nullptr);
+    SendMessageW(control, WM_MOUSEMOVE, 0, MAKELPARAM(10, secondTop + 1));
+    RECT hoverDirty{};
+    utassert(list->hover == 1);
+    utassert(GetUpdateRect(control, &hoverDirty, FALSE));
+    utassert(hoverDirty.top == secondTop);
+    utassert(hoverDirty.bottom <= secondTop + list->heights[1]);
+    ValidateRect(control, nullptr);
+    SendMessageW(control, WM_MOUSELEAVE, 0, 0);
+    utassert(list->hover == -1);
+    utassert(GetUpdateRect(control, &hoverDirty, FALSE));
+    utassert(hoverDirty.top == secondTop);
+    utassert(hoverDirty.bottom <= secondTop + list->heights[1]);
+    SendMessageW(control, WM_VSCROLL, SB_TOP, 0);
+    {
+        HDC paint = CreateCompatibleDC(nullptr);
+        HBITMAP bitmap = CreateMemoryBitmap({160, 160});
+        utassert(paint != nullptr && bitmap != nullptr);
+        if (paint && bitmap) {
+            HGDIOBJ old = SelectObject(paint, bitmap);
+            RECT full{0, 0, 160, 160};
+            COLORREF sentinel = RGB(13, 101, 197);
+            HBRUSH brush = CreateSolidBrush(sentinel);
+            FillRect(paint, &full, brush);
+            DeleteObject(brush);
+            IntersectClipRect(paint, 32, 100, 92, 140);
+            SendMessageW(control, WM_PRINTCLIENT, (WPARAM)paint, PRF_CLIENT);
+            SelectClipRgn(paint, nullptr);
+            utassert(GetPixel(paint, 50, 120) == (ThemeControlBackgroundColor() & 0xffffff));
+            utassert(GetPixel(paint, 10, 10) == sentinel);
+            utassert(GetPixel(paint, 100, 150) == sentinel);
+            SelectObject(paint, old);
+        }
+        DeleteObject(bitmap);
+        DeleteDC(paint);
+    }
+    ShowWindow(control, SW_HIDE);
+    ShowWindow(parent, SW_HIDE);
     HFONT large = CreateFontW(36, 0, 0, 0, FW_NORMAL, false, false, false, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                               CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     utassert(large != nullptr);

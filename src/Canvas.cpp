@@ -1332,10 +1332,27 @@ static int ScrollLineAmount(int configuredAmount) {
     return configuredAmount > 0 ? configuredAmount : 16;
 }
 
+static int WheelScrollPixels(int delta, int lineHeight, int deltaPerLine, int& remainder) {
+    if (deltaPerLine <= 0) return 0;
+    int64_t amount = (int64_t)remainder + (int64_t)delta * lineHeight;
+    remainder = (int)(amount % deltaPerLine);
+    return (int)std::clamp<int64_t>(amount / deltaPerLine, -INT_MAX, INT_MAX);
+}
+
 #if IS_DEBUG
 bool Canvas_UnitTestScrollLineAmount() {
-    return ScrollLineAmount(16) == 16 && ScrollLineAmount(30) == 30 && ScrollLineAmount(1) == 1 &&
-           ScrollLineAmount(0) == 16 && ScrollLineAmount(-1) == 16;
+    bool ok = ScrollLineAmount(16) == 16 && ScrollLineAmount(30) == 30 && ScrollLineAmount(1) == 1 &&
+              ScrollLineAmount(0) == 16 && ScrollLineAmount(-1) == 16;
+    int remainder = 0, pixels = 0;
+    for (int i = 1; i <= WHEEL_DELTA; i++) {
+        pixels += WheelScrollPixels(-1, 16, 40, remainder);
+        ok &= pixels == -(i * 16 / 40);
+    }
+    ok &= pixels == -48 && remainder == 0;
+    for (int i = 0; i < WHEEL_DELTA; i++) pixels += WheelScrollPixels(1, 16, 40, remainder);
+    ok &= pixels == 0 && remainder == 0;
+    ok &= WheelScrollPixels(120, 16, 0, remainder) == 0;
+    return ok;
 }
 #endif
 
@@ -1420,7 +1437,7 @@ __unused static Str scrollMsgStr(USHORT msg) {
     return fmt("%d", (int)msg);
 }
 
-static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1) {
+static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1, int scrollPixels = 0) {
     ReportIf(!win->AsFixed());
 
     // Use overlay state whenever overlay mode is on — including SmartInvisible
@@ -1449,7 +1466,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1) {
     // scroll through pages using scrollbar even in single page mode
     bool singlePageWithScrollbar = gSettings->scrollbarInSinglePage && dmIsSinglePage;
 
-    int lineHeight = DpiScale(ScrollLineAmount(gSettings->scrollLineAmount)) * lineSteps;
+    int lineHeight = scrollPixels ? scrollPixels : DpiScale(ScrollLineAmount(gSettings->scrollLineAmount)) * lineSteps;
     bool isFitPage = (kZoomFitPage == ctrl->GetZoomVirtual());
     if (!IsContinuous(ctrl->GetDisplayMode()) && isFitPage) {
         lineHeight = 1;
@@ -1600,7 +1617,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1) {
     }
 }
 
-static void OnHScroll(MainWindow* win, WPARAM wp) {
+static void OnHScroll(MainWindow* win, WPARAM wp, int scrollPixels = 0) {
     ReportIf(!win->AsFixed());
 
     bool overlayMode = ScrollbarsUseOverlay();
@@ -1617,7 +1634,7 @@ static void OnHScroll(MainWindow* win, WPARAM wp) {
 
     int currPos = si.nPos;
     USHORT msg = LOWORD(wp);
-    int lineAmount = DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
+    int lineAmount = scrollPixels ? scrollPixels : DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
     switch (msg) {
         case SB_LEFT:
             si.nPos = si.nMin;
@@ -5406,6 +5423,8 @@ static bool WheelMayTurnPage(MainWindow* win) {
 static void OnWheelPageTurn(MainWindow* win) {
     StopSmoothScroll(win);
     win->wheelAccumDelta = 0;
+    win->wheelPixelRemainderY = 0;
+    win->wheelPixelRemainderX = 0;
     win->wheelPageTurnTime = TimeGet();
 }
 
@@ -5690,37 +5709,44 @@ static LRESULT CanvasOnMouseWheel(MainWindow* win, UINT msg, WPARAM wp, LPARAM l
         }
     }
 
-    win->wheelAccumDelta += delta;
     int prevScrollPos = WheelScrollPosOrTarget(win);
 
     UINT scrollMsg = hScroll ? WM_HSCROLL : WM_VSCROLL;
     bool didScrollByLine = false;
-    if (vScroll && dm && IsContinuous(dm->GetDisplayMode())) {
-        // A notch commonly requests three lines. Apply one destination update
-        // instead of repeating scrollbar, navigation and render work per line.
-        int lines = win->wheelAccumDelta / gDeltaPerLine;
-        win->wheelAccumDelta %= gDeltaPerLine;
-        if (lines) {
-            OnVScroll(win, lines < 0 ? SB_LINEDOWN : SB_LINEUP, abs(lines));
-            didScrollByLine = true;
-        }
-    } else if (win->wheelAccumDelta < 0) {
-        // SB_LINERIGHT == SB_LINEDOWN, but spell out which axis we mean
-        WPARAM scrollWp = hScroll ? SB_LINERIGHT : SB_LINEDOWN; // NOLINT(bugprone-branch-clone)
-        while (win->wheelAccumDelta <= -gDeltaPerLine) {
-            SendMessageW(win->hwndCanvas, scrollMsg, scrollWp, 0);
-            win->wheelAccumDelta += gDeltaPerLine;
-            // logf("  line down\n");
+    if (dm && (hScroll || IsContinuous(dm->GetDisplayMode()))) {
+        // Convert precision input to pixels before truncating, retaining the
+        // remainder so small touchpad movements never wait for an entire line.
+        int lineHeight = DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
+        int& remainder = hScroll ? win->wheelPixelRemainderX : win->wheelPixelRemainderY;
+        int pixels = WheelScrollPixels(delta, lineHeight, gDeltaPerLine, remainder);
+        if (pixels) {
+            if (hScroll)
+                OnHScroll(win, pixels < 0 ? SB_LINERIGHT : SB_LINELEFT, abs(pixels));
+            else
+                OnVScroll(win, pixels < 0 ? SB_LINEDOWN : SB_LINEUP, 1, abs(pixels));
             didScrollByLine = true;
         }
     } else {
-        // SB_LINELEFT == SB_LINEUP, but spell out which axis we mean
-        WPARAM scrollWp = hScroll ? SB_LINELEFT : SB_LINEUP; // NOLINT(bugprone-branch-clone)
-        while (win->wheelAccumDelta >= gDeltaPerLine) {
-            SendMessageW(win->hwndCanvas, scrollMsg, scrollWp, 0);
-            win->wheelAccumDelta -= gDeltaPerLine;
-            // logf("  line up\n");
-            didScrollByLine = true;
+        win->wheelPixelRemainderY = 0;
+        win->wheelAccumDelta += delta;
+        if (win->wheelAccumDelta < 0) {
+            // SB_LINERIGHT == SB_LINEDOWN, but spell out which axis we mean
+            WPARAM scrollWp = hScroll ? SB_LINERIGHT : SB_LINEDOWN; // NOLINT(bugprone-branch-clone)
+            while (win->wheelAccumDelta <= -gDeltaPerLine) {
+                SendMessageW(win->hwndCanvas, scrollMsg, scrollWp, 0);
+                win->wheelAccumDelta += gDeltaPerLine;
+                // logf("  line down\n");
+                didScrollByLine = true;
+            }
+        } else {
+            // SB_LINELEFT == SB_LINEUP, but spell out which axis we mean
+            WPARAM scrollWp = hScroll ? SB_LINELEFT : SB_LINEUP; // NOLINT(bugprone-branch-clone)
+            while (win->wheelAccumDelta >= gDeltaPerLine) {
+                SendMessageW(win->hwndCanvas, scrollMsg, scrollWp, 0);
+                win->wheelAccumDelta -= gDeltaPerLine;
+                // logf("  line up\n");
+                didScrollByLine = true;
+            }
         }
     }
     // in non-continuous mode flip page if necessary (ScrollEdgeTurnsPage off:
@@ -5778,16 +5804,17 @@ static LRESULT CanvasOnMouseHWheel(MainWindow* win, UINT msg, WPARAM wp, LPARAM 
     }
 
     short delta = GET_WHEEL_DELTA_WPARAM(wp);
-    win->wheelAccumDelta += delta;
-
-    while (win->wheelAccumDelta >= gDeltaPerLine) {
-        SendMessageW(win->hwndCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
-        win->wheelAccumDelta -= gDeltaPerLine;
+    if (!win->AsFixed() || gDeltaPerLine == 0) return TRUE;
+    if (gDeltaPerLine < 0) {
+        SCROLLINFO si{sizeof(si), SIF_PAGE};
+        GetScrollInfo(win->hwndCanvas, SB_HORZ, &si);
+        win->AsFixed()->ScrollXBy(MulDiv((int)si.nPage, delta, WHEEL_DELTA));
+        ReadAloudOnUserViewChanged(win);
+        return TRUE;
     }
-    while (win->wheelAccumDelta <= -gDeltaPerLine) {
-        SendMessageW(win->hwndCanvas, WM_HSCROLL, SB_LINELEFT, 0);
-        win->wheelAccumDelta += gDeltaPerLine;
-    }
+    int lineAmount = DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
+    int pixels = WheelScrollPixels(delta, lineAmount, gDeltaPerLine, win->wheelPixelRemainderX);
+    if (pixels) OnHScroll(win, pixels > 0 ? SB_LINERIGHT : SB_LINELEFT, abs(pixels));
 
     return TRUE;
 }

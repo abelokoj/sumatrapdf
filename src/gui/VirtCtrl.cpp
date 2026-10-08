@@ -1222,6 +1222,33 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
 
 static Kind kindVirtCtrlScroll = "virtCtrlScroll";
 
+struct ScrollWheelMovement {
+    int dy = 0;
+    bool handled = false;
+};
+
+static ScrollWheelMovement WheelScrollMovement(int delta, int lineDy, int viewportDy, int y, int maxY, int& remainder) {
+    if (!delta) {
+        return {};
+    }
+    UINT lines = 3;
+    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    if (!lines || maxY <= 0 || (delta > 0 && y <= 0) || (delta < 0 && y >= maxY)) {
+        remainder = 0;
+        return {};
+    }
+    int step = std::max(viewportDy, 0);
+    if (lines != WHEEL_PAGESCROLL) {
+        lineDy = std::max(lineDy, 1);
+        step = (int)std::min(lines, (UINT)(INT_MAX / lineDy)) * lineDy;
+    }
+    // Preserve fractional pixels from precision wheels and touchpads. A
+    // scrollable child also owns subpixel input until it reaches its edge.
+    int64_t amount = (int64_t)remainder - (int64_t)delta * step;
+    remainder = (int)(amount % WHEEL_DELTA);
+    return {(int)std::clamp<int64_t>(amount / WHEEL_DELTA, INT_MIN, INT_MAX), step > 0};
+}
+
 VirtScroll::VirtScroll() {
     onMouseWheel = MkMethod1<VirtScroll, VirtMouseEvent*, &VirtScroll::OnMouseWheel>(this);
 
@@ -1291,7 +1318,7 @@ bool VirtScroll::ScrollTo(int y) {
 }
 
 bool VirtScroll::ScrollBy(int dy) {
-    return ScrollTo(scrollY + dy);
+    return ScrollTo((int)std::clamp<int64_t>((int64_t)scrollY + dy, 0, MaxScrollY()));
 }
 
 bool VirtScroll::ScrollPage(int dir) {
@@ -1315,11 +1342,10 @@ void VirtScroll::ScrollIntoView(VirtCtrl* w) {
 }
 
 void VirtScroll::OnMouseWheel(VirtMouseEvent* ev) {
-    if (ev->wheelDelta == 0) {
-        return;
-    }
-    int lines = -(ev->wheelDelta * 3) / WHEEL_DELTA;
-    if (ScrollBy(lines * lineDy)) {
+    int visible = bounds.dy - padding.top - padding.bottom;
+    auto movement = WheelScrollMovement(ev->wheelDelta, lineDy, visible, scrollY, MaxScrollY(), wheelRemainder);
+    if (movement.handled) {
+        ScrollBy(movement.dy);
         ev->didHandle = true;
     }
 }
@@ -1493,7 +1519,7 @@ bool ScrollBox::ScrollTo(int y) {
 }
 
 bool ScrollBox::ScrollBy(int dy) {
-    return ScrollTo(scrollY + dy);
+    return ScrollTo((int)std::clamp<int64_t>((int64_t)scrollY + dy, 0, MaxScrollY()));
 }
 
 bool ScrollBox::ScrollPage(int dir) {
@@ -1501,11 +1527,9 @@ bool ScrollBox::ScrollPage(int dir) {
 }
 
 void ScrollBox::OnMouseWheel(VirtMouseEvent* ev) {
-    if (ev->wheelDelta == 0) {
-        return;
-    }
-    int lines = -(ev->wheelDelta * 3) / WHEEL_DELTA;
-    if (ScrollBy(lines * lineDy)) {
+    auto movement = WheelScrollMovement(ev->wheelDelta, lineDy, bounds.dy, scrollY, MaxScrollY(), wheelRemainder);
+    if (movement.handled) {
+        ScrollBy(movement.dy);
         ev->didHandle = true;
     }
 }
@@ -1704,7 +1728,7 @@ bool VirtListBox::ScrollTo(int y) {
 }
 
 bool VirtListBox::ScrollBy(int dy) {
-    return ScrollTo(scrollY + dy);
+    return ScrollTo((int)std::clamp<int64_t>((int64_t)scrollY + dy, 0, MaxScrollY()));
 }
 
 void VirtListBox::EnsureVisible(int idx) {
@@ -1933,6 +1957,7 @@ void VirtListBox::SetModel(ListBoxModel* m) {
     VecReset(selected);
     // the items are new even when the model object is the same one refilled
     scrollY = 0;
+    wheelRemainder = 0;
     Invalidate();
 }
 
@@ -2140,11 +2165,10 @@ void VirtListBox::OnMouseLeave() {
 }
 
 void VirtListBox::OnMouseWheel(VirtMouseEvent* ev) {
-    if (ev->wheelDelta == 0) {
-        return;
-    }
-    int lines = -(ev->wheelDelta * 3) / WHEEL_DELTA;
-    if (ScrollBy(lines * GetItemHeight())) {
+    auto movement =
+        WheelScrollMovement(ev->wheelDelta, GetItemHeight(), UsableDy(), scrollY, MaxScrollY(), wheelRemainder);
+    if (movement.handled) {
+        ScrollBy(movement.dy);
         ev->didHandle = true;
     }
 }

@@ -371,6 +371,7 @@ struct VirtScroll : VirtCtrl {
     void OnVScroll(WPARAM);
 
   private:
+    int wheelRemainder = 0;
     int lastNotifiedY = -1;
     int lastNotifiedDy = -1;
 
@@ -407,6 +408,7 @@ struct ScrollBox : VirtCtrl {
     void OnVScroll(WPARAM);
 
   private:
+    int wheelRemainder = 0;
     void UpdateScrollbar();
 };
 
@@ -495,6 +497,7 @@ struct VirtListBox : VirtCtrl {
     bool ScrollBy(int dy);
 
   private:
+    int wheelRemainder = 0;
     int selIdx = -1;
     int anchorIdx = -1;
     Vec<u8> selected;

@@ -5,6 +5,7 @@
 ## v0.1.2
 
 - Added editable HEX, RGB, CMYK, HSV and HSL color entry, with a synchronized preview and independent opacity.
+- Preserved small touchpad movements across PDF views, lists and popup panels. Scrolling respects Windows wheel preferences, keeps direction changes within bounds and avoids redundant list redraws.
 - Reduced first-opening work in Settings and Learning Hub by creating offscreen dropdowns and practice controls when needed. Visible Settings dropdowns start at their final bounds without temporary list entries or a second resize.
 - Kept all five pen types on one adaptive row. Pen palettes use pin/unpin and hide icons; Dictionary and Learning Hub use compact pronunciation, stop and recording controls with full action names on hover and keyboard focus.
 - Shortened PDF wheel easing and combined continuous-view line updates, preserving wheel distance and direction changes.

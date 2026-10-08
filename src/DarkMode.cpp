@@ -537,6 +537,10 @@ static void MenuBorderPixelTests() {
 struct MenuCornerProbe {
     int phase = 0;
     int popupCount = 0;
+    int visibleCount = 0;
+    HWND menuWindow = nullptr;
+    HMENU menu = nullptr;
+    ULONGLONG started = 0;
     bool clipped = true;
     bool restored = true;
 };
@@ -566,20 +570,29 @@ static BOOL CALLBACK FindTestMenu(HWND hwnd, LPARAM arg) {
     WCHAR name[32]{};
     GetClassNameW(hwnd, name, dimof(name));
     if (wcscmp(name, L"#32768") != 0 || !IsWindowVisible(hwnd)) return TRUE;
-    *(HWND*)arg = hwnd;
-    return FALSE;
+    auto* probe = (MenuCornerProbe*)arg;
+    if (!probe->menuWindow) probe->menuWindow = hwnd;
+    probe->visibleCount++;
+    return TRUE;
 }
 
 static void CALLBACK ProbeMenuTimer(HWND owner, UINT, UINT_PTR id, DWORD) {
     auto* probe = (MenuCornerProbe*)GetWindowLongPtrW(owner, GWLP_USERDATA);
-    if (probe->phase < 2) {
-        HWND menu = nullptr;
-        EnumThreadWindows(GetCurrentThreadId(), FindTestMenu, (LPARAM)&menu);
-        if (menu) {
-            PostMessageW(menu, WM_KEYDOWN, probe->phase == 0 ? VK_DOWN : VK_RIGHT, 0);
+    probe->visibleCount = 0;
+    EnumThreadWindows(GetCurrentThreadId(), FindTestMenu, (LPARAM)probe);
+    if (GetTickCount64() - probe->started < 2000) {
+        // Open both real native popup windows without depending on keyboard focus
+        // or the user's cursor selecting the parent item during this region test.
+        if (probe->phase == 0 && probe->menuWindow) {
+            probe->phase = 1;
+            Rect root = HwndWindowRect(probe->menuWindow);
+            TrackPopupMenuEx(GetSubMenu(probe->menu, 0), TPM_RECURSE | TPM_RETURNCMD | TPM_NONOTIFY | TPM_NOANIMATION,
+                             root.Right(), root.y, owner, nullptr);
+            KillTimer(owner, id);
+            EndMenu();
+            return;
         }
-        probe->phase++;
-        return;
+        if (probe->visibleCount < 2) return;
     }
     EnumThreadWindows(GetCurrentThreadId(), ProbeMenuCorners, (LPARAM)probe);
     KillTimer(owner, id);
@@ -597,11 +610,13 @@ static void NativeMenuCornerTest() {
     AppendMenuW(sub, MF_STRING, 1, L"Command");
     AppendMenuW(menu, MF_POPUP | MF_STRING, (UINT_PTR)sub, L"Submenu");
     MenuCornerProbe probe;
+    probe.menu = menu;
+    probe.started = GetTickCount64();
     SetWindowLongPtrW(owner, GWLP_USERDATA, (LONG_PTR)&probe);
     UINT_PTR timer = SetTimer(owner, 1, 40, ProbeMenuTimer);
     utassert(timer != 0);
     if (timer) {
-        TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY, 10, 10, owner, nullptr);
+        TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_NOANIMATION, 10, 10, owner, nullptr);
         KillTimer(owner, timer);
         utassert(probe.popupCount >= 2);
         utassert(probe.clipped);

@@ -1196,7 +1196,8 @@ void DoubleBuffer::Flush(HDC hdc) const {
     if (mirrored) {
         SetLayout(hdc, 0);
     }
-    BitBlt(hdc, rect.x, rect.y, rect.dx, rect.dy, hdcBuffer, 0, 0, SRCCOPY);
+    // The buffer's world transform maps its logical rectangle to bitmap origin.
+    BitBlt(hdc, rect.x, rect.y, rect.dx, rect.dy, hdcBuffer, rect.x, rect.y, SRCCOPY);
     if (mirrored) {
         SetLayout(hdc, layout);
     }

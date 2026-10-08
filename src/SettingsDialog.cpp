@@ -49,6 +49,7 @@ static constexpr int kSettingsMaxWidth = 900;
 static constexpr int kSettingsMinWidth = 560;
 #if IS_DEBUG
 static double settingsComboMs, settingsCheckMs;
+static double settingsLazyCreateMs, settingsLazyColorMs, settingsLazyShowMs;
 #endif
 
 enum class SettingsView {
@@ -62,6 +63,7 @@ struct SettingsMoveBatch {
     struct Move {
         HWND hwnd;
         Rect bounds;
+        UINT flags;
     };
     Vec<Move> moves;
     Rect viewport{};
@@ -76,16 +78,15 @@ struct SettingsMoveBatch {
     void Apply() {
         active = nullptr;
         HDWP batch = BeginDeferWindowPos(len(moves));
-        constexpr UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW;
         for (auto& move : moves) {
             if (!batch) break;
             Rect r = move.bounds;
-            batch = DeferWindowPos(batch, move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, flags);
+            batch = DeferWindowPos(batch, move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, move.flags);
         }
         if (!batch || !EndDeferWindowPos(batch)) {
             for (auto& move : moves) {
                 Rect r = move.bounds;
-                SetWindowPos(move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, flags);
+                SetWindowPos(move.hwnd, nullptr, r.x, r.y, r.dx, r.dy, move.flags);
             }
         }
         if (createdControls && themeWindow) themeWindow->UpdateTheme();
@@ -112,8 +113,12 @@ static void SetSettingsControlBounds(ControlBase* control, Rect bounds) {
     if (!SettingsMoveBatch::active->viewport.IsEmpty() &&
         bounds.Intersect(SettingsMoveBatch::active->viewport).IsEmpty())
         return;
-    if (ChildPosWithinParent(control->hwnd) != bounds)
-        VecAppend(SettingsMoveBatch::active->moves, {control->hwnd, bounds});
+    Rect previous = ChildPosWithinParent(control->hwnd);
+    if (previous == bounds) return;
+    UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW;
+    if (previous.Size() == bounds.Size()) flags |= SWP_NOSIZE;
+    if (previous.x == bounds.x && previous.y == bounds.y) flags |= SWP_NOMOVE;
+    VecAppend(SettingsMoveBatch::active->moves, {control->hwnd, bounds, flags});
 }
 
 struct SettingsLabel : VirtText {
@@ -334,6 +339,8 @@ struct SettingsForm : Table {
 struct SettingsCheckbox : Checkbox {
     PlatformFont* measuredFont = nullptr;
     Size measuredText{};
+    Size wrappedText{};
+    int wrappedWidth = -1;
     int glyphSize = 0;
     void SetBounds(Rect bounds) override { SetSettingsControlBounds(this, bounds); }
     int GlyphSize() {
@@ -341,6 +348,7 @@ struct SettingsCheckbox : Checkbox {
             measuredText = PlatformFontMeasureText(font, GetTextTemp());
             glyphSize = std::max(UiScalePx(20), PlatformFontLineHeight(font));
             measuredFont = font;
+            wrappedWidth = -1;
         }
         return glyphSize;
     }
@@ -383,8 +391,12 @@ struct SettingsCheckbox : Checkbox {
         int padY = insets.top + insets.bottom;
         if (bc.HasBoundedWidth() && size.dx > bc.max.dx - padX) {
             int glyph = GlyphSize() + UiScalePx(8);
-            Size text = PlatformFontMeasureText(font, GetTextTemp(), std::max(1, bc.max.dx - padX - glyph));
-            size.dy = std::max(size.dy, text.dy + DpiScale(4));
+            int width = std::max(1, bc.max.dx - padX - glyph);
+            if (wrappedWidth != width) {
+                wrappedText = PlatformFontMeasureText(font, GetTextTemp(), width);
+                wrappedWidth = width;
+            }
+            size.dy = std::max(size.dy, wrappedText.dy + DpiScale(4));
         }
         childSize = bc.Inset(padX, padY).Constrain(size);
         return {childSize.dx + padX, childSize.dy + padY};
@@ -412,6 +424,7 @@ struct SettingsViewport : ScrollBox {
     struct ControlClip {
         HWND hwnd = nullptr;
         Size size{};
+        Size requestedSize{};
         Rect clip{};
         int dpi = 0;
         HFONT font = nullptr;
@@ -426,12 +439,35 @@ struct SettingsViewport : ScrollBox {
     bool moving = false;
     WindowBase* themeWindow = nullptr;
     explicit SettingsViewport(ILayout* child) : ScrollBox(child) {}
+    void InvalidateControlClip(HWND hwnd) {
+        for (auto& clip : clips) {
+            if (clip.hwnd == hwnd) {
+                clip.valid = false;
+                return;
+            }
+        }
+    }
     void ClipControl(ControlBase* control) {
         if (!control->hwnd) return;
         int index = 0;
         while (index < len(clips) && clips[index].hwnd != control->hwnd) index++;
         bool outside = control->lastBounds.Intersect(lastBounds).IsEmpty();
         if (outside && index < len(clips) && clips[index].valid && clips[index].clip.IsEmpty()) return;
+        Rect requested = SettingsControlWindowBounds(control, control->lastBounds, GetHwnd());
+        if (index < len(clips)) {
+            auto& cached = clips[index];
+            if (cached.valid && cached.requestedSize == requested.Size() && cached.dpi == DpiGet() &&
+                cached.font == control->GetHFont()) {
+                // Scrolling translates a full control without changing its rounded region.
+                // Preserve native height adjustments while avoiding repeated HWND queries.
+                Rect moved = {requested.x, requested.y, cached.size.dx, cached.size.dy};
+                Rect clip = outside ? Rect{} : moved.Intersect(lastBounds);
+                clip.x -= moved.x;
+                clip.y -= moved.y;
+                if (clip.IsEmpty()) clip = {};
+                if (cached.clip == clip) return;
+            }
+        }
         Rect bounds = ChildPosWithinParent(control->hwnd);
         Rect logical = control->lastBounds;
         Rect clip = logical.Intersect(lastBounds).IsEmpty() ? Rect{} : bounds.Intersect(lastBounds);
@@ -463,7 +499,7 @@ struct SettingsViewport : ScrollBox {
             DeleteObject(region);
         else
             InvalidateRect(control->hwnd, nullptr, FALSE);
-        cached = {control->hwnd, bounds.Size(), clip, dpi, font, applied};
+        cached = {control->hwnd, bounds.Size(), requested.Size(), clip, dpi, font, applied};
     }
     void ClipControls(ILayout* node) {
 #if IS_DEBUG
@@ -1229,10 +1265,18 @@ static Checkbox* MakeCheckbox(HWND parent, PlatformFont* font, Str text, bool is
 
 static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, SettingsFocusProc, id);
+    auto* wnd = (SettingsWnd*)data;
+    auto* scroll = wnd->scroll;
+    constexpr UINT kDpiChangedAfterParent = 0x02e3;
+    bool geometryChanged = msg == WM_SIZE || msg == WM_SETFONT || msg == WM_DPICHANGED ||
+                           msg == kDpiChangedAfterParent || (msg == WM_WINDOWPOSCHANGED && !scroll->moving);
+    HWND owner = nullptr;
+    if (geometryChanged || msg == WM_SETFOCUS || msg == WM_MOUSEWHEEL) {
+        HWND parent = GetParent(hwnd);
+        owner = parent == wnd->hwnd ? hwnd : parent;
+    }
+    if (geometryChanged) scroll->InvalidateControlClip(owner);
     if (msg == WM_SETFOCUS) {
-        auto* wnd = (SettingsWnd*)data;
-        auto* scroll = wnd->scroll;
-        HWND owner = GetParent(hwnd) == wnd->hwnd ? hwnd : GetParent(hwnd);
         auto* control = ControlFromHwnd(owner);
         Rect bounds = control ? control->lastBounds : HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, wnd->hwnd);
         Rect view = scroll->lastBounds;
@@ -1240,15 +1284,15 @@ static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         if (!scroll->moving && delta) scroll->ScrollBy(delta);
     }
     if (msg == WM_MOUSEWHEEL) {
-        auto* wnd = (SettingsWnd*)data;
-        HWND combo = GetParent(hwnd) == wnd->hwnd ? hwnd : GetParent(hwnd);
-        if (!SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0)) return SendMessageW(wnd->hwnd, msg, wp, lp);
+        if (!SendMessageW(owner, CB_GETDROPPEDSTATE, 0, 0)) return SendMessageW(wnd->hwnd, msg, wp, lp);
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 static void SettingsFocusStop(SettingsWnd* wnd, ControlBase* control) {
     if (!control || !control->hwnd) return;
+    DWORD_PTR installed = 0;
+    if (GetWindowSubclass(control->hwnd, SettingsFocusProc, 1, &installed) && installed == (DWORD_PTR)wnd) return;
     ShowWindow(control->hwnd, SW_SHOWNOACTIVATE);
     SetWindowSubclass(control->hwnd, SettingsFocusProc, 1, (DWORD_PTR)wnd);
     if (HWND edit = CbEditHwnd(control->hwnd)) SetWindowSubclass(edit, SettingsFocusProc, 1, (DWORD_PTR)wnd);
@@ -1261,11 +1305,26 @@ static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
 
 bool SettingsDropDown::EnsureNative() {
     if (hwnd) return true;
+#if IS_DEBUG
+    TimeStamp started = TimeGet();
+#endif
     pendingCreate.pos = SettingsControlWindowBounds(this, lastBounds, pendingCreate.parent);
     if (!EnsureCreated()) return false;
+#if IS_DEBUG
+    settingsLazyCreateMs += TimeSinceInMs(started);
+    TimeStamp colorStart = TimeGet();
+#endif
     SetColors(ThemeWindowTextColor(), ThemeWindowBackgroundColor());
+#if IS_DEBUG
+    settingsLazyColorMs += TimeSinceInMs(colorStart);
+    TimeStamp showStart = TimeGet();
+#endif
     SettingsFocusStop(window, this);
     if (SettingsMoveBatch::active) SettingsMoveBatch::active->createdControls = true;
+#if IS_DEBUG
+    settingsLazyShowMs += TimeSinceInMs(showStart);
+    settingsComboMs += TimeSinceInMs(started);
+#endif
     return true;
 }
 
@@ -1299,6 +1358,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
 #if IS_DEBUG
     TimeStamp openingStart = TimeGet();
     settingsComboMs = settingsCheckMs = 0;
+    settingsLazyCreateMs = settingsLazyColorMs = settingsLazyShowMs = 0;
     int measurementsBefore = settingsMetrics.measured, reuseBefore = settingsMetrics.reused;
 #endif
     autoLayout = false;
@@ -1697,14 +1757,31 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     int width = limitValue(naturalWidth + pad * 2, DpiScale(kSettingsMinWidth), DpiScale(kSettingsMaxWidth));
     Rect workArea = PlatformWindowWorkArea(win ? win->hwndFrame : hwnd);
     if (!workArea.IsEmpty()) width = std::min(width, std::max(1, workArea.dx - DpiScale(48)));
+#if IS_DEBUG
+    double naturalMs = TimeSinceInMs(layoutStart);
+    TimeStamp desiredStart = TimeGet();
+#endif
     Size desired = layout->Layout(ExpandHeight(width));
     int maxHeight = DpiScale(760);
     if (!workArea.IsEmpty()) maxHeight = std::min(maxHeight, std::max(1, workArea.dy - DpiScale(80)));
+#if IS_DEBUG
+    double desiredMs = TimeSinceInMs(desiredStart);
+    TimeStamp resizeStart = TimeGet();
+#endif
     ResizeHwndToClientArea(hwnd, width, std::min(desired.dy, maxHeight), false);
+#if IS_DEBUG
+    double resizeMs = TimeSinceInMs(resizeStart);
+    TimeStamp positionStart = TimeGet();
+#endif
     DoLayout(HwndClientRect(hwnd).Size());
     autoLayout = true;
+#if IS_DEBUG
+    double positionMs = TimeSinceInMs(positionStart);
+    TimeStamp centerStart = TimeGet();
+#endif
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
 #if IS_DEBUG
+    double centerMs = TimeSinceInMs(centerStart);
     double layoutMs = TimeSinceInMs(layoutStart);
     TimeStamp themeStart = TimeGet();
 #endif
@@ -1724,6 +1801,10 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         controlsMs, layoutMs, TimeSinceInMs(themeStart), settingsMetrics.measured - measurementsBefore,
         settingsMetrics.reused - reuseBefore, TimeSinceInMs(openingStart));
     logf("Settings native create: %.3f ms dropdowns, %.3f ms checkboxes\n", settingsComboMs, settingsCheckMs);
+    logf("Settings layout phases: %.3f ms natural, %.3f ms desired, %.3f ms resize, %.3f ms position, %.3f ms center\n",
+         naturalMs, desiredMs, resizeMs, positionMs, centerMs);
+    logf("Settings lazy native: %.3f ms create/restore, %.3f ms colors, %.3f ms show/focus hooks\n",
+         settingsLazyCreateMs, settingsLazyColorMs, settingsLazyShowMs);
 #endif
     return true;
 }
@@ -2323,7 +2404,13 @@ bool SettingsDialog_UnitTestsSizing() {
     Rect focused = ChildPosWithinParent(wnd->chkRememberOpened->hwnd);
     Rect view = wnd->scroll->lastBounds;
     utassert(focused.y >= view.y && focused.y + focused.dy <= view.y + view.dy);
-    ResizeHwndToClientArea(wnd->hwnd, DpiScale(360), DpiScale(500), false);
+    DpiScope dpi(wnd->hwnd);
+    int naturalWidth = 0;
+    for (auto* form : wnd->forms) naturalWidth = std::max(naturalWidth, form->NaturalSize().dx);
+    // Force reflow relative to the active font instead of assuming 360 DIPs is narrow enough.
+    int narrowWidth = std::max(1, naturalWidth - DpiScale(32));
+    ResizeHwndToClientArea(wnd->hwnd, narrowWidth, DpiScale(500), false);
+    utassert(HwndClientRect(wnd->hwnd).dx == narrowWidth);
     wnd->DoLayout();
     bool stacked = false;
     for (auto* form : wnd->forms) {

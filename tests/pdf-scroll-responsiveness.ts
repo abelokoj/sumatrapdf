@@ -45,6 +45,19 @@ export async function testit(): Promise<void> {
     await client.waitForRenderIdle();
     const notch = getScrollInfo(canvas).pos;
     if (notch <= 0) throw new Error("Wheel did not move the reader");
+    sendMessage(canvas, WM_VSCROLL, SB_TOP, 0);
+    for (let i = 0; i < 8; i++) wheel(-1);
+    const fractionalTarget = Math.floor((notch * 8) / 120);
+    const fractionalStart = performance.now();
+    while (getScrollInfo(canvas).pos < fractionalTarget && performance.now() - fractionalStart < 1000) await sleep(5);
+    if (getScrollInfo(canvas).pos !== fractionalTarget)
+      throw new Error("Small touchpad deltas were discarded until a whole line accumulated");
+    for (let i = 8; i < 120; i++) wheel(-1);
+    await client.waitForRenderIdle();
+    if (getScrollInfo(canvas).pos !== notch) throw new Error("Fractional wheel input lost distance");
+    for (let i = 0; i < 120; i++) wheel(1);
+    await client.waitForRenderIdle();
+    if (getScrollInfo(canvas).pos !== 0) throw new Error("Fractional wheel reversal left a stale remainder");
     const latencies: number[] = [];
     for (let attempt = 0; attempt < 3; attempt++) {
       sendMessage(canvas, WM_VSCROLL, SB_TOP, 0);
@@ -70,6 +83,22 @@ export async function testit(): Promise<void> {
     for (let i = 0; i < 5; i++) wheel(120);
     await client.waitForRenderIdle();
     if (getScrollInfo(canvas).pos !== 7 * notch) throw new Error("Reversing the wheel left a stale target");
+    sendCommandSync(frame, cmdId("CmdZoom200"));
+    await client.waitForRenderIdle();
+    sendMessage(canvas, 0x0114, SB_TOP, 0);
+    const horizontalWheel = (delta: number) =>
+      sendMessage(canvas, 0x020e, packCoords(0, delta), packCoords(point.x, point.y));
+    horizontalWheel(120);
+    const horizontalNotch = getScrollInfo(canvas, 0).pos;
+    if (horizontalNotch <= 0) throw new Error("Horizontal wheel did not move the zoomed PDF");
+    sendMessage(canvas, 0x0114, SB_TOP, 0);
+    for (let i = 0; i < 8; i++) horizontalWheel(1);
+    if (getScrollInfo(canvas, 0).pos !== Math.floor((horizontalNotch * 8) / 120))
+      throw new Error("Small horizontal touchpad deltas were discarded");
+    for (let i = 8; i < 120; i++) horizontalWheel(1);
+    if (getScrollInfo(canvas, 0).pos !== horizontalNotch) throw new Error("Horizontal wheel input lost distance");
+    for (let i = 0; i < 120; i++) horizontalWheel(-1);
+    if (getScrollInfo(canvas, 0).pos !== 0) throw new Error("Horizontal reversal left a stale remainder");
     console.log(`PDF wheel median 95% travel: ${latencies[1]!.toFixed(1)} ms; bursts and reversal: OK`);
   } finally {
     client.close();

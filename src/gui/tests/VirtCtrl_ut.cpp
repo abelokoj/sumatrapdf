@@ -258,6 +258,73 @@ static void ScrollBox_Test() {
     delete sb;
 }
 
+template <typename T>
+static void ScrollWheel_Test(T& scroll, int lineDy, int viewportDy) {
+    UINT lines = 3;
+    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    int step = lines == WHEEL_PAGESCROLL ? viewportDy : (int)std::min(lines, (UINT)(INT_MAX / lineDy)) * lineDy;
+    int start = scroll.MaxScrollY() / 2;
+    scroll.ScrollTo(start);
+    if (step <= start) {
+        // A precision wheel sends fractions of a notch. The first partial
+        // notch must already move pixels, and 120 small inputs equal one notch.
+        for (int i = 1; i <= WHEEL_DELTA; i++) {
+            VirtMouseEvent wheel;
+            wheel.wheelDelta = -1;
+            scroll.OnMouseWheel(&wheel);
+            utassert(wheel.didHandle == (step > 0));
+            utassert(scroll.scrollY == start + (int)((int64_t)i * step / WHEEL_DELTA));
+        }
+        for (int i = 1; i <= WHEEL_DELTA; i++) {
+            VirtMouseEvent wheel;
+            wheel.wheelDelta = 1;
+            scroll.OnMouseWheel(&wheel);
+            utassert(scroll.scrollY == start + step - (int)((int64_t)i * step / WHEEL_DELTA));
+        }
+        utassert(scroll.scrollY == start);
+    }
+    scroll.ScrollTo(0);
+    VirtMouseEvent edge;
+    edge.wheelDelta = 1;
+    scroll.OnMouseWheel(&edge);
+    utassert(!edge.didHandle && scroll.scrollY == 0);
+    scroll.ScrollTo(scroll.MaxScrollY());
+    edge = {};
+    edge.wheelDelta = -1;
+    scroll.OnMouseWheel(&edge);
+    utassert(!edge.didHandle && scroll.scrollY == scroll.MaxScrollY());
+    scroll.ScrollTo(start);
+    scroll.ScrollBy(INT_MAX);
+    utassert(scroll.scrollY == scroll.MaxScrollY());
+    scroll.ScrollBy(INT_MIN);
+    utassert(scroll.scrollY == 0);
+}
+
+static void PrecisionScrollWheel_Test() {
+    constexpr int lineDy = 20, viewportDy = 120;
+    auto* inner = new VBox();
+    inner->AddChild(new Spacer(40, 100000));
+    ScrollBox box(inner);
+    box.lineDy = lineDy;
+    box.Layout(Tight({200, viewportDy}));
+    box.SetBounds({0, 0, 200, viewportDy});
+    ScrollWheel_Test(box, lineDy, viewportDy);
+
+    VirtScroll view;
+    view.lineDy = lineDy;
+    view.SetBounds({0, 0, 200, viewportDy});
+    view.SetContentDy(100000);
+    ScrollWheel_Test(view, lineDy, viewportDy);
+
+    auto* model = new ListBoxModelStrings();
+    for (int i = 0; i < 5000; i++) model->strings.Append(StrL("Word"));
+    VirtListBox list;
+    list.SetModel(model);
+    list.itemDy = lineDy;
+    list.SetBounds({0, 0, 200, viewportDy});
+    ScrollWheel_Test(list, lineDy, list.UsableDy());
+}
+
 static void ListScrollbar_Test() {
     auto* model = new ListBoxModelStrings();
     for (int i = 0; i < 50; i++) model->strings.Append(StrL("Word"));
@@ -373,6 +440,7 @@ void VirtCtrl_UnitTests() {
     CollectVirtCtrls_Test();
     CollectTabStops_Test();
     ScrollBox_Test();
+    PrecisionScrollWheel_Test();
     ListScrollbar_Test();
     Splitter_ShrinkTest();
     RoundedNativeControls_Test();

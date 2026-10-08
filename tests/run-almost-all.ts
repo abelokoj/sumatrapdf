@@ -158,6 +158,7 @@ import { testit as issue6088 } from "./issue-6088.ts";
 import { testit as annotContentsClickAway } from "./annot-contents-click-away.ts";
 import { testit as annotColorDropdown } from "./annot-color-dropdown.ts";
 import { testit as colorPickerFormats } from "./color-picker-formats.ts";
+import { testit as pdfScrollResponsiveness } from "./pdf-scroll-responsiveness.ts";
 import { testit as inkThickness } from "./ink-thickness.ts";
 import { testit as issue6137Contents } from "./issue-6137-contents.ts";
 import { testit as issue6093 } from "./issue-6093.ts";
@@ -394,6 +395,7 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["pdf-scroll-responsiveness", pdfScrollResponsiveness],
   ["jpeg-xl-pdf", jpegXlPdf],
   ["annotation clipboard tests", annotationClipboardTests],
   ["issue-6276", issue6276],
