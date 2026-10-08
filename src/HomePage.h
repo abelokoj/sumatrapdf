@@ -48,3 +48,4 @@ void HomePageClearActiveEntry(MainWindow* win);
 
 TempStr HomeListRowsResultTemp(int* exitCodeOut);
 TempStr HomeSelectionResultTemp(int* exitCodeOut);
+TempStr HomeInputResultTemp(Str action, int value, int* exitCodeOut);

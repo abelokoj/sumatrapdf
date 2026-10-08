@@ -21,8 +21,16 @@
 // waiting for the whole suite.
 
 import { existsSync } from "node:fs";
-import { EXE, formatDuration, prepareTestEnvironment, resetTestTimes, runTest, type NamedTest } from "./util.ts";
-import { getWorkArea, setTestWindowLayout, testWindowPos } from "./winapi.ts";
+import {
+  EXE,
+  formatDuration,
+  formatTestResults,
+  prepareTestEnvironment,
+  resetTestTimes,
+  runTest,
+  type NamedTest,
+} from "./util.ts";
+import { getWorkArea, setTestWindowLayout, testWindowPos, TEST_NO_DESKTOP_INPUT } from "./winapi.ts";
 import { tests as allTests } from "./run-all.ts";
 
 // Tests that need something a hosted runner doesn't have. Keep the reason with
@@ -71,12 +79,18 @@ export async function testit(tests: NamedTest[] = ciTests()): Promise<void> {
   const skipped = Object.keys(excludedTests);
   console.log(`running ${tests.length} tests, skipping ${skipped.length}: ${skipped.join(", ")}\n`);
 
+  if (TEST_NO_DESKTOP_INPUT) {
+    console.log(
+      "Message-only test mode: global mouse, keyboard and foreground input are disabled; desktop prerequisites must be reported as skips.",
+    );
+  }
   const failures: Failure[] = [];
+  const results = { passed: 0, skipped: 0 };
   const t0 = performance.now();
   for (const [name, fn] of tests) {
     console.log(`\n========== ${name} ==========`);
     try {
-      await runTest(name, fn);
+      results[await runTest(name, fn)]++;
     } catch (e) {
       // runTest already timed and recorded it; keep going so one broken test
       // doesn't hide the state of everything after it
@@ -88,10 +102,12 @@ export async function testit(tests: NamedTest[] = ciTests()): Promise<void> {
 
   const elapsed = formatDuration(performance.now() - t0);
   if (failures.length === 0) {
-    console.log(`\n✅ run-github-ci: ${tests.length} tests passed in ${elapsed}`);
+    console.log(`\n✅ run-github-ci: ${formatTestResults(performance.now() - t0, results)}`);
     return;
   }
-  console.log(`\n❌ run-github-ci: ${failures.length} of ${tests.length} tests failed in ${elapsed}:`);
+  console.log(
+    `\n❌ run-github-ci: ${failures.length} of ${tests.length} tests failed, ${results.skipped} skipped in ${elapsed}:`,
+  );
   for (const f of failures) {
     console.log(`  ${f.name}`);
   }

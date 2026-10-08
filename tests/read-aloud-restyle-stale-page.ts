@@ -7,13 +7,18 @@
 //
 // Run: bun tests/read-aloud-restyle-stale-page.ts [--no-build]
 
+import { dlopen, FFIType } from "bun:ffi";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlClient, ControlCommand, DEBUG_REPORT_EXIT_CODE, withControlledSumatra } from "./control.ts";
 import { makeEpub } from "./epub-relayout-stale-page.ts";
-import { cmdId, EXE, runStandalone, SLOW_BUILD_FACTOR, tmpPath, writeAppdata } from "./util.ts";
+import { cmdId, EXE, runStandalone, skipTest, SLOW_BUILD_FACTOR, tmpPath, writeAppdata } from "./util.ts";
 import { sleep } from "./winapi.ts";
 import { sendCommandSync, waitForFrame } from "./win-automation.ts";
+
+const winmm = dlopen("winmm.dll", {
+  waveOutGetNumDevs: { args: [], returns: FFIType.u32 },
+});
 
 const DEEP_CHAPTER = 34;
 const THEME_TOGGLES = 2;
@@ -35,6 +40,15 @@ async function ttsState(client: ControlClient): Promise<TtsState> {
 }
 
 export async function testit(): Promise<void> {
+  // The WinRT speech backend uses waveOut playback to report spoken positions.
+  // Voices alone are insufficient on a hosted VM without an audio endpoint.
+  // A zero device count means no output is available or the WinMM probe failed:
+  // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-waveoutgetnumdevs
+  if (winmm.symbols.waveOutGetNumDevs() === 0) {
+    skipTest(
+      "audio-output prerequisite unavailable: WinMM waveOutGetNumDevs() returned 0; actual speech progress and chapter/restyle checks were not run",
+    );
+  }
   const dir = tmpPath("read-aloud-restyle-stale-page-data");
   mkdirSync(dir, { recursive: true });
   const epub = join(dir, "chapters.epub");
@@ -62,8 +76,7 @@ export async function testit(): Promise<void> {
       await client.setNotificationsEnabled(false);
 
       if ((await ttsState(client)).voices === 0) {
-        console.log("SKIP read-aloud-restyle-stale-page: no TTS voices on this machine");
-        return;
+        skipTest("no TTS voices installed; actual speech progress and chapter/restyle checks were not run");
       }
 
       // chapter by chapter, so the flat page count grows past the collapsed one

@@ -560,6 +560,9 @@ static TempStr MarkupAnnotsResultTemp(Str action, int x, int y, int* exitCodeOut
     if (!engine) {
         return finish(StrL("NOTREADY no-engine\n"), 2);
     }
+    if (str::Eq(action, StrL("mouse-move"))) {
+        SendMessageW(gWindows[0]->hwndCanvas, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+    }
     if (str::Eq(action, StrL("erase-ink"))) {
         AnnotationPlacementEraseAt(gWindows[0], Point(x, y));
     }
@@ -2191,6 +2194,15 @@ static void ExecuteControlRequest(ControlRequest* req) {
 
         case ControlCmd::TestHomeSelection: {
             Str mode = StringArg(req, 0);
+            if (str::EqI(mode, StrL("canvas-key")) || str::EqI(mode, StrL("search-key")) ||
+                str::EqI(mode, StrL("search-char")) || str::EqI(mode, StrL("find-search"))) {
+                i32 value = 0;
+                IntArg(req, 1, value);
+                int exitCode = 0;
+                Str res = HomeInputResultTemp(mode, value, &exitCode);
+                AppendTestResult(req, exitCode, res);
+                break;
+            }
             if (mode) {
                 SetHomePageListView(str::EqI(mode, StrL("list")));
                 if (len(gWindows) > 0) {

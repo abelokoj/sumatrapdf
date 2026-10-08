@@ -63,8 +63,9 @@ function makeBlankPdf(): string {
   return assemblePdf(objects);
 }
 
-async function placementState(client: ControlClient): Promise<PlacementState> {
-  const res = await client.request(ControlCommand.TestMarkupAnnots, []);
+async function placementState(client: ControlClient, hover?: Point): Promise<PlacementState> {
+  const args = hover ? ["mouse-move", hover.x, hover.y] : [];
+  const res = await client.request(ControlCommand.TestMarkupAnnots, args);
   const raw = String(res[1] ?? "");
   const count = /annotations=(\d+)/.exec(raw);
   const state =
@@ -239,7 +240,7 @@ export async function testit(): Promise<void> {
     await clickInkToolbar();
     let state = await waitForPlacement(client, true, "toolbar");
     moveMouse(canvas, center);
-    state = await placementState(client);
+    state = await placementState(client, center);
     if (
       !state.notification ||
       !state.cursor ||
@@ -262,7 +263,7 @@ export async function testit(): Promise<void> {
     await executeFromCommandPalette(client, frame);
     state = await waitForPlacement(client, true, "palette");
     moveMouse(canvas, center);
-    state = await placementState(client);
+    state = await placementState(client, center);
     if (!state.notification || !state.cursor || state.annotations !== 0) {
       throw new Error(`ink-annotation-placement: palette did not start placement mode\n${state.raw}`);
     }

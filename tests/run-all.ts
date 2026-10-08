@@ -7,7 +7,7 @@
 // fixture, or copying the exe next to restrict.ini). Those go in `slowTests`.
 
 import {
-  formatDuration,
+  formatTestResults,
   runNamedTests,
   runSuiteMain,
   startSuiteProgress,
@@ -98,7 +98,7 @@ export async function testit(opts?: AllTestOptions): Promise<void> {
     keepTestTimes: true,
     summary: false,
   });
-  console.log(`\n✅ all ${tests.length} tests passed in ${formatDuration(performance.now() - t0)}`);
+  console.log(`\n✅ all: ${formatTestResults(performance.now() - t0)}`);
 }
 
 if (import.meta.main) {

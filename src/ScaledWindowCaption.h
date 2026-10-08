@@ -7,6 +7,10 @@ struct ScaledWindowCaption {
     int pressed = HTNOWHERE;
 };
 
+#if IS_DEBUG
+static int appCaptionPaintCount = 0;
+#endif
+
 static int AppCaptionHeight(HWND hwnd) {
     int dpi = DpiGetForHwnd(hwnd);
     int textHeight = PlatformFontLineHeight(GetAppFontForDpi(dpi));
@@ -72,6 +76,9 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
     };
     Rect caption = AppCaptionRect(hwnd);
     if (caption.dx <= 0) return;
+#if IS_DEBUG
+    appCaptionPaintCount++;
+#endif
     GfxHdc gfx(dc);
     int dpi = DpiGetForHwnd(hwnd);
     Rect window = HwndWindowRect(hwnd);
@@ -155,6 +162,7 @@ static void UpdateAppCaptionMetrics(HWND hwnd, ScaledWindowCaption* state) {
 
 static LRESULT CALLBACK AppCaptionSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
     auto* state = (ScaledWindowCaption*)data;
+    bool hotChanged = false;
     if (msg == WM_NCDESTROY) {
         RemoveWindowSubclass(hwnd, AppCaptionSubclass, id);
         delete state;
@@ -212,22 +220,22 @@ static LRESULT CALLBACK AppCaptionSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARA
         int hot = (int)wp;
         if (state->hot != hot) {
             state->hot = hot;
-            PaintAppCaption(hwnd, state);
+            hotChanged = true;
         }
         TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE | TME_NONCLIENT, hwnd, 0};
         TrackMouseEvent(&track);
     }
-    if (msg == WM_NCMOUSELEAVE) {
+    if (msg == WM_NCMOUSELEAVE && state->hot != HTNOWHERE) {
         state->hot = HTNOWHERE;
-        PaintAppCaption(hwnd, state);
+        hotChanged = true;
     }
     LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
     if (msg == WM_DPICHANGED || msg == WM_SETFONT || msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED) {
         UpdateAppCaptionMetrics(hwnd, state);
     }
     if (msg == WM_PRINT && (lp & PRF_NONCLIENT)) PaintAppCaption(hwnd, state, (HDC)wp);
-    if (msg == WM_NCPAINT || msg == WM_NCACTIVATE || msg == WM_SETTEXT || msg == WM_THEMECHANGED || msg == WM_SETFONT ||
-        msg == WM_WINDOWPOSCHANGED || msg == WM_NCMOUSEMOVE || msg == WM_NCMOUSELEAVE) {
+    if (hotChanged || msg == WM_NCPAINT || msg == WM_NCACTIVATE || msg == WM_SETTEXT || msg == WM_THEMECHANGED ||
+        msg == WM_SETFONT || msg == WM_WINDOWPOSCHANGED) {
         PaintAppCaption(hwnd, state);
     }
     return result;

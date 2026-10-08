@@ -1210,6 +1210,7 @@ struct HomeEntriesCtrl : VirtCtrl {
     // selection, which follows the mouse
     int activeIdx = -1;
     Point lastHoverPt{-1, -1};
+    bool keyboardOnlyForTest = false;
     const StrVec* filterWords = nullptr;
     Vec<u8>* highlighted = nullptr;
 
@@ -2473,6 +2474,12 @@ bool HomePage_UnitTestsCompactHeader() {
         win.hwndCanvas = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 1100, 800, nullptr, nullptr,
                                          GetModuleHandle(nullptr), nullptr);
         ok &= win.hwndCanvas && !IsWindowVisible(win.hwndCanvas);
+        Tooltip::CreateArgs tipArgs;
+        tipArgs.parent = win.hwndCanvas;
+        tipArgs.font = GetAppFont();
+        tipArgs.isRtl = IsUIRtl();
+        win.infotip = new Tooltip();
+        ok &= win.infotip->Create(tipArgs) && !IsWindowVisible(win.infotip->hwnd);
         for (Size size : {Size{1100, 800}, Size{760, 600}, Size{420, 700}}) {
             HomePageLayout layout;
             layout.win = &win;
@@ -2506,6 +2513,19 @@ bool HomePage_UnitTestsCompactHeader() {
         LayoutHomePage(bottom);
         ok &= win.homePageScrollY == bottom.totalContentDy - bottom.thumbsVisibleDy;
         ok &= bottom.thumbnails[29].rcListRow.Bottom() <= bottom.rcThumbsArea.Bottom();
+        // Thumbnail completion clears the layout and schedules paint. Dispatch
+        // a selection key and resolve Enter/Delete's path before any paint.
+        TempStr selectedPath = str::DupTemp(recent.thumbnails[1].fs->filePath);
+        win.homePageScrollY = 0;
+        win.homePageSelIdx = 0;
+        ClearHomeLayoutCache(&win);
+        HomePageMoveSelection(&win, 0, 1);
+        ok &= HomeLayout(&win).valid && win.homePageSelIdx == 1;
+        ClearHomeLayoutCache(&win);
+        ok &= str::Eq(HomePageSelectedFilePathTemp(&win), selectedPath);
+        ok &= HomeLayout(&win).valid;
+        delete win.infotip;
+        win.infotip = nullptr;
         HWND canvas = win.hwndCanvas;
         HomePageDestroyChrome(&win);
         win.hwndCanvas = nullptr;
@@ -2904,6 +2924,36 @@ TempStr HomeSelectionResultTemp(int* exitCodeOut) {
                          RectCsvTemp(outlineFull), path, HomePageIsListView() ? 1 : 0, RectCsvTemp(c.rcIconListView),
                          RectCsvTemp(c.rcThumbsArea), RectCsvTemp(lastCaption), gSelectedIsPromo ? 1 : 0,
                          gSelectedTipIdx, RectCsvTemp(tipRect)));
+}
+
+// Dispatch the real Home input handler and snapshot its effect in one UI turn.
+// A cross-process sent key followed by a queued snapshot can otherwise sample
+// focus after an unrelated desktop activation instead of the key's effect.
+TempStr HomeInputResultTemp(Str action, int value, int* exitCodeOut) {
+    auto fail = [&](Str reason) -> TempStr {
+        if (exitCodeOut) {
+            *exitCodeOut = 1;
+        }
+        return str::DupTemp(reason);
+    };
+    MainWindow* win = len(gWindows) > 0 ? gWindows[0] : nullptr;
+    if (!gForTesting || !win || !win->IsCurrentTabAbout() || !win->hwndCanvas) {
+        return fail(StrL("ERROR home input requires a testing Home window"));
+    }
+    if (str::EqI(action, StrL("canvas-key"))) {
+        SendMessageW(win->hwndCanvas, WM_KEYDOWN, (WPARAM)value, 0);
+    } else if (str::EqI(action, StrL("search-key")) || str::EqI(action, StrL("search-char"))) {
+        if (!win->homeSearch || !win->homeSearch->hwnd) {
+            return fail(StrL("ERROR no Home search edit"));
+        }
+        UINT msg = str::EqI(action, StrL("search-key")) ? WM_KEYDOWN : WM_CHAR;
+        SendMessageW(win->homeSearch->hwnd, msg, (WPARAM)value, 0);
+    } else if (str::EqI(action, StrL("find-search"))) {
+        SendMessageW(win->hwndFrame, WM_COMMAND, CmdFindFirst, 0);
+    } else {
+        return fail(StrL("ERROR unsupported Home input action"));
+    }
+    return HomeSelectionResultTemp(exitCodeOut);
 }
 
 // What the home page list drew for each row: the path, the size text as drawn,
@@ -3478,10 +3528,17 @@ void HomeEntriesCtrl::SetActiveEntry(int idx) {
 // mouse events bubble up to us from the entry (or one of its buttons) that was
 // hit, so this is where the active entry is tracked
 HomeEntriesCtrl::HomeEntriesCtrl() {
+    keyboardOnlyForTest =
+        gForTesting && str::Eq(GetEnvVariableTemp(StrL("SUMATRA_TEST_HOME_KEYBOARD_ONLY")), StrL("1"));
     onMouseMove = MkMethod1<HomeEntriesCtrl, VirtMouseEvent*, &HomeEntriesCtrl::OnMouseMove>(this);
 }
 
 void HomeEntriesCtrl::OnMouseMove(VirtMouseEvent* ev) {
+    // Keyboard-only fixtures must not move or compete with the user's cursor.
+    // Normal Home interaction and the hover regressions retain mouse selection.
+    if (keyboardOnlyForTest) {
+        return;
+    }
     // keyboard nav invalidates the canvas and Windows may re-send WM_MOUSEMOVE
     // with the same coordinates: ignore those so the selection doesn't snap
     // back under a stationary cursor
@@ -4284,8 +4341,17 @@ void DrawHomePage(MainWindow* win, Gfx* gfx) {
 
 // --- keyboard navigation of the file list (issue #1136) ---
 
+// Thumbnail completion can invalidate the cache before WM_PAINT runs. A Home
+// key arriving first still needs the current entries instead of dropping input.
+static void RefreshHomeSelectionLayout(MainWindow* win) {
+    if (HomePageShouldShow(win) && !HomeLayout(win).valid) {
+        HomePageRelayout(win);
+    }
+}
+
 // Selection works off the layout cache, filled by HomePageRelayout.
 static int HomeSelectableCount(MainWindow* win) {
+    RefreshHomeSelectionLayout(win);
     auto& c = HomeLayout(win);
     return c.valid ? len(c.thumbs) : 0;
 }
@@ -4560,6 +4626,7 @@ bool HomePageOnHover(MainWindow* win, int x, int y) {
 
 // file of the keyboard-selected entry, empty if there's no selection
 Str HomePageSelectedFilePathTemp(MainWindow* win) {
+    RefreshHomeSelectionLayout(win);
     auto& c = HomeLayout(win);
     int idx = win->homePageSelIdx;
     if (!c.valid || idx < 0 || idx >= len(c.thumbs)) {

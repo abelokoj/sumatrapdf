@@ -9,20 +9,11 @@
 // control has focus) rather than pixels, so it doesn't depend on the drawing.
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, cmdId, runStandalone, tmpPath } from "./util";
-import { sendMessage, setCursorPos, sleep } from "./winapi";
-import {
-  findCanvas,
-  findChildByClass,
-  launchControlled,
-  sendCommand,
-  waitForTitle,
-  killAndWait,
-} from "./win-automation";
+import { ROOT, runStandalone, tmpPath } from "./util";
+import { sleep } from "./winapi";
+import { findCanvas, findChildByClass, launchControlled, waitForTitle, killAndWait } from "./win-automation";
 import type { ControlClient, HomeSelection } from "./control.ts";
 
-const WM_KEYDOWN = 0x0100;
-const WM_CHAR = 0x0102;
 const VK_RETURN = 0x0d;
 const VK_UP = 0x26;
 const VK_RIGHT = 0x27;
@@ -48,11 +39,23 @@ function makeAppDir(name: string): string {
   return dir;
 }
 
-// Target the control that owns the behavior and finish handling one key before
-// checking its effect. Looking up focus and then posting left a race where focus
-// changed before the queued key arrived, so the key was silently lost.
-function key(target: number, vk: number): void {
-  sendMessage(target, WM_KEYDOWN, vk, 0);
+// Send the actual Home key handler and capture its effect on the app thread,
+// before another desktop activation can change the native edit focus.
+async function key(client: ControlClient, target: "canvas" | "search", vk: number): Promise<HomeSelection> {
+  await waitForHome(client, () => true, "Home layout was not ready before the key");
+  const h = await client.homeSelection(target === "canvas" ? "canvas-key" : "search-key", vk);
+  // Keys can invalidate the layout. Keep the original bounded readiness wait
+  // before sampling its selection, without replaying the key.
+  if (!h.ready && vk !== VK_RETURN) {
+    return await waitForHome(client, () => true, "Home layout was not ready after the key");
+  }
+  return h;
+}
+
+function assertHome(h: HomeSelection, pred: (h: HomeSelection) => boolean, what: string): void {
+  if (!h.ready || !pred(h)) {
+    throw new Error(`issue-1136: ${what} (state: ${h.raw})`);
+  }
 }
 
 // Waits for the home page to report the state a key was supposed to produce.
@@ -84,11 +87,12 @@ async function withHomePage(
   fn: (frame: number, canvas: number, searchEdit: number, client: ControlClient) => Promise<void>,
   launchArgs: string[] = [],
 ): Promise<void> {
-  // CI uses the whole work area, so a cursor left over the thumbnails changes
-  // the keyboard selection through hover before the first test key.
-  setCursorPos(0, 0);
-  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir(name), ...launchArgs]);
+  // Keep keyboard assertions independent of the user's mouse; do not move it.
+  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir(name), ...launchArgs], {
+    env: { SUMATRA_TEST_HOME_KEYBOARD_ONLY: "1" },
+  });
   try {
+    await client.waitForSessionRestored();
     const canvas = findCanvas(frame);
     if (!canvas) {
       throw new Error("issue-1136: home-page canvas not found");
@@ -120,11 +124,17 @@ export async function testit(): Promise<void> {
     _searchEdit: number,
     client: ControlClient,
   ): Promise<void> => {
-    key(canvas, VK_RIGHT);
-    await waitForHome(client, (h) => h.sel === 1, "Right did not move the selection to the second entry");
-    key(canvas, VK_RIGHT);
-    await waitForHome(client, (h) => h.sel === 2, "Right did not move the selection to the third entry");
-    key(canvas, VK_RETURN);
+    assertHome(
+      await key(client, "canvas", VK_RIGHT),
+      (h) => h.sel === 1,
+      "Right did not move the selection to the second entry",
+    );
+    assertHome(
+      await key(client, "canvas", VK_RIGHT),
+      (h) => h.sel === 2,
+      "Right did not move the selection to the third entry",
+    );
+    await key(client, "canvas", VK_RETURN);
     const title = await waitForTitle(frame, (t) => t.includes("doc-02.pdf"));
     if (!title.includes("doc-02.pdf")) {
       throw new Error(`Enter did not open the selected file, title: '${title}'`);
@@ -138,28 +148,43 @@ export async function testit(): Promise<void> {
   // Up from the first row goes to the search box, Down there comes back to the
   // list; then filtering re-selects the first (only) match, so Enter opens it
   await withHomePage("search", async (frame, canvas, searchEdit, client) => {
-    key(canvas, VK_UP);
-    await waitForHome(client, (h) => h.searchFocus, "Up from the first row did not focus the search box");
-    key(searchEdit, VK_DOWN);
-    await waitForHome(client, (h) => !h.searchFocus, "Down did not move the focus back to the list");
+    assertHome(
+      await key(client, "canvas", VK_UP),
+      (h) => h.searchFocus,
+      "Up from the first row did not focus the search box",
+    );
+    assertHome(
+      await key(client, "search", VK_DOWN),
+      (h) => !h.searchFocus,
+      "Down did not move the focus back to the list",
+    );
 
     // move off the first entry, then filter down to a single different file:
     // the selection must reset to it
-    key(canvas, VK_RIGHT);
-    await waitForHome(client, (h) => h.sel === 1, "Right did not move the selection off the first entry");
-    sendCommand(frame, cmdId("CmdFindFirst")); // focuses the home search box
-    await waitForHome(client, (h) => h.searchFocus, "CmdFindFirst did not focus the search box");
+    assertHome(
+      await key(client, "canvas", VK_RIGHT),
+      (h) => h.sel === 1,
+      "Right did not move the selection off the first entry",
+    );
+    assertHome(
+      await client.homeSelection("find-search"),
+      (h) => h.searchFocus,
+      "CmdFindFirst did not focus the search box",
+    );
     for (const ch of "doc-04") {
-      sendMessage(searchEdit, WM_CHAR, ch.charCodeAt(0), 0);
+      await client.homeSelection("search-char", ch.charCodeAt(0));
     }
     await waitForHome(
       client,
       (h) => h.entries === 1 && h.path.includes("doc-04.pdf"),
       "typing in the search box did not filter down to doc-04",
     );
-    key(searchEdit, VK_DOWN); // search box -> the filtered list
-    await waitForHome(client, (h) => !h.searchFocus, "Down did not move the focus to the filtered list");
-    key(canvas, VK_RETURN);
+    assertHome(
+      await key(client, "search", VK_DOWN),
+      (h) => !h.searchFocus,
+      "Down did not move the focus to the filtered list",
+    );
+    await key(client, "canvas", VK_RETURN);
     const title = await waitForTitle(frame, (t) => t.includes("doc-04.pdf"));
     if (!title.includes("doc-04.pdf")) {
       throw new Error(`filtering should re-select the first match, opened title: '${title}'`);

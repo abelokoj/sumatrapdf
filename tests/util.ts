@@ -25,6 +25,7 @@ import {
   getWindowText,
   hasInteractiveDesktop,
   setProcessDpiAware,
+  TEST_NO_DESKTOP_INPUT,
 } from "./winapi.ts";
 
 export const ROOT = join(import.meta.dir, "..");
@@ -490,24 +491,47 @@ export function formatDuration(ms: number): string {
   return `${min}m ${remSec.toFixed(1)}s`;
 }
 
-// every runTest() appends "<ms>\t<name>\t<pass|FAIL>" here, so a run can be
+// every runTest() appends "<ms>\t<name>\t<pass|SKIP|FAIL>" here, so a run can be
 // picked apart afterwards ("which tests are slow, and did that change?").
 // run-almost-all.ts / run-all.ts / run-pre-release.ts delete it before they start
 export const TEST_TIMES_FILE = join(ROOT, ".work", "test-times.txt");
 
+let testRunResults = { passed: 0, skipped: 0 };
+
+export function formatTestResults(ms: number, results = testRunResults): string {
+  const skipped = results.skipped ? `, ${results.skipped} skipped` : "";
+  return `${results.passed} tests passed${skipped} in ${formatDuration(ms)}`;
+}
+
 export function resetTestTimes(): void {
+  testRunResults = { passed: 0, skipped: 0 };
   mkdirSync(dirname(TEST_TIMES_FILE), { recursive: true });
   rmSync(TEST_TIMES_FILE, { force: true });
 }
 
-function recordTestTime(name: string, ms: number, ok: boolean): void {
+function recordTestTime(name: string, ms: number, status: "pass" | "SKIP" | "FAIL"): void {
   try {
     mkdirSync(dirname(TEST_TIMES_FILE), { recursive: true });
-    appendFileSync(TEST_TIMES_FILE, `${ms.toFixed(0)}\t${name}\t${ok ? "pass" : "FAIL"}\n`);
+    appendFileSync(TEST_TIMES_FILE, `${ms.toFixed(0)}\t${name}\t${status}\n`);
   } catch {
     // timing is a nicety; never fail a test over it
   }
 }
+
+export class TestSkipped extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "TestSkipped";
+  }
+}
+
+// A missing prerequisite is neither a completed assertion nor a product failure.
+// Throw so a caller cannot accidentally continue a test that cannot run.
+export function skipTest(reason: string): never {
+  throw new TestSkipped(reason);
+}
+
+export type RunTestStatus = "passed" | "skipped";
 
 export type RunTestOptions = {
   silent?: boolean;
@@ -559,7 +583,11 @@ async function failureContext(): Promise<string> {
   }
 }
 
-export async function runTest(name: string, fn: () => void | Promise<void>, opts?: RunTestOptions): Promise<void> {
+export async function runTest(
+  name: string,
+  fn: () => void | Promise<void>,
+  opts?: RunTestOptions,
+): Promise<RunTestStatus> {
   const silent = opts?.silent ?? false;
   // a Ctrl the machine thinks is held chords every posted key and click.
   // Before the progress line and the muting, so what it says stays visible
@@ -582,7 +610,8 @@ export async function runTest(name: string, fn: () => void | Promise<void>, opts
   try {
     await fn();
     unmute();
-    recordTestTime(name, performance.now() - t0, true);
+    testRunResults.passed++;
+    recordTestTime(name, performance.now() - t0, "pass");
     const elapsed = formatDuration(performance.now() - t0);
     if (lineOpen) {
       console.log(` in ${elapsed}`);
@@ -591,13 +620,20 @@ export async function runTest(name: string, fn: () => void | Promise<void>, opts
     } else {
       console.log(`✅ ${name} passed in ${elapsed}`);
     }
+    return "passed";
   } catch (e) {
     unmute();
     if (lineOpen) {
       // don't glue the caller's error message onto the open line
       console.log("");
     }
-    recordTestTime(name, performance.now() - t0, false);
+    if (e instanceof TestSkipped) {
+      testRunResults.skipped++;
+      recordTestTime(name, performance.now() - t0, "SKIP");
+      console.log(`⏭ ${name} skipped after ${formatDuration(performance.now() - t0)}: ${e.message}`);
+      return "skipped";
+    }
+    recordTestTime(name, performance.now() - t0, "FAIL");
     let msg = String((e as Error)?.message ?? e);
     const ctx = await failureContext();
     if (ctx) {
@@ -630,15 +666,16 @@ export async function runNamedTests(tests: NamedTest[], opts?: SuiteOptions): Pr
   const silent = opts?.silent ?? false;
   const summary = opts?.summary ?? true;
   const t0 = performance.now();
+  const results = { passed: 0, skipped: 0 };
   for (const [name, fn] of tests) {
     if (!silent) {
       console.log(`\n========== ${name} ==========`);
     }
-    await runTest(name, fn, { silent });
+    results[await runTest(name, fn, { silent })]++;
   }
   if (summary) {
     const label = opts?.heading ?? "all";
-    console.log(`\n✅ ${label}: ${tests.length} tests passed in ${formatDuration(performance.now() - t0)}`);
+    console.log(`\n✅ ${label}: ${formatTestResults(performance.now() - t0, results)}`);
   }
 }
 
@@ -646,7 +683,17 @@ export async function runNamedTests(tests: NamedTest[], opts?: SuiteOptions): Pr
 // every test that hovers or drives the real cursor fails for reasons that have
 // nothing to do with the code. Say so up front instead of letting it look
 // like a regression.
+function reportMessageOnlyMode(): void {
+  console.log(
+    "Message-only test mode: global mouse, keyboard and foreground input are disabled; desktop prerequisites must be reported as skips.",
+  );
+}
+
 function checkInteractiveDesktop(): void {
+  if (TEST_NO_DESKTOP_INPUT) {
+    reportMessageOnlyMode();
+    return;
+  }
   if (hasInteractiveDesktop() || process.argv.includes("-allow-locked-desktop")) {
     return;
   }
@@ -703,7 +750,9 @@ export async function runStandalone(testit: () => void | Promise<void>, name?: s
   const label = name ?? (process.argv[1] ?? "test").replace(/\\/g, "/").split("/").pop()!.replace(/\.ts$/, "");
   // a single test is worth running locked (most don't touch the cursor), but
   // say so, or a cursor-driven failure reads as a bug in the code
-  if (!hasInteractiveDesktop()) {
+  if (TEST_NO_DESKTOP_INPUT) {
+    reportMessageOnlyMode();
+  } else if (!hasInteractiveDesktop()) {
     console.error("⚠ this session is locked or disconnected: tests that move the real cursor will fail");
   }
   try {

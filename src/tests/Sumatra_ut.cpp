@@ -686,6 +686,12 @@ int RunAppUnitTests(bool forAi) {
         FindWindowLayout_UnitTests();
         return utassert_print_results();
     }
+    WCHAR homeOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_HOME_UI_ONLY", homeOnly, dimof(homeOnly))) {
+        utassert(HomePage_UnitTestsTextSizing());
+        utassert(HomePage_UnitTestsCompactHeader());
+        return utassert_print_results();
+    }
     if (GetEnvironmentVariableW(L"SUMATRA_LEARNING_UI_ONLY", learningOnly, dimof(learningOnly))) {
         VocabularyDialog_UnitTests();
         return utassert_print_results();

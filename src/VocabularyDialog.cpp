@@ -181,6 +181,9 @@ static HWND Control(LearningWindow* w, int id) {
 
 static void LayoutLearning(LearningWindow* w, bool keepAnchor = false);
 static void EnsurePracticeControls(LearningWindow* w);
+static void EnsureGuideControls(LearningWindow* w);
+static void EnsureLearningTools(LearningWindow* w);
+static void EnsureOnlineControls(LearningWindow* w);
 
 constexpr int kGuideSteps = 9;
 constexpr UINT_PTR kFeedbackTimer = 1;
@@ -522,6 +525,7 @@ static void StoredDefinition(DetailBuilder& text, Str definition) {
 static void UpdateGuide(LearningWindow* w) {
     bool updating = w->updating;
     w->updating = true;
+    if (w->guideVisible) EnsureGuideControls(w);
     w->guideStep = std::clamp(w->guideStep, 0, kGuideSteps - 1);
     const GuideStep& step = kGuide[w->guideStep];
     Text(w, lcGuideText, fmt("Step %d of %d: %s\r\n%s", w->guideStep + 1, kGuideSteps, Tr(step.title), Tr(step.text)));
@@ -748,9 +752,11 @@ static void PackDownloadInfo(LearningWindow* w) {
     if (w->ready) LayoutLearning(w, true);
 }
 static void RefreshPacks(LearningWindow* w) {
+    if (!Control(w, lcPack)) return;
     int selected = Selected(w, lcPack);
     Str previous = selected >= 0 && selected < len(w->packs) ? str::Dup(w->packs[selected].id) : Str();
     GetDictionaryCatalog(w->packs);
+    bool updating = w->updating;
     w->updating = true;
     SendMessageW(Control(w, lcPack), CB_RESETCONTENT, 0, 0);
     int next = 0;
@@ -760,7 +766,7 @@ static void RefreshPacks(LearningWindow* w) {
         if (str::Eq(pack.id, previous)) next = i;
     }
     SendMessageW(Control(w, lcPack), CB_SETCURSEL, next, 0);
-    w->updating = false;
+    w->updating = updating;
     str::Free(previous);
     FitPackDropdown(w);
     PackDownloadInfo(w);
@@ -796,6 +802,7 @@ enum class LibraryRefresh {
     Query
 };
 static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words, Str previous);
+static void ClearLibraryHeights(HWND control);
 static void RefreshLibrary(LearningWindow* w, LibraryRefresh refresh = LibraryRefresh::Data) {
     w->updating = true;
     Vec<VocabularyWord*> words;
@@ -805,6 +812,7 @@ static void RefreshLibrary(LearningWindow* w, LibraryRefresh refresh = LibraryRe
     defer {
         str::Free(previous);
     };
+    if (refresh == LibraryRefresh::Data) ClearLibraryHeights(Control(w, lcLibrary));
     bool changed = SetLibraryRows(w, words, previous);
     int due = VocabularyDueCount(CurrentDeck(w));
     Status(w,
@@ -1133,6 +1141,8 @@ static void RevealFocusedControl(LearningWindow* w, HWND child) {
 
 static void UpdateLearningChrome(LearningWindow* w) {
     bool setup = !w->practice;
+    if (w->managementVisible && (setup || w->dictionary)) EnsureLearningTools(w);
+    if (w->dictionary && w->managementVisible && w->sourcesVisible) EnsureOnlineControls(w);
     for (int id : {lcQueryLabel, lcQuery, lcLookup, lcManageToggle}) Visible(w, id, setup);
     if (w->dictionary) {
         for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle})
@@ -1676,6 +1686,7 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
     }
     if (id == lcSourcesToggle && notification == BN_CLICKED) {
         w->sourcesVisible = !w->sourcesVisible;
+        if (w->sourcesVisible) EnsureOnlineControls(w);
         for (int setting : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird}) Visible(w, setting, w->sourcesVisible);
         Text(w, lcSourcesToggle, w->sourcesVisible ? Tr("Hide sources") : Tr("Sources…"));
         LayoutLearning(w);
@@ -2072,6 +2083,10 @@ static void LibraryContextMenu(LearningWindow* w, LPARAM point) {
     }
 }
 
+struct LibraryHeight {
+    Str id, caption;
+    int height;
+};
 struct ChoiceList {
     HWND hwnd = nullptr;
     StrVec strings;
@@ -2082,7 +2097,20 @@ struct ChoiceList {
     int measuredWidth = -1, measurePasses = 0, labelWidth = 0;
     bool wrapDirty = true, topsDirty = true, wrapping = false, partialWrap = false;
     Vec<int> measureRows;
+    Vec<LibraryHeight> libraryHeights;
+    void ClearHeights() {
+        for (auto& row : libraryHeights) {
+            str::Free(row.id);
+            str::Free(row.caption);
+        }
+        VecReset(libraryHeights);
+    }
+    ~ChoiceList() { ClearHeights(); }
 };
+static void ClearLibraryHeights(HWND control) {
+    auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
+    if (list) list->ClearHeights();
+}
 static void IndexChoiceRows(ChoiceList* list) {
     if (!list->topsDirty) return;
     VecReset(list->tops);
@@ -2149,7 +2177,10 @@ static void WrapChoices(HWND control) {
     if (!list || list->wrapping) return;
     RECT client;
     GetClientRect(control, &client);
+    // Creation bounds have no usable text width; the final resize will measure rows.
+    if (client.right <= AppScrollbarInset(control) + UiScalePx(24)) return;
     if (!list->wrapDirty && list->measuredWidth == client.right) return;
+    if (list->measuredWidth != client.right) list->ClearHeights();
     int anchor = ChoiceRowAt(list, list->scroll);
     int within = anchor >= 0 ? list->scroll - ChoiceTop(list, anchor) : 0;
     list->wrapping = true;
@@ -2186,6 +2217,7 @@ static void WrapChoices(HWND control) {
         ScrollChoices(list);
         RECT after;
         GetClientRect(control, &after);
+        if (client.right != after.right) list->ClearHeights();
         if (client.right == after.right) break;
     }
     SelectObject(dc, old);
@@ -2229,37 +2261,55 @@ static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words,
     }
     if (!changed) return false;
 
-    struct Row {
-        Str id, caption;
-        int height;
-    };
-    Vec<Row> rows;
+    Vec<LibraryHeight> rows;
     id = w->wordIds.begin();
     index = 0;
     for (Str caption : list->strings) {
         if (index >= len(w->wordIds) || index >= len(list->heights)) break;
-        VecAppend(rows, Row{*id++, caption, list->heights[index++]});
+        VecAppend(rows, LibraryHeight{*id++, caption, list->heights[index++]});
     }
-    VecSort(rows, [](const Row* a, const Row* b) { return str::Cmp(a->id, b->id); });
+    VecSort(rows, [](const LibraryHeight* a, const LibraryHeight* b) { return str::Cmp(a->id, b->id); });
     RECT client;
     GetClientRect(control, &client);
     bool cached = !list->wrapDirty && list->measuredWidth == client.right;
-    StrVec ids, captions;
-    Vec<int> heights, measureRows;
-    for (VocabularyWord* word : words) {
-        Str caption = fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{});
-        int first = 0, last = len(rows);
+    if (!cached) list->ClearHeights();
+    int oldCount = len(list->libraryHeights);
+    for (const auto& row : rows) {
+        if (!cached) break;
+        int first = 0, last = oldCount;
         while (first < last) {
             int middle = (first + last) / 2;
-            if (str::Cmp(rows[middle].id, word->id) < 0)
+            if (str::Cmp(list->libraryHeights[middle].id, row.id) < 0)
                 first = middle + 1;
             else
                 last = middle;
         }
-        bool reuse =
-            cached && first < len(rows) && str::Eq(rows[first].id, word->id) && str::Eq(rows[first].caption, caption);
+        if (first < oldCount && str::Eq(list->libraryHeights[first].id, row.id)) {
+            auto& saved = list->libraryHeights[first];
+            if (!str::Eq(saved.caption, row.caption)) str::ReplaceWithCopy(&saved.caption, row.caption);
+            saved.height = row.height;
+        } else {
+            VecAppend(list->libraryHeights, LibraryHeight{str::Dup(row.id), str::Dup(row.caption), row.height});
+        }
+    }
+    VecSort(list->libraryHeights,
+            [](const LibraryHeight* a, const LibraryHeight* b) { return str::Cmp(a->id, b->id); });
+    StrVec ids, captions;
+    Vec<int> heights, measureRows;
+    for (VocabularyWord* word : words) {
+        Str caption = fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{});
+        int first = 0, last = len(list->libraryHeights);
+        while (first < last) {
+            int middle = (first + last) / 2;
+            if (str::Cmp(list->libraryHeights[middle].id, word->id) < 0)
+                first = middle + 1;
+            else
+                last = middle;
+        }
+        bool reuse = cached && first < len(list->libraryHeights) && str::Eq(list->libraryHeights[first].id, word->id) &&
+                     str::Eq(list->libraryHeights[first].caption, caption);
         if (!reuse) VecAppend(measureRows, len(heights));
-        VecAppend(heights, reuse ? rows[first].height : GetAppFontSizeForDpi(DpiGet()) + UiScalePx(20));
+        VecAppend(heights, reuse ? list->libraryHeights[first].height : GetAppFontSizeForDpi(DpiGet()) + UiScalePx(20));
         ids.Append(word->id);
         captions.Append(caption);
     }
@@ -2352,6 +2402,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_GETFONT:
             return (LRESULT)list->font;
         case WM_SETFONT:
+            list->ClearHeights();
             list->partialWrap = false;
             list->font = (HFONT)wp;
             list->wrapDirty = true;
@@ -3503,6 +3554,79 @@ static HWND MakeLearningSplit(LearningWindow* w, bool visible = true) {
     return split;
 }
 
+static void OrderLearningGroup(LearningWindow* w, std::initializer_list<int> ids) {
+    HWND previous = nullptr;
+    for (int id : ids) {
+        HWND child = Control(w, id);
+        if (!child) continue;
+        if (previous) SetWindowPos(child, previous, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        previous = child;
+    }
+}
+static void EnsureGuideControls(LearningWindow* w) {
+    if (Control(w, lcGuideText)) return;
+    DpiScope dpi(w->hwnd);
+    MakeControl(w, lcGuideText, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX, false);
+    MakeButton(w, lcGuidePrev, Tr("Back"), false);
+    MakeButton(w, lcGuideNext, Tr("Next"), false);
+    MakeButton(w, lcGuideSkip, Tr("Skip"), false);
+    MakeButton(w, lcGuideAction, Tr("Go to lookup"), false);
+    OrderLearningGroup(w, {lcGuideStart, lcGuideText, lcGuidePrev, lcGuideNext, lcGuideSkip, lcGuideAction});
+}
+static void EnsureLearningTools(LearningWindow* w) {
+    if (Control(w, w->dictionary ? lcPack : lcNewDeck)) return;
+    DpiScope dpi(w->hwnd);
+    bool ready = w->ready, updating = w->updating;
+    w->ready = false;
+    w->updating = true;
+    defer {
+        w->ready = ready;
+        w->updating = updating;
+    };
+    if (w->dictionary) {
+        MakeButton(w, lcSourcesToggle, w->sourcesVisible ? Tr("Hide sources") : Tr("Sources…"), false);
+        MakeControl(w, lcPack, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL, false);
+        MakeButton(w, lcImportPack, Tr("Import…"), false);
+        MakeButton(w, lcDownload, Tr("Download"), false);
+        MakeButton(w, lcRemovePack, Tr("Remove"), false);
+        MakeControl(w, lcPackInfo, L"STATIC", {}, SS_NOPREFIX, false);
+        MakeButton(w, lcCancelDownload, Tr("Cancel download"), false);
+        OrderLearningGroup(w, {lcLookupSource, lcSourcesToggle});
+        OrderLearningGroup(
+            w, {lcRecordingUk, lcPack, lcImportPack, lcDownload, lcRemovePack, lcPackInfo, lcCancelDownload});
+        RefreshPacks(w);
+        for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack}) EnableWindow(Control(w, id), !w->busy);
+    } else {
+        MakeButton(w, lcInstallDeck, Tr("Install deck"), false);
+        MakeButton(w, lcDeleteDeck, Tr("Delete deck"), false);
+        MakeControl(w, lcNewDeck, L"EDIT", {}, ES_AUTOHSCROLL | WS_BORDER, false);
+        SendMessageW(Control(w, lcNewDeck), EM_SETCUEBANNER, true, (LPARAM)L"New deck name");
+        MakeButton(w, lcCreateDeck, Tr("Create deck"), false);
+        MakeButton(w, lcExport, Tr("Export…"), false);
+        MakeButton(w, lcImport, Tr("Import…"), false);
+        OrderLearningGroup(w, {lcVoice, lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport});
+        EnableWindow(Control(w, lcInstallDeck), !w->busy);
+    }
+}
+static void EnsureOnlineControls(LearningWindow* w) {
+    if (!w->dictionary || Control(w, lcOnlineFirst)) return;
+    DpiScope dpi(w->hwnd);
+    bool updating = w->updating;
+    w->updating = true;
+    defer {
+        w->updating = updating;
+    };
+    int position = 0;
+    for (int setting : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird}) {
+        MakeControl(w, setting, L"COMBOBOX", {}, CBS_DROPDOWNLIST, false);
+        for (Str source :
+             {Tr("Disabled"), StrL("Wiktionary (Kaikki)"), StrL("Wiktionary REST"), StrL("Free Dictionary API")})
+            AddChoice(w, setting, fmt("%d. %s", position + 1, source));
+        SendMessageW(Control(w, setting), CB_SETCURSEL, w->onlineOrder[position++], 0);
+    }
+    OrderLearningGroup(w, {lcSourcesToggle, lcOnlineFirst, lcOnlineSecond, lcOnlineThird});
+    FitPackDropdown(w);
+}
 static void EnsurePracticeControls(LearningWindow* w) {
     if (w->dictionary || Control(w, lcAnswer)) return;
     DpiScope dpi(w->hwnd);
@@ -3571,11 +3695,6 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     RefreshLearningStyle(w);
     MakeControl(w, lcTitle, L"STATIC", dictionary ? Tr("Dictionary") : Tr("Learning hub"), SS_OWNERDRAW | SS_NOPREFIX);
     MakeButton(w, lcGuideStart, Tr("Help / Start guide"));
-    MakeControl(w, lcGuideText, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX);
-    MakeButton(w, lcGuidePrev, Tr("Back"));
-    MakeButton(w, lcGuideNext, Tr("Next"));
-    MakeButton(w, lcGuideSkip, Tr("Skip"));
-    MakeButton(w, lcGuideAction, Tr("Go to lookup"));
     MakeControl(w, lcFeedback, L"STATIC", {}, SS_OWNERDRAW | SS_NOPREFIX);
     ShowWindow(Control(w, lcFeedback), SW_HIDE);
     MakeControl(w, lcQueryLabel, L"STATIC", dictionary ? Tr("&Word") : Tr("&Find word"), SS_CENTERIMAGE);
@@ -3605,16 +3724,6 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
               Tr("Online · Wiktionary (Kaikki)"), Tr("Online · Wiktionary REST"), Tr("Online · Free Dictionary API")})
             AddChoice(w, lcLookupSource, source);
         SendMessageW(Control(w, lcLookupSource), CB_SETCURSEL, 0, 0);
-        MakeButton(w, lcSourcesToggle, Tr("Sources…"));
-        int position = 0;
-        for (int setting : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird}) {
-            MakeControl(w, setting, L"COMBOBOX", {}, CBS_DROPDOWNLIST);
-            for (Str source :
-                 {Tr("Disabled"), StrL("Wiktionary (Kaikki)"), StrL("Wiktionary REST"), StrL("Free Dictionary API")})
-                AddChoice(w, setting, fmt("%d. %s", position + 1, source));
-            SendMessageW(Control(w, setting), CB_SETCURSEL, w->onlineOrder[position++], 0);
-            Visible(w, setting, false);
-        }
         MakeControl(w, lcSenseLabel, L"STATIC", Tr("&Meaning"), SS_CENTERIMAGE);
         MakeControl(w, lcSense, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
         AddChoice(w, lcSense, Tr("Meaning to save"));
@@ -3624,27 +3733,11 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
         MakeButton(w, lcRecordingUk, Tr("UK recording"));
         EnableWindow(Control(w, lcRecording), false);
         EnableWindow(Control(w, lcRecordingUk), false);
-        MakeControl(w, lcPack, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
-        MakeButton(w, lcImportPack, Tr("Import…"));
-        MakeButton(w, lcDownload, Tr("Download"));
-        MakeButton(w, lcRemovePack, Tr("Remove"));
-        MakeControl(w, lcPackInfo, L"STATIC", {}, SS_NOPREFIX);
-        MakeButton(w, lcCancelDownload, Tr("Cancel download"));
-        Visible(w, lcCancelDownload, false);
-        Visible(w, lcPackInfo, false);
         MakeButton(w, lcSave, Tr("Save word"));
         MakeButton(w, lcOpenVocabulary, Tr("Open learning hub"));
-        RefreshPacks(w);
         EnableWindow(Control(w, lcSave), false);
         EnableWindow(Control(w, lcLearned), false);
     } else {
-        MakeButton(w, lcInstallDeck, Tr("Install deck"));
-        MakeButton(w, lcDeleteDeck, Tr("Delete deck"));
-        MakeControl(w, lcNewDeck, L"EDIT", {}, ES_AUTOHSCROLL | WS_BORDER);
-        SendMessageW(Control(w, lcNewDeck), EM_SETCUEBANNER, true, (LPARAM)L"New deck name");
-        MakeButton(w, lcCreateDeck, Tr("Create deck"));
-        MakeButton(w, lcExport, Tr("Export…"));
-        MakeButton(w, lcImport, Tr("Import…"));
         MakeControl(w, lcActivityLabel, L"STATIC", Tr("&Activity"), SS_CENTERIMAGE);
         MakeControl(w, lcActivity, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
         MakeControl(w, lcSchedulerLabel, L"STATIC", Tr("&Review method"), SS_CENTERIMAGE);
@@ -3964,7 +4057,7 @@ static void LearningFieldPaintTest(LearningWindow* w) {
 }
 
 static void LibraryRowsTest(HWND parent) {
-    HWND control = CreateWindowExW(0, kChoiceListClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 150, 120, parent,
+    HWND control = CreateWindowExW(0, kChoiceListClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 1, 1, parent,
                                    (HMENU)(INT_PTR)lcLibrary, GetModuleHandleW(nullptr), nullptr);
     utassert(control != nullptr);
     if (!control) return;
@@ -3984,6 +4077,9 @@ static void LibraryRowsTest(HWND parent) {
     VecAppend(words, &second);
     utassert(SetLibraryRows(&window, words, {}));
     auto* list = (ChoiceList*)GetWindowLongPtrW(control, GWLP_USERDATA);
+    utassert(list->measurePasses == 0 && list->wrapDirty);
+    MoveWindow(control, 0, 0, 150, 120, false);
+    utassert(list->measurePasses == 1);
     int firstHeight = list->heights[0], secondHeight = list->heights[1];
     int measured = list->measurePasses;
     ChooseRow(list, 1, false);
@@ -4001,6 +4097,7 @@ static void LibraryRowsTest(HWND parent) {
     VecAppend(words, &first);
     utassert(SetLibraryRows(&window, words, second.id));
     utassert(list->heights[0] == secondHeight && list->heights[1] == firstHeight);
+    utassert(list->measurePasses == measured);
     utassert(list->selected == 0 && str::Eq(window.wordIds[1], first.id));
 
     SendMessageW(control, LB_SETITEMHEIGHT, 1, firstHeight + 37);
@@ -4010,10 +4107,30 @@ static void LibraryRowsTest(HWND parent) {
     utassert(list->heights[1] == firstHeight + 37 && list->selected == 1);
     MoveWindow(control, 0, 0, 450, 120, false);
     utassert(list->heights[1] < firstHeight);
+    int changed = list->measurePasses;
     VecReset(words);
     utassert(SetLibraryRows(&window, words, first.id));
     utassert(len(window.wordIds) == 0 && len(list->strings) == 0 && len(list->heights) == 0);
     utassert(list->selected == -1 && list->scroll == 0);
+    VecAppend(words, &second);
+    VecAppend(words, &first);
+    utassert(SetLibraryRows(&window, words, first.id));
+    utassert(list->measurePasses == changed);
+    utassert(list->selected == 1 && str::Eq(window.wordIds[1], first.id));
+    str::ReplaceWithCopy(&second.word, StrL("Edited word caption"));
+    utassert(SetLibraryRows(&window, words, first.id));
+    utassert(list->measurePasses == changed + 1);
+    changed = list->measurePasses;
+    HFONT font = GetUserGuiFont(StrL("Consolas"), 30)->GetHFont();
+    SendMessageW(control, WM_SETFONT, (WPARAM)font, false);
+    utassert(list->measurePasses > changed);
+    changed = list->measurePasses;
+    VecReset(words);
+    utassert(SetLibraryRows(&window, words, {}));
+    VecAppend(words, &second);
+    VecAppend(words, &first);
+    utassert(SetLibraryRows(&window, words, first.id));
+    utassert(list->measurePasses == changed);
 }
 static void LearningRowTests(LearningWindow* w) {
     int size = gSettings->uIFontSize, scale = gSettings->interfaceScale;
@@ -4086,6 +4203,94 @@ static LRESULT CALLBACK LearningFontProbeProc(int code, WPARAM wp, LPARAM lp) {
     }
     return CallNextHookEx(nullptr, code, wp, lp);
 }
+static int HiddenLearningControls(LearningWindow* w) {
+    int count = 0;
+    for (int id : {lcGuideText, lcGuidePrev, lcGuideNext, lcGuideSkip, lcGuideAction})
+        count += Control(w, id) != nullptr;
+    if (w->dictionary) {
+        for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcPackInfo, lcCancelDownload, lcSourcesToggle,
+                       lcOnlineFirst, lcOnlineSecond, lcOnlineThird})
+            count += Control(w, id) != nullptr;
+    } else {
+        for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
+            count += Control(w, id) != nullptr;
+    }
+    return count;
+}
+static void LearningHiddenTests(LearningWindow* w) {
+    SendMessageW(w->hwnd, WM_GETOBJECT, 0, OBJID_CLIENT);
+    SendMessageW(w->hwnd, WM_GETOBJECT, 0, -25);
+    ScrollLearning(w, 120);
+    utassert(HiddenLearningControls(w) == 0);
+    if (w->dictionary) utassert(len(w->packs) == 0);
+
+    w->guideStep = 1;
+    SendMessageW(Control(w, lcGuideStart), BM_CLICK, 0, 0);
+    utassert(w->guideVisible);
+    for (int id : {lcGuideText, lcGuidePrev, lcGuideNext, lcGuideSkip, lcGuideAction}) utassert(Control(w, id));
+    HWND guide = Control(w, lcGuideText);
+    utassert(str::StartsWith(Read(w, lcGuideText), StrL("Step 2 of 9:")));
+    utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcGuideStart), false) == Control(w, lcGuidePrev));
+    utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcGuideAction), false) == Control(w, lcQuery));
+    SendMessageW(Control(w, lcGuideStart), BM_CLICK, 0, 0);
+    SendMessageW(Control(w, lcGuideStart), BM_CLICK, 0, 0);
+    utassert(Control(w, lcGuideText) == guide);
+    SendMessageW(Control(w, lcGuideStart), BM_CLICK, 0, 0);
+
+    // First expansion can happen while a lookup or deck job disables its actions.
+    w->busy = true;
+    SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+    utassert(w->managementVisible);
+    if (w->dictionary) {
+        for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcPackInfo, lcCancelDownload, lcSourcesToggle})
+            utassert(Control(w, id));
+        for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack}) utassert(!IsWindowEnabled(Control(w, id)));
+        utassert(len(w->packs) > 0 && Selected(w, lcPack) == 0);
+        utassert(!Control(w, lcOnlineFirst) && !Control(w, lcOnlineSecond) && !Control(w, lcOnlineThird));
+        w->onlineOrder[0] = 3;
+        w->onlineOrder[1] = 0;
+        w->onlineOrder[2] = 2;
+        SendMessageW(Control(w, lcSourcesToggle), BM_CLICK, 0, 0);
+        for (int slot = 0; slot < 3; slot++) {
+            HWND control = Control(w, lcOnlineFirst + slot);
+            utassert(control && Selected(w, lcOnlineFirst + slot) == w->onlineOrder[slot]);
+            utassert((GetWindowLongPtrW(control, GWL_STYLE) & (WS_VISIBLE | WS_TABSTOP)) == (WS_VISIBLE | WS_TABSTOP));
+            utassert((HFONT)SendMessageW(control, WM_GETFONT, 0, 0) == GetAppFontForDpi(DpiGet())->GetHFont());
+        }
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcLookupSource), false) == Control(w, lcSourcesToggle));
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcSourcesToggle), false) == Control(w, lcOnlineFirst));
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcOnlineFirst), false) == Control(w, lcOnlineSecond));
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcOnlineSecond), false) == Control(w, lcOnlineThird));
+        HWND source = Control(w, lcOnlineFirst), pack = Control(w, lcPack);
+        SendMessageW(source, CB_SETCURSEL, 1, 0);
+        SendMessageW(w->hwnd, WM_COMMAND, MAKEWPARAM(lcOnlineFirst, CBN_SELCHANGE), (LPARAM)source);
+        utassert(w->onlineOrder[0] == 1);
+        SendMessageW(Control(w, lcSourcesToggle), BM_CLICK, 0, 0);
+        SendMessageW(Control(w, lcSourcesToggle), BM_CLICK, 0, 0);
+        SendMessageW(pack, CB_SETCURSEL, 1, 0);
+        SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+        SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+        utassert(Control(w, lcPack) == pack && Selected(w, lcPack) == 1);
+        utassert(Control(w, lcOnlineFirst) == source && Selected(w, lcOnlineFirst) == 1);
+    } else {
+        for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
+            utassert(Control(w, id));
+        utassert(!IsWindowEnabled(Control(w, lcInstallDeck)));
+        HWND name = Control(w, lcNewDeck);
+        SendMessageW(name, WM_CHAR, 'A', 0);
+        SendMessageW(name, WM_CHAR, 'B', 0);
+        utassert(str::Eq(Read(w, lcNewDeck), StrL("AB")));
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcVoice), false) == Control(w, lcDeleteDeck));
+        utassert(GetNextDlgTabItem(w->hwnd, name, true) == Control(w, lcDeleteDeck));
+        utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcImport), false) == Control(w, lcActivity));
+        SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+        SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+        utassert(Control(w, lcNewDeck) == name && str::Eq(Read(w, lcNewDeck), StrL("AB")));
+    }
+    w->busy = false;
+    for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcInstallDeck}) EnableWindow(Control(w, id), true);
+    SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
+}
 static LearningWindow* OpenLearningForTest(bool dictionary) {
     Vec<LearningFontProbe> probes;
     learningFontProbes = &probes;
@@ -4150,6 +4355,7 @@ void VocabularyDialog_UnitTests() {
         if (learning) {
             utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
                      HwndWindowRect(Control(learning, lcPronounce)).dy);
+            LearningHiddenTests(learning);
             LearningRowTests(learning);
             HWND audio = Control(learning, lcPronounce);
             ShowLearningButtonTooltip(learning, audio, true);
@@ -4177,6 +4383,7 @@ void VocabularyDialog_UnitTests() {
         if (hub) {
             utassert(Control(hub, lcLibrary));
             utassert(HwndWindowRect(Control(hub, lcDeck)).dy == HwndWindowRect(Control(hub, lcPractice)).dy);
+            LearningHiddenTests(hub);
             LearningRowTests(hub);
             for (int id :
                  {lcAnswer, lcChoices, lcPairs, lcSplit, lcCheck, lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy})

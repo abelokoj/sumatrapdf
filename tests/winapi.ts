@@ -14,6 +14,8 @@
 
 import { dlopen, FFIType, JSCallback, ptr, toArrayBuffer } from "bun:ffi";
 
+export const TEST_NO_DESKTOP_INPUT = process.env.SUMATRA_TEST_NO_CURSOR === "1";
+
 const user32 = dlopen("user32.dll", {
   EnumWindows: { args: [FFIType.function, FFIType.i64], returns: FFIType.bool },
   EnumChildWindows: { args: [FFIType.ptr, FFIType.function, FFIType.i64], returns: FFIType.bool },
@@ -792,6 +794,7 @@ export function isZoomed(hwnd: number): boolean {
 }
 
 export function setCursorPos(x: number, y: number): boolean {
+  if (TEST_NO_DESKTOP_INPUT) return false;
   return user32.symbols.SetCursorPos(x, y);
 }
 
@@ -804,6 +807,7 @@ const KEYEVENTF_KEYUP = 0x0002;
 
 // inject a key-up for vk, clearing a key the system thinks is still held
 export function injectKeyUp(vk: number): void {
+  if (TEST_NO_DESKTOP_INPUT) return;
   user32.symbols.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0n);
 }
 
@@ -849,6 +853,7 @@ function modifierNames(keys: [string, number][]): string {
 }
 
 export async function ensureModifierKeysUp(): Promise<void> {
+  if (TEST_NO_DESKTOP_INPUT) return;
   let held = heldModifierKeys();
   if (held.length === 0) {
     unreleasedWarned = "";
@@ -1093,6 +1098,7 @@ export function getParentWindow(hwnd: number): number {
 }
 
 export function setForegroundWindow(hwnd: number): boolean {
+  if (TEST_NO_DESKTOP_INPUT) return false;
   return user32.symbols.SetForegroundWindow(hwnd);
 }
 
@@ -1139,6 +1145,7 @@ export function getCursorPos(): { x: number; y: number } {
 // desktop happily, and a disconnected session still names "Default" as the
 // input desktop while refusing to move the pointer.
 export function hasInteractiveDesktop(): boolean {
+  if (TEST_NO_DESKTOP_INPUT) return false;
   const at = getCursorPos();
   return user32.symbols.SetCursorPos(at.x, at.y);
 }

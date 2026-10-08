@@ -3,17 +3,16 @@
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, runStandalone, tmpPath } from "./util";
-import { sendMessage, setCursorPos, sleep } from "./winapi";
+import { sleep } from "./winapi";
 import { findCanvas, launchControlled, killAndWait } from "./win-automation";
 import type { ControlClient, HomeSelection } from "./control.ts";
 
-const WM_KEYDOWN = 0x0100;
 const VK_RIGHT = 0x27;
 const VK_DELETE = 0x2e;
 const nFiles = 3;
 
-function makeAppDir(): string {
-  const dir = tmpPath("issue-6247");
+function makeAppDir(name: string): string {
+  const dir = tmpPath(`issue-6247-${name}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "sub"), { recursive: true });
   const src = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
@@ -50,11 +49,13 @@ async function waitForHome(
   }
 }
 
-export async function testit(): Promise<void> {
-  // a cursor over the thumbnails would move the selection through hover
-  setCursorPos(0, 0);
-  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir()]);
+async function checkRemoval(name: string, launchArgs: string[] = []): Promise<void> {
+  // Test keyboard removal without moving or competing with the user's mouse.
+  const { proc, client, frame } = await launchControlled(["-appdata", makeAppDir(name), ...launchArgs], {
+    env: { SUMATRA_TEST_HOME_KEYBOARD_ONLY: "1" },
+  });
   try {
+    await client.waitForSessionRestored();
     const canvas = findCanvas(frame);
     if (!canvas) {
       throw new Error("issue-6247: home-page canvas not found");
@@ -63,16 +64,29 @@ export async function testit(): Promise<void> {
 
     // select the last (oldest) entry and remove it
     for (let i = 1; i < nFiles; i++) {
-      sendMessage(canvas, WM_KEYDOWN, VK_RIGHT, 0);
+      await waitForHome(client, (h) => h.sel === i - 1, "Home selection/layout was not ready before Right");
+      const h = await client.homeSelection("canvas-key", VK_RIGHT);
+      if (h.ready && h.sel !== i) {
+        throw new Error(`issue-6247: Right did not select entry ${i} (same-turn state: ${h.raw})`);
+      }
+      // Retain the original readiness wait: repaint and thumbnail completion
+      // can invalidate the layout between keys. Do not replay a key.
       await waitForHome(client, (h) => h.sel === i, `Right did not select entry ${i}`);
     }
-    sendMessage(canvas, WM_KEYDOWN, VK_DELETE, 0);
+    await waitForHome(client, (h) => h.sel === nFiles - 1, "Home selection/layout was not ready before Delete");
+    await client.homeSelection("canvas-key", VK_DELETE);
     await waitForHome(client, (h) => h.entries === nFiles - 1, "removed entry still shown");
     console.log("issue-6247: OK");
   } finally {
     client.close();
     await killAndWait(proc);
   }
+}
+
+export async function testit(): Promise<void> {
+  await checkRemoval("full");
+  // The third entry can be on a lower row on a hosted 1024x720 desktop.
+  await checkRemoval("hosted-size", ["-window-pos", "1024x720@0x0"]);
 }
 
 if (import.meta.main) {

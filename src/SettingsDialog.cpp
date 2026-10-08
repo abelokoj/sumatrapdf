@@ -18,6 +18,9 @@
 #include "gui/Gfx.h"
 #include "gui/VirtCtrl.h"
 #include "gui/VirtHost.h"
+#if IS_DEBUG
+#include "gui/win/TabsCtrl.h"
+#endif
 
 #include "Settings.h"
 #include "DisplayMode.h"
@@ -77,8 +80,9 @@ struct SettingsMoveBatch {
         active = this;
     }
     ~SettingsMoveBatch() { ReportIf(active); }
-    void Apply() {
+    void Apply(bool applyNative = true) {
         active = nullptr;
+        if (!applyNative) return;
         HDWP batch = BeginDeferWindowPos(len(moves));
         for (auto& move : moves) {
             if (!batch) break;
@@ -507,7 +511,7 @@ struct SettingsViewport : ScrollBox {
 #endif
         HRGN region = CreateRectRgn(clip.x, clip.y, clip.x + clip.dx, clip.y + clip.dy);
         if (!region) return;
-        HRGN rounded = RoundedControlRegion(control->hwnd, bounds.Size());
+        HRGN rounded = clip.IsEmpty() ? nullptr : RoundedControlRegion(control->hwnd, bounds.Size());
         if (rounded) {
             CombineRgn(region, region, rounded, RGN_AND);
             DeleteObject(rounded);
@@ -535,10 +539,13 @@ struct SettingsViewport : ScrollBox {
         batch.viewport = bounds;
         batch.themeWindow = themeWindow;
         ScrollBox::SetBounds(bounds);
-        batch.Apply();
-        ClipControls(child);
+        // The initial layout precedes root attachment. RefreshVirtTops applies
+        // these bounds again with the correct origin; only that pass moves HWNDs.
+        bool attached = GetHwnd() != nullptr;
+        batch.Apply(attached);
+        if (attached) ClipControls(child);
         moving = false;
-        Repaint();
+        if (attached) Repaint();
     }
     void Repaint() {
         RECT area = ToRECT(lastBounds);
@@ -1483,6 +1490,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     {
         CreateCustomArgs args;
         args.title = Tr("Settings");
+        args.owner = mainWin ? mainWin->hwndFrame : nullptr;
         args.visible = false;
         args.style = WS_POPUPWINDOW | WS_THICKFRAME | WS_VSCROLL;
         args.font = GetFont();
@@ -1972,6 +1980,9 @@ static void OpenSettingsDialog(MainWindow* win, SettingsView view) {
                 delete previous;
             } else {
                 gSettingsWnd->win = win;
+                HWND owner = win ? win->hwndFrame : nullptr;
+                if (GetWindow(gSettingsWnd->hwnd, GW_OWNER) != owner)
+                    SetWindowLongPtrW(gSettingsWnd->hwnd, GWLP_HWNDPARENT, (LONG_PTR)owner);
                 gSettingsWnd->RestoreValues();
                 gSettingsWnd->scroll->ScrollTo(0);
                 gSettingsWnd->SetIsVisible(view == SettingsView::Visible);
@@ -2341,6 +2352,13 @@ static bool SettingsTestTab(MSG& message) {
 }
 
 static void SettingsOpeningTests() {
+    WindowBase owner;
+    CreateCustomArgs ownerArgs;
+    ownerArgs.title = StrL("Settings owner");
+    ownerArgs.visible = false;
+    owner.CreateCustom(ownerArgs);
+    MainWindow main(owner.hwnd);
+    main.tabsCtrl = new TabsCtrl();
     for (auto* entry : settingsMetrics.entries) delete entry;
     VecReset(settingsMetrics.entries);
     int before = settingsMetrics.measured;
@@ -2350,7 +2368,8 @@ static void SettingsOpeningTests() {
     settingsNativeResizeProbe = &nativeResizes;
     HHOOK resizeHook = SetWindowsHookExW(WH_CALLWNDPROCRET, SettingsNativeResizeHook, nullptr, GetCurrentThreadId());
     utassert(resizeHook);
-    utassert(first->Create(nullptr, SettingsView::Hidden));
+    utassert(first->Create(&main, SettingsView::Hidden));
+    utassert(GetWindow(first->hwnd, GW_OWNER) == owner.hwnd);
     // Opening and scrolling paint idle fields without native combo creation.
     for (auto& value : first->savedValues) {
         if (!value.checkbox) utassert(!value.control->hwnd);
@@ -2477,6 +2496,12 @@ static void SettingsOpeningTests() {
     utassert(str::Eq(second->dropTabListCount->GetTextTemp(), original));
     utassert(second->chkUseTabs->IsChecked() == gSettings->useTabs);
     utassert(str::Eq(second->cacheKey, SettingsCacheKey(nullptr)));
+    OpenSettingsDialog(&main, SettingsView::Hidden);
+    utassert(gSettingsWnd == second && second->win == &main);
+    utassert(GetWindow(second->hwnd, GW_OWNER) == owner.hwnd);
+    OpenSettingsDialog(nullptr, SettingsView::Hidden);
+    utassert(gSettingsWnd == second && !second->win);
+    utassert(GetWindow(second->hwnd, GW_OWNER) == nullptr);
     int oldSize = gSettings->uIFontSize;
     gSettings->uIFontSize = oldSize + 1;
     utassert(!str::Eq(second->cacheKey, SettingsCacheKey(nullptr)));

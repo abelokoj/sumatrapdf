@@ -15380,9 +15380,9 @@ static LRESULT CALLBACK WndProcSumatraFrame(HWND hwnd, UINT msg, WPARAM wp, LPAR
         }
 
         case WM_CREATE:
-            // do nothing
             TtsSetNotifyWindow(hwnd, kWmTtsEvent, 0, 0);
-            goto InitMouseWheelInfo;
+            UpdateDeltaPerLine();
+            return 0;
 
         case WM_SIZE:
             if (win && SIZE_MINIMIZED == wp) {
@@ -15607,7 +15607,6 @@ static LRESULT CALLBACK WndProcSumatraFrame(HWND hwnd, UINT msg, WPARAM wp, LPAR
                 RefreshUiFonts();
                 ApplySettingsToOpenWindows();
             }
-        InitMouseWheelInfo:
             UpdateDeltaPerLine();
 
             if (win) {

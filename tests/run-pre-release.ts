@@ -5,7 +5,7 @@
 // Run:  bun tests/run-pre-release.ts [--no-build] [-silent] [-exe <SumatraPDF.exe>]
 
 import {
-  formatDuration,
+  formatTestResults,
   resetTestTimes,
   runSuiteMain,
   runTest,
@@ -32,9 +32,7 @@ export async function testit(opts?: SuiteOptions): Promise<void> {
   }
   await runTest("latex", latexTests, { silent });
 
-  console.log(
-    `\n✅ pre-release checks passed (run-almost-all + issue-5842 + issue-6003 + latex) in ${formatDuration(performance.now() - t0)}`,
-  );
+  console.log(`\n✅ pre-release: ${formatTestResults(performance.now() - t0)}`);
 }
 
 if (import.meta.main) {

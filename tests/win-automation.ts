@@ -337,7 +337,7 @@ export async function waitForFormEditor(canvas: number, timeoutMs = 1500): Promi
 // the click as a drag (ClickEdgeToTurnPage and similar then no-op).
 export async function clickAt(hwnd: number, x: number, y: number, settleMs = 350, extraMk = 0): Promise<void> {
   const screen = clientToScreen(hwnd, x, y);
-  setCursorPos(screen.x, screen.y);
+  const moved = setCursorPos(screen.x, screen.y);
   const lp = packCoords(x, y);
   sendMessage(hwnd, WM_MOUSEMOVE, extraMk, lp);
   sendMessage(hwnd, WM_LBUTTONDOWN, MK_LBUTTON | extraMk, lp);
@@ -345,7 +345,7 @@ export async function clickAt(hwnd: number, x: number, y: number, settleMs = 350
 
   // someone moving the real mouse (e.g. over RDP) mid-click turns it into a drag
   const at = getCursorPos();
-  if (at.x !== screen.x || at.y !== screen.y) {
+  if (moved && (at.x !== screen.x || at.y !== screen.y)) {
     console.log(`⚠ clickAt: real mouse moved during the click (to ${at.x},${at.y}, click at ${screen.x},${screen.y})`);
   }
   await sleep(settleMs);

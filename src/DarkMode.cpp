@@ -739,6 +739,16 @@ void WindowCorners_UnitTests() {
                                   MAKELPARAM(window.x + close.x + close.dx / 2, window.y + close.y + close.dy / 2)) ==
                      HTCLOSE);
             utassert(str::Eq(HwndGetTextTemp(dialog.hwnd), StrL("Scaled caption test")));
+            int paintsBefore = appCaptionPaintCount;
+            SendMessageW(dialog.hwnd, WM_NCMOUSEMOVE, HTCLOSE,
+                         MAKELPARAM(window.x + close.x + close.dx / 2, window.y + close.y + close.dy / 2));
+            utassert(appCaptionPaintCount - paintsBefore == 1);
+            paintsBefore = appCaptionPaintCount;
+            for (int i = 0; i < 100; i++)
+                SendMessageW(dialog.hwnd, WM_NCMOUSEMOVE, HTCLOSE,
+                             MAKELPARAM(window.x + close.x + close.dx / 2, window.y + close.y + close.dy / 2));
+            utassert(appCaptionPaintCount == paintsBefore);
+            SendMessageW(dialog.hwnd, WM_NCMOUSELEAVE, 0, 0);
             const Size clientSizes[] = {{320, 240}, {640, 480}};
             for (Size expected : clientSizes) {
                 ResizeHwndToClientArea(dialog.hwnd, expected.dx, expected.dy, false);
