@@ -1,7 +1,7 @@
 // The highlighter is a mode that highlights text: every text selection finished
 // while it's on becomes a highlight annotation, text already selected when it's
-// picked is highlighted at once, and Esc leaves it. Ink paints the way the old
-// highlighter brush did: 40% yellow by default, 16 points wide.
+// picked is highlighted at once, and Esc leaves it. The ink fixture uses the
+// old highlighter brush style: 40% yellow, 16 points wide.
 //
 // Run: bun tests/issue-6137.ts [--no-build]
 
@@ -161,8 +161,21 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makePdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
-    "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
+    [
+      "UiLanguage = en",
+      "RestoreSession = false",
+      "ShowStartPage = false",
+      "CheckForUpdates = false",
+      "Annotations [",
+      "\tInkBallpoint [",
+      "\t\tColor = #ffff00",
+      "\t\tWidth = 16",
+      "\t\tOpacity = 40",
+      "\t]",
+      "]",
+      "",
+    ].join("\n"),
   );
 
   const { proc, client, frame } = await launchControlled([
@@ -236,7 +249,7 @@ export async function testit(): Promise<void> {
     postMessage(frame, WM_KEYUP, VK_RETURN, 0);
     await waitUntil(client, (st) => !st.highlighter, "Enter did not leave the highlighter");
 
-    // ink: translucent 40% yellow and 16 points wide by default, stays on
+    // ink: the configured 40% yellow, 16-point stroke stays on
     const canvasRect = getClientRect(canvas);
     const cx = Math.floor(canvasRect.right / 2);
     const cy = Math.floor(canvasRect.bottom / 2);

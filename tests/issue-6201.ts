@@ -79,7 +79,7 @@ export async function testit(): Promise<void> {
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
   writeFileSync(
-    `${appdata}/SumatraPDF-settings.txt`,
+    `${appdata}/SumatraPDFEnhanced-settings.txt`,
     ["RestoreSession = false", "SmoothScroll = false", "ScrollEdgeTurnsPage = false", ""].join("\n"),
   );
 

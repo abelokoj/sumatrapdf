@@ -12,7 +12,7 @@
 // These are for *ad-hoc* tests (not checked in). Put reusable helpers here, not
 // in the individual ad-hoc scripts.
 
-import { cmdId, drainProcStderr, EXE, setFailureContext } from "./util.ts";
+import { cmdId, drainProcStderr, EXE, setFailureContext, SLOW_BUILD_FACTOR } from "./util.ts";
 import {
   testWindowPos,
   waitForWindowIdle,
@@ -24,6 +24,7 @@ import {
   packCoords,
   sleep,
   sendMessage,
+  sendMessageTimeout,
   postMessage,
   sendText,
   captureWindowToPng,
@@ -33,6 +34,7 @@ import {
   SM_CXVSCROLL,
   WM_LBUTTONDOWN,
   WM_LBUTTONUP,
+  WM_MOUSEMOVE,
   WM_KEYDOWN,
   WM_CONTEXTMENU,
   WM_COMMAND,
@@ -56,7 +58,7 @@ import {
 } from "./winapi.ts";
 
 export { ensureModifierKeysUp };
-import { ControlClient, uniquePipeName } from "./control.ts";
+import { ControlClient, ControlCommand, uniquePipeName } from "./control.ts";
 
 export { captureWindowToPng, killProcessesNamed };
 
@@ -151,6 +153,33 @@ export function launchSumatra(args: string[], opts?: { defaultWindowPos?: boolea
   return Bun.spawn([EXE, "-for-testing", ...posArgs, ...args], { stdout: "ignore", stderr: "ignore" });
 }
 
+export async function scrollToolbarToCommand(
+  client: ControlClient,
+  frame: number,
+  command: string | number,
+  kind: "annotation" | "main" = "annotation",
+): Promise<string> {
+  const id = typeof command === "string" ? cmdId(command) : command;
+  const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
+  if (!toolbar) throw new Error("Toolbar window missing");
+  const prefix = kind === "annotation" ? "annotation-idx" : "idx";
+  const visible = new RegExp(
+    `^${prefix}=\\d+ cmd=${id} hidden=0 (?:enabled=\\d )?rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)`,
+    "m",
+  );
+  const point = clientToScreen(toolbar, 10, 10);
+  let raw = "";
+  for (const direction of [-1, 1]) {
+    for (let i = 0; i < 64; i++) {
+      raw = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+      const match = visible.exec(raw);
+      if (match && +match[3]! > +match[1]! && +match[4]! > +match[2]!) return raw;
+      sendMessage(toolbar, 0x020e, ((direction * 120) & 0xffff) << 16, packCoords(point.x, point.y));
+    }
+  }
+  throw new Error(`Toolbar command ${command} is unreachable by horizontal scrolling\n${raw}`);
+}
+
 // Launch with -dbg-control so the test can wait for render-idle (and other
 // control commands) instead of sleeping. saveSettings: skip -for-testing when
 // the test has to read back the settings file. env: extra environment variables.
@@ -210,7 +239,7 @@ export async function launchControlled(
 }
 
 export function sendCommandSync(hwnd: number, id: number): void {
-  sendMessage(hwnd, WM_COMMAND, id, 0);
+  sendMessageTimeout(hwnd, WM_COMMAND, id, 0, Math.min(60_000, 30_000 * SLOW_BUILD_FACTOR));
 }
 
 export async function waitForTitle(frame: number, pred: (title: string) => boolean, timeoutMs = 8000): Promise<string> {
@@ -310,6 +339,7 @@ export async function clickAt(hwnd: number, x: number, y: number, settleMs = 350
   const screen = clientToScreen(hwnd, x, y);
   setCursorPos(screen.x, screen.y);
   const lp = packCoords(x, y);
+  sendMessage(hwnd, WM_MOUSEMOVE, extraMk, lp);
   sendMessage(hwnd, WM_LBUTTONDOWN, MK_LBUTTON | extraMk, lp);
   sendMessage(hwnd, WM_LBUTTONUP, extraMk, lp);
 

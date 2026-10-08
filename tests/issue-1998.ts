@@ -56,7 +56,7 @@ export async function testit(): Promise<void> {
   const appdata = tmpPath("issue-1998-appdata");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   // kill stale dev-build instances so reuse-instance can't forward our launch
   // to an old window (which would leave our process window-less)

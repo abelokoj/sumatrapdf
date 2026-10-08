@@ -60,7 +60,7 @@ export async function testit(): Promise<void> {
   const marker = join(dir, "launched.txt");
   const viewer = join(dir, "viewer.cmd");
   writeFileSync(viewer, `@echo off\r\necho launched> "${marker}"\r\n`);
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settings());
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settings());
 
   if (!reg(["add", `HKCU\\${APP_PATHS}`, "/ve", "/t", "REG_SZ", "/d", viewer, "/f"]).ok) {
     throw new Error("failed to register the stand-in viewer in HKCU");

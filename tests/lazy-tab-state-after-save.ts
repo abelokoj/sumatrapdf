@@ -54,7 +54,7 @@ ${tabState(LOADED_PDF)}
   ]
 ]
 `;
-  writeFileSync(join(APPDATA, "SumatraPDF-settings.txt"), seed, "utf8");
+  writeFileSync(join(APPDATA, "SumatraPDFEnhanced-settings.txt"), seed, "utf8");
 }
 
 export async function testit(): Promise<void> {
@@ -66,7 +66,7 @@ export async function testit(): Promise<void> {
 
     // frees gInitialSessionData; the still-lazy first tab borrows from it
     sendCommandSync(frame, cmdId("CmdToggleFavoritesSort"));
-    const settingsPath = join(APPDATA, "SumatraPDF-settings.txt");
+    const settingsPath = join(APPDATA, "SumatraPDFEnhanced-settings.txt");
     const saveDeadline = Date.now() + 5000 * SLOW_BUILD_FACTOR;
     let previous = "";
     let saved = false;

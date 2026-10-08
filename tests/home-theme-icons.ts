@@ -49,7 +49,7 @@ export async function testit(): Promise<void> {
   const doc = join(dir, "a.pdf");
   copyFileSync(join(ROOT, "ext", "a-zlib", "zlib.3.pdf"), doc);
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `${SETTINGS}FileStates [\n\t[\n\t\tFilePath = ${doc}\n\t\tOpenCount = 1\n\t]\n]\n`,
   );
 

@@ -64,7 +64,7 @@ export async function testit(): Promise<void> {
   copyFileSync(src, keep);
 
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `${SETTINGS}FileStates [\n` +
       `\t[\n\t\tFilePath = ${a}\n\t\tOpenCount = 3\n\t]\n` +
       `\t[\n\t\tFilePath = ${b}\n\t\tOpenCount = 2\n\t]\n` +

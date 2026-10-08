@@ -52,7 +52,7 @@ ${tabState(TOC_PDF, true)}
   ]
 ]
 `;
-  writeFileSync(join(APPDATA, "SumatraPDF-settings.txt"), seed, "utf8");
+  writeFileSync(join(APPDATA, "SumatraPDFEnhanced-settings.txt"), seed, "utf8");
 }
 
 export async function testit(): Promise<void> {

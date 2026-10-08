@@ -6,7 +6,7 @@
 //
 // Runs on its own empty -appdata: the first check is about where the window
 // goes when nothing is remembered yet, and HelpWindowPos in the settings the
-// exe under test happens to load (a portable SumatraPDF-settings.txt next to
+// exe under test happens to load (a portable SumatraPDFEnhanced-settings.txt next to
 // out/<build>/SumatraPDF.exe, say) would short-circuit that placement.
 //
 // Run: bun tests/issue-6013.ts [--no-build]

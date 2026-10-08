@@ -41,11 +41,11 @@ export async function testit(): Promise<void> {
   setProcessDpiAware();
 
   // -appdata keeps this out of both the user's %APPDATA% and the portable
-  // out/dbg64/SumatraPDF-settings.txt that a manual run may have left behind
+  // out/dbg64/SumatraPDFEnhanced-settings.txt that a manual run may have left behind
   const appDataDir = tmpPath("issue-5850-appdata");
   rmSync(appDataDir, { recursive: true, force: true });
   mkdirSync(appDataDir, { recursive: true });
-  writeFileSync(join(appDataDir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appDataDir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const { proc, client, frame } = await launchControlled(["-appdata", appDataDir, PDF], { defaultWindowPos: true });
   try {

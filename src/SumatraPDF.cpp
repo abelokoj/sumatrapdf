@@ -1271,6 +1271,8 @@ void ControllerCallbackHandler::RenderThumbnail(DisplayModel* dm, Size size, con
 // unavailable/encrypted file from being retried on every home paint.
 static Vec<Str> gThumbnailRequests;
 static Vec<Str> gThumbnailFailures;
+static Vec<Str> gPendingThumbnailRequests;
+constexpr int kMaxThumbnailRequests = 2;
 
 static bool ThumbnailPathInList(const Vec<Str>& paths, Str path) {
     for (Str candidate : paths) {
@@ -1299,6 +1301,23 @@ struct CreateThumbnailFromFileData {
     }
 };
 
+static void CreateThumbnailFromFileAsync(FileState*, EngineBase*);
+
+static void PumpThumbnailRequests() {
+    if (len(gWindows) == 0) {
+        for (Str path : gPendingThumbnailRequests) str::Free(path);
+        VecReset(gPendingThumbnailRequests);
+        return;
+    }
+    while (len(gPendingThumbnailRequests) > 0 && len(gThumbnailRequests) < kMaxThumbnailRequests) {
+        Str path = gPendingThumbnailRequests[0];
+        VecRemoveAt(gPendingThumbnailRequests, 0);
+        FileState* ds = FileHistoryFindByPath(path);
+        if (ds && ShouldSaveThumbnail(ds)) CreateThumbnailFromFileAsync(ds, nullptr);
+        str::Free(path);
+    }
+}
+
 static void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
     for (int i = 0; i < len(gThumbnailRequests); i++) {
         Str path = gThumbnailRequests[i];
@@ -1323,6 +1342,7 @@ static void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
         d->bmp = nullptr;
     }
     delete d;
+    PumpThumbnailRequests();
     HomePageInvalidateLayoutCache();
     for (MainWindow* win : gWindows) {
         if (!win->IsDocLoaded()) {
@@ -1403,7 +1423,13 @@ static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
 // used for lazy-loaded files that don't have a loaded controller
 static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nullptr) {
     if (ThumbnailPathInList(gThumbnailRequests, ds->filePath) ||
-        ThumbnailPathInList(gThumbnailFailures, ds->filePath) || len(gThumbnailRequests) >= 2) {
+        ThumbnailPathInList(gThumbnailFailures, ds->filePath) ||
+        ThumbnailPathInList(gPendingThumbnailRequests, ds->filePath)) {
+        SafeEngineRelease(&engine);
+        return;
+    }
+    if (len(gThumbnailRequests) >= kMaxThumbnailRequests) {
+        VecAppend(gPendingThumbnailRequests, str::Dup(ds->filePath));
         SafeEngineRelease(&engine);
         return;
     }

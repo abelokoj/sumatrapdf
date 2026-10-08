@@ -70,7 +70,7 @@ async function checkFile(docPath: string): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `${SETTINGS}FileStates [\n\t[\n\t\tFilePath = ${docPath}\n\t\tOpenCount = 3\n\t]\n]\n`,
   );
 

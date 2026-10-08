@@ -67,7 +67,7 @@ async function openAtZoom(
   const appdata = tmpPath("issue-1195-appdata");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  const settingsPath = join(appdata, "SumatraPDF-settings.txt");
+  const settingsPath = join(appdata, "SumatraPDFEnhanced-settings.txt");
   const settings = ["RestoreSession = false", "ReuseInstance = false", "CheckForUpdates = false", zoomLevels, ""];
   writeFileSync(settingsPath, settings.join("\n"));
 

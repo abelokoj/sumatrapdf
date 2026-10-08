@@ -37,7 +37,7 @@ export async function testit(): Promise<void> {
   const appdata = tmpPath("issue-6143-appdata");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), settings());
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), settings());
 
   const empty = join(dir, "empty.md");
   writeFileSync(empty, "");

@@ -125,7 +125,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("image-only-palette-items");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   await checkDocument(join(ROOT, "ext", "a-zlib", "zlib.3.pdf"), false, dir);
   await checkDocument(join(ROOT, "tests", "issue-1201-data", "001.png"), true, dir);

@@ -3155,11 +3155,26 @@ Annotation* TakeCutAnnotation() {
 
 // True if annot belongs to engine. Used to find the tab showing the document a
 // cut annotation lives in, which can be a different one than we paste into.
-bool EngineOwnsAnnotation(EngineBase* engine, Annotation* annot) {
-    if (!engine || !annot) {
+bool EngineOwnsAnnotation(EngineBase* engine, Annotation* annot, int pageNo) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    if (!e || !annot) {
         return false;
     }
-    return AsEngineMupdf(engine) == annot->engine;
+    // Undo can free the wrapper. Compare cached pointers before reading it.
+    AutoUnlockRecursiveMutex scope(&e->pagesLock);
+    if (pageNo > 0) {
+        FzPageInfo* pi = e->PageInfoByPageNo(pageNo);
+        return pi && (VecContains(pi->annotations, annot) || VecContains(pi->widgets, annot));
+    }
+    for (Vec<FzPageInfo*>* pages : e->chapterPages) {
+        if (!pages) continue;
+        for (FzPageInfo* pi : *pages) {
+            if (pi && (VecContains(pi->annotations, annot) || VecContains(pi->widgets, annot))) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Snapshot a live annotation so PasteCopiedAnnotation can recreate it.
@@ -3578,6 +3593,7 @@ bool Annotation_UnitTestInkRoundtrip() {
             }
             EngineMupdfEndOperation(engine);
             ok = ok && EngineMupdfUndo(engine, removed);
+            ok = ok && !EngineOwnsAnnotation(engine, copy) && !EngineOwnsAnnotation(engine, copy, 1);
             EngineMupdfGetAnnotations(engine, annotations);
             ok = ok && len(annotations) == 1 && EngineMupdfRedo(engine, removed);
             EngineMupdfGetAnnotations(engine, annotations);

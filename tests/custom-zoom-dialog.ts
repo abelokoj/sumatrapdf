@@ -32,7 +32,8 @@ import { sendCommand, waitForFrame } from "./win-automation.ts";
 
 const DIALOG_CLASS = "SumatraWgDefaultWinClass";
 
-// every level the dialog offers, in the order the list has them
+// Legacy numeric presets keep the complete keyboard traversal bounded. The
+// default dense list's additional fit modes are checked separately below.
 const ZOOM_LEVELS = [
   "Fit Page",
   "Fit Width",
@@ -55,6 +56,9 @@ const ZOOM_LEVELS = [
   "12.5%",
   "8.33%",
 ];
+
+const NUMERIC_ZOOM_LEVELS = ZOOM_LEVELS.filter((level) => level.endsWith("%")).map((level) => parseFloat(level));
+const CUSTOM_ZOOM_LEVELS = [...ZOOM_LEVELS.slice(0, 4), ...ZOOM_LEVELS.slice(7)];
 
 function findDialog(pid: number, frame: number): number {
   let res = 0;
@@ -146,6 +150,48 @@ async function zoomLabel(client: ControlClient): Promise<string> {
   return /zoom=(.+)$/m.exec(raw)?.[1]?.trim() ?? "";
 }
 
+// Default levels include all seven fit modes, even though an explicit
+// ZoomLevels list prepends only the first four. A non-preset starting zoom lets
+// Down enter at the first mode without walking through hundreds of percentages.
+async function checkDefaultModes(): Promise<void> {
+  const appdata = writeAppdata(
+    "custom-zoom-dialog-default-modes",
+    ["UiLanguage = en", "RestoreSession = false", "ShowStartPage = false", "CheckForUpdates = false"].join("\n"),
+  );
+  const pdf = join(ROOT, "tests", "issue-5871.pdf");
+  await withControlledSumatra(
+    EXE,
+    async (client, proc) => {
+      const pid = proc.pid!;
+      const frame = await waitForFrame(pid);
+      await client.waitForRenderIdle(30000);
+      await client.setNotificationsEnabled(false);
+      sendCommand(frame, cmdId("CmdZoomCustom"));
+      const dlg = await waitForDialog(pid, frame);
+      const edit = findChildWindow(dlg, "Edit");
+      await editText(edit, "137%", "the default list did not retain a non-preset zoom");
+      for (const mode of ZOOM_LEVELS.slice(0, 7)) {
+        await pressKey(edit, VK_DOWN);
+        await editText(edit, mode, "Down did not traverse the default fit modes");
+      }
+      await pressKey(edit, VK_DOWN);
+      await editText(edit, "6400%", "the default fit modes did not lead to the highest percentage");
+      const modes = (await walk(edit, VK_UP)).reverse();
+      const expected = [...ZOOM_LEVELS.slice(0, 7), "6400%"];
+      if (modes.join() !== expected.join()) {
+        throw new Error(`custom-zoom-dialog: the default fit modes are [${modes.join()}]`);
+      }
+      await pressKey(edit, VK_RETURN);
+      await waitForDialogGone(pid, frame);
+      const zoom = await zoomLabel(client);
+      if (zoom !== "fit page") {
+        throw new Error(`custom-zoom-dialog: the default fit mode zoomed to ${zoom}, want fit page`);
+      }
+    },
+    ["-appdata", appdata, "-window-pos", "1100x900@40x40", "-zoom", "137", pdf],
+  );
+}
+
 // More levels than the screen has room for: the list gives rows back rather
 // than growing a dialog taller than the monitor it opens on.
 async function checkTallList(): Promise<void> {
@@ -197,7 +243,13 @@ async function checkTallList(): Promise<void> {
 export async function testit(): Promise<void> {
   const appdata = writeAppdata(
     "custom-zoom-dialog",
-    ["UiLanguage = en", "RestoreSession = false", "ShowStartPage = false", "CheckForUpdates = false"].join("\n"),
+    [
+      "UiLanguage = en",
+      "RestoreSession = false",
+      "ShowStartPage = false",
+      "CheckForUpdates = false",
+      `ZoomLevels = ${NUMERIC_ZOOM_LEVELS.join(" ")}`,
+    ].join("\n"),
   );
   const pdf = join(ROOT, "tests", "issue-5871.pdf");
 
@@ -260,7 +312,7 @@ export async function testit(): Promise<void> {
       const down = await walk(edit2, VK_DOWN);
       const up = await walk(edit2, VK_UP);
       const all = up.slice().reverse();
-      if (all.join() !== ZOOM_LEVELS.join()) {
+      if (all.join() !== CUSTOM_ZOOM_LEVELS.join()) {
         throw new Error(`custom-zoom-dialog: the levels are [${all.join()}]`);
       }
       if (down[down.length - 1] !== "8.33%") {
@@ -280,6 +332,7 @@ export async function testit(): Promise<void> {
     ["-appdata", appdata, "-window-pos", "1100x900@40x40", "-zoom", "100", pdf],
   );
 
+  await checkDefaultModes();
   await checkTallList();
 
   console.log("custom-zoom-dialog: OK");

@@ -123,7 +123,7 @@ export async function testit(): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
   const appdata = join(dir, "appdata");
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   // saveSettings: applying a value re-reads the settings file, so the app must
   // be allowed to write it first

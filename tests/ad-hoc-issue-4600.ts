@@ -150,7 +150,7 @@ async function render(epub: string, cfg: Cfg): Promise<Uint8Array> {
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     [
       `EBookUI [`,
       `\tFontName = ${cfg.fontName}`,

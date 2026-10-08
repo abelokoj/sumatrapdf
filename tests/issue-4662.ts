@@ -25,7 +25,7 @@ export async function testit(): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `SmoothScroll = true
 UiLanguage = en
 RestoreSession = false

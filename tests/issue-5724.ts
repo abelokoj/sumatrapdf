@@ -87,7 +87,7 @@ export async function testit(): Promise<void> {
 
   const on = join(dir, "on");
   mkdirSync(on, { recursive: true });
-  writeFileSync(join(on, "SumatraPDF-settings.txt"), "AutoGenerateTOC = true\n");
+  writeFileSync(join(on, "SumatraPDFEnhanced-settings.txt"), "AutoGenerateTOC = true\n");
   const got = await getToc(noOutline, on);
   const expected = "I. Introduction|page=1\n" + "II. Methods|page=2\n" + "  II.A. Nested section|page=2\n";
   if (got !== expected) {

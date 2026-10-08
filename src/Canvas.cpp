@@ -2252,7 +2252,7 @@ static bool ValidateLasso(MainWindow* win) {
         return false;
     }
     for (Annotation* annot : lasso.selected) {
-        if (!AnnotationIsLive(annot) || !EngineOwnsAnnotation(dm->GetEngine(), annot) ||
+        if (!EngineOwnsAnnotation(dm->GetEngine(), annot, lasso.pageNo) || !AnnotationIsLive(annot) ||
             annot->pageNo != lasso.pageNo) {
             ClearLassoSelection(lasso);
             break;

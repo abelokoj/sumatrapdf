@@ -47,7 +47,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("reuse-instance-fullscreen");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   await withControlledSumatra(
     EXE,

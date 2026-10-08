@@ -35,6 +35,7 @@ import {
   findCanvas,
   killAndWait,
   launchControlled,
+  scrollToolbarToCommand,
   pressEscape,
   sendCommand,
   sendCommandSync,
@@ -233,7 +234,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -257,16 +258,17 @@ export async function testit(): Promise<void> {
     const outside = { x: 2, y: center.y };
 
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
-    const toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
-    const squareButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotSquare");
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickSquareToolbar = () =>
-      clickAt(
+    const clickSquareToolbar = async () => {
+      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotSquare");
+      const squareButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotSquare");
+      await clickAt(
         toolbar,
         squareButton.x + Math.floor(squareButton.dx / 2),
         squareButton.y + Math.floor(squareButton.dy / 2),
         0,
       );
+    };
 
     await clickSquareToolbar();
     let state = await waitForPlacement(client, true);

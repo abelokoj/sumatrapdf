@@ -12,7 +12,14 @@ import { join } from "node:path";
 import { ControlClient, ControlCommand } from "./control";
 import { ROOT, cmdId, pollUntil, runStandalone, tmpPath } from "./util";
 import { getFocusedHwnd, isWindowVisible, postMessage, WM_KEYDOWN } from "./winapi";
-import { clickAt, findChildByClass, killAndWait, launchControlled, sendCommandSync } from "./win-automation";
+import {
+  clickAt,
+  findChildByClass,
+  killAndWait,
+  launchControlled,
+  scrollToolbarToCommand,
+  sendCommandSync,
+} from "./win-automation";
 
 const VK_ESCAPE = 0x1b;
 const SRC_PDF = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
@@ -40,7 +47,7 @@ export async function testit(): Promise<void> {
   const pdf = join(appData, "doc.pdf");
   copyFileSync(SRC_PDF, pdf);
   writeFileSync(
-    join(appData, "SumatraPDF-settings.txt"),
+    join(appData, "SumatraPDFEnhanced-settings.txt"),
     ["UiLanguage = en", "CheckForUpdates = false", "RestoreSession = false", "EscToExit = true", ""].join("\n"),
   );
 
@@ -52,7 +59,7 @@ export async function testit(): Promise<void> {
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
 
     // start placement from the toolbar button, the way a user does
-    const dump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+    const dump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotText");
     const id = cmdId("CmdCreateAnnotText");
     const re = new RegExp(`annotation-idx=\\d+ cmd=${id} hidden=0 enabled=1 rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)`);
     const m = re.exec(dump);

@@ -198,6 +198,9 @@ void ToolbarLayout_UnitTests() {
     bool before = false, after = false;
     utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, 0, first, visible, before, after));
     utassert(!visible[0] && visible[1] && !visible[2] && !before && after);
+    first = 0;
+    utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, -1, first, visible, before, after));
+    utassert(visible[0] && !visible[1] && !before && after);
     first = 2;
     utassert(FitScrolledToolbarGroups(widths, 300, 6, 108, 0, first, visible, before, after));
     utassert(!visible[1] && visible[2] && !visible[3] && before && after);
@@ -407,8 +410,9 @@ struct ToolbarLine : HBox {
             widths[findGroupIdx] = withoutFind + searchDx;
         }
         Vec<bool> visible;
-        bool overflow = FitScrolledToolbarGroups(widths, available, gap, overflowDx, brandIdx, firstGroup, visible,
-                                                 canScrollBefore, canScrollAfter);
+        int removableBrand = tb->findExpanded && findGroupIdx == brandIdx ? -1 : brandIdx;
+        bool overflow = FitScrolledToolbarGroups(widths, available, gap, overflowDx, removableBrand, firstGroup,
+                                                 visible, canScrollBefore, canScrollAfter);
         for (int i = 0; i < len(widths); i++) {
             if (widths[i] > 0 && !visible[i]) HideLayout(children[i].layout);
         }
@@ -3368,7 +3372,8 @@ static void EnsureAnnotPresetColor(int cmdId, Color col) {
 // out, for the -dbg-control dump
 static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, int cmdId, bool withNone,
                                      Vec<ToolbarColorSwatch*>* swatchesOut, const Func1<VirtMouseEvent*>& onSwatch,
-                                     const Func1<VirtMouseEvent*>& onEdit, ILayout* extra = nullptr, Str title = {}) {
+                                     const Func1<VirtMouseEvent*>& onEdit, ILayout* extra = nullptr, Str title = {},
+                                     VirtIconButton** editOut = nullptr) {
     ToolbarVirt* tb = win->toolbarVirt;
     Vec<Color> colors;
     AnnotPresetColors(cmdId, colors);
@@ -3415,6 +3420,7 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     edit->pixmap = GetCachedPixmapForSvg(Str(kEnhancedIconEdit), iconSize, iconSize, TbTextColor(), TbBgColor());
     edit->SetTooltip(Tr("Edit colors"));
     edit->onClick = onEdit;
+    if (editOut) *editOut = edit;
     if (cmdId != CmdCreateAnnotInk) row->AddChild(edit);
 
     auto* labelText = NewVirtText({
@@ -4109,6 +4115,7 @@ struct AnnotColorPopup {
     // non-owning, for tests; the layout tree owns them
     Vec<ToolbarColorSwatch*> swatches;
     InkThicknessSlider* slider = nullptr;
+    VirtIconButton* edit = nullptr;
 };
 
 static AnnotColorPopup* gAnnotColorPopup = nullptr;
@@ -4248,7 +4255,7 @@ void ShowAnnotColorPopup(MainWindow* win, Rect anchor, Color current, bool withN
             : nullptr;
     ILayout* layout =
         MakeAnnotColorsPanel(win, label, current, 0, withNone, &p->swatches, MkFunc1(OnAnnotColorPopupSwatch, p),
-                             MkFunc1(OnAnnotColorPopupEdit, p), extra);
+                             MkFunc1(OnAnnotColorPopupEdit, p), extra, {}, &p->edit);
     p->slider = slider;
     ShowAnnotPopupHost(p, layout, anchor);
 }
@@ -4376,8 +4383,14 @@ TempStr AnnotColorPopupStateTemp() {
         Rect sr = p->slider->BoundsInWindow();
         thickness = fmt("%g:%d,%d,%d,%d", p->slider->Width(), r.x + sr.x, r.y + sr.y, sr.dx, sr.dy);
     }
-    return fmt("annotColorPopup visible=1 n=%d placed=%d,%d,%d,%d thickness=%s swatches=%s\n", len(p->swatches), r.x,
-               r.y, r.dx, r.dy, thickness, ToStrTemp(swatches));
+    Rect er{};
+    if (p->edit) {
+        er = p->edit->BoundsInWindow();
+        er.x += r.x;
+        er.y += r.y;
+    }
+    return fmt("annotColorPopup visible=1 n=%d placed=%d,%d,%d,%d edit=%d,%d,%d,%d thickness=%s swatches=%s\n",
+               len(p->swatches), r.x, r.y, r.dx, r.dy, er.x, er.y, er.dx, er.dy, thickness, ToStrTemp(swatches));
 }
 
 static void OnToolbarMouseMove(MainWindow* win, Point pt) {
@@ -5648,7 +5661,7 @@ static void ToolbarInteractionTests() {
     ToolbarVirt toolbar;
     win.toolbarVirt = &toolbar;
     VirtHost::CreateArgs args;
-    args.className = WStrL("SumatraToolbarInteractionTest");
+    args.className = WStrL(L"SumatraToolbarInteractionTest");
     args.initialSize = {240, 40};
     args.isPopup = true;
     args.visible = false;

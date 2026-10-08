@@ -89,7 +89,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("text-snippets");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
   const pdf = join(dir, "blank.pdf");
   writeFileSync(
     pdf,

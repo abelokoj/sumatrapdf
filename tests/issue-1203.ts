@@ -138,7 +138,7 @@ export async function testit(): Promise<void> {
   const onDir = tmpPath("issue-1203-on");
   rmSync(onDir, { recursive: true, force: true });
   mkdirSync(onDir, { recursive: true });
-  writeFileSync(join(onDir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}ClickEdgeToTurnPage = true\n`);
+  writeFileSync(join(onDir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS_HEAD}ClickEdgeToTurnPage = true\n`);
 
   await withControlledSumatra(
     EXE,
@@ -164,7 +164,7 @@ export async function testit(): Promise<void> {
   const offDir = tmpPath("issue-1203-off");
   rmSync(offDir, { recursive: true, force: true });
   mkdirSync(offDir, { recursive: true });
-  writeFileSync(join(offDir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}ClickEdgeToTurnPage = false\n`);
+  writeFileSync(join(offDir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS_HEAD}ClickEdgeToTurnPage = false\n`);
 
   await withControlledSumatra(
     EXE,

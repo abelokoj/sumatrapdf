@@ -164,7 +164,10 @@ export async function testit(): Promise<void> {
     sendCommandSync(frame, cmdId("CmdLassoDuplicate"));
     requireInk(await dump(client), 4, () => true, "Lasso did not duplicate both annotations");
     sendCommandSync(frame, cmdId("CmdUndo"));
-    const beforeErase = requireInk(await dump(client), 2, () => true, "Duplicate did not undo in one step");
+    const undone = await dump(client);
+    const beforeErase = requireInk(undone, 2, () => true, "Duplicate did not undo in one step");
+    if (!undone.includes("lasso active=1 drawing=0 transforming=0 selected=0"))
+      throw new Error(`Undo retained a selection of deleted duplicates\n${undone}`);
     sendCommandSync(frame, cmdId("CmdInkSegmentEraser"));
     await gesture(
       canvas,

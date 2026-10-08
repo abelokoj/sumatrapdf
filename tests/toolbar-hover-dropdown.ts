@@ -38,6 +38,7 @@ import {
   killAndWait,
   launchControlled,
   parkCursorAway,
+  scrollToolbarToCommand,
   sendCommand,
   sendCommandSync,
 } from "./win-automation.ts";
@@ -99,7 +100,8 @@ async function mainButtons(client: ControlClient): Promise<Btn[]> {
   return res;
 }
 
-async function waitAnnotButton(client: ControlClient, cmd: number, what: string): Promise<Btn> {
+async function waitAnnotButton(client: ControlClient, frame: number, cmd: number, what: string): Promise<Btn> {
+  await scrollToolbarToCommand(client, frame, cmd);
   const deadline = Date.now() + 8000 * SLOW_BUILD_FACTOR;
   for (;;) {
     const b = (await annotButtons(client)).find((v) => v.cmd === cmd && !v.hidden && v.dx > 0);
@@ -425,6 +427,7 @@ async function checkCustomZoomLevels(dir: string, pdf: string): Promise<void> {
     if (!toolbar) {
       throw new Error("toolbar-hover-dropdown: no toolbar");
     }
+    await scrollToolbarToCommand(client, frame, "CmdZoomIn", "main");
     const zoomIn = (await mainButtons(client)).find((b) => b.cmd === cmdId("CmdZoomIn") && !b.hidden && b.dx > 0);
     if (!zoomIn) {
       throw new Error("toolbar-hover-dropdown: no Zoom In button");
@@ -469,7 +472,7 @@ export async function testit(): Promise<void> {
   const appdata = join(dir, "appdata");
   mkdirSync(appdata);
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -490,7 +493,12 @@ export async function testit(): Promise<void> {
     const pid = proc.pid!;
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
 
-    const save = await waitAnnotButton(client, cmdId("CmdSaveAnnotations"), "no Save button on the Edit PDF toolbar");
+    const save = await waitAnnotButton(
+      client,
+      frame,
+      cmdId("CmdSaveAnnotations"),
+      "no Save button on the Edit PDF toolbar",
+    );
     if ((await annotButtons(client)).some((b) => b.cmd === cmdId("CmdSaveAnnotationsNewFile"))) {
       throw new Error("toolbar-hover-dropdown: Save to a new PDF is still its own toolbar button");
     }
@@ -508,7 +516,7 @@ export async function testit(): Promise<void> {
     await waitAnnotCount(client, 2, "could not create an annotation to save");
 
     // creating it may have relaid out the row, so re-read where Save sits
-    const save2 = await waitAnnotButton(client, cmdId("CmdSaveAnnotations"), "Save button vanished");
+    const save2 = await waitAnnotButton(client, frame, cmdId("CmdSaveAnnotations"), "Save button vanished");
     const cx = save2.x + Math.floor(save2.dx / 2);
     const cy = save2.y + Math.floor(save2.dy / 2);
     const menu = await hoverUntilMenu(toolbar, pid, cx, cy, "resting on Save did not open the drop-down");
@@ -587,6 +595,7 @@ export async function testit(): Promise<void> {
     await waitAnnotCount(client, 2, "could not create an annotation to save from the icon");
     const save3 = await waitAnnotButton(
       client,
+      frame,
       cmdId("CmdSaveAnnotations"),
       "Save button vanished before the icon click",
     );
@@ -613,6 +622,7 @@ export async function testit(): Promise<void> {
     sendCommand(frame, cmdId("CmdZoom100"));
     await waitZoom(client, "100", "could not set the zoom to 100%");
 
+    await scrollToolbarToCommand(client, frame, "CmdZoomIn", "main");
     const zoomIn = (await mainButtons(client)).find((b) => b.cmd === cmdId("CmdZoomIn") && !b.hidden && b.dx > 0);
     if (!zoomIn) {
       throw new Error("toolbar-hover-dropdown: no Zoom In button");
@@ -708,6 +718,7 @@ export async function testit(): Promise<void> {
     // the two zoom buttons share the strip: crossing from one to the other
     // leaves it exactly where it is rather than sliding it under the other
     // button, and it does not close and open again on the way
+    await scrollToolbarToCommand(client, frame, "CmdZoomOut", "main");
     const zoomOut = (await mainButtons(client)).find((b) => b.cmd === cmdId("CmdZoomOut") && !b.hidden && b.dx > 0);
     if (!zoomOut) {
       throw new Error("toolbar-hover-dropdown: no Zoom Out button");

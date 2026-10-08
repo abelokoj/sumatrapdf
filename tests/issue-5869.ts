@@ -90,7 +90,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("issue-5869");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const pdf = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
   const res = await withControlledSumatra(EXE, (client) => client.request(ControlCommand.TestToolbarButtons, []), [

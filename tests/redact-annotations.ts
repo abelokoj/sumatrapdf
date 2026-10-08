@@ -29,6 +29,7 @@ import {
   killAndWait,
   launchControlled,
   pressEscape,
+  scrollToolbarToCommand,
   sendCommand,
   sendCommandSync,
 } from "./win-automation.ts";
@@ -137,14 +138,17 @@ function annotBtnHidden(dump: string, cmd: number): string | null {
 
 // The Apply Redactions button is added to / removed from the annotation
 // toolbar as marks come and go, so poll rather than read once. Redact is the
-// reference: while the whole row is down every button in it reads as hidden.
-async function waitApplyButton(client: ControlClient, want: boolean, what: string): Promise<void> {
+// reference: scrolling distinguishes an off-screen group from a hidden action.
+async function waitApplyButton(client: ControlClient, frame: number, want: boolean, what: string): Promise<void> {
   const apply = cmdId("CmdApplyRedactions");
   const redact = cmdId("CmdCreateAnnotRedact");
   const deadline = Date.now() + 8000 * SLOW_BUILD_FACTOR;
   let why = "the annotation toolbar never came up";
+  await scrollToolbarToCommand(client, frame, redact);
   for (;;) {
-    const raw = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+    const raw = want
+      ? await scrollToolbarToCommand(client, frame, apply)
+      : String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
     if (annotBtnHidden(raw, redact) === "0") {
       const h = annotBtnHidden(raw, apply);
       if (h !== null && (h === "0") === want) {
@@ -168,7 +172,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeTextPdf());
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -187,7 +191,7 @@ export async function testit(): Promise<void> {
 
     sendCommand(frame, cmdId("CmdToggleEditPDF"));
     await sleep(200);
-    await waitApplyButton(client, false, "Apply Redactions is on the toolbar with nothing marked");
+    await waitApplyButton(client, frame, false, "Apply Redactions is on the toolbar with nothing marked");
 
     sendCommandSync(frame, cmdId("CmdSelectTextViaKeyboard"));
     const startDeadline = Date.now() + 4000 * SLOW_BUILD_FACTOR;
@@ -226,7 +230,7 @@ export async function testit(): Promise<void> {
     if (!/page1text=.*SECRETWORD/.test(raw)) {
       throw new Error(`redact-annotations: marking must leave the text in the file\n${raw}`);
     }
-    await waitApplyButton(client, true, "Apply Redactions did not appear once text was marked");
+    await waitApplyButton(client, frame, true, "Apply Redactions did not appear once text was marked");
 
     sendCommandSync(frame, cmdId("CmdApplyRedactions"));
     await client.waitForRenderIdle();
@@ -251,7 +255,7 @@ export async function testit(): Promise<void> {
     sendCommandSync(frame, cmdId("CmdApplyRedactions"));
     await client.waitForRenderIdle();
     await waitForMarkup(client, (s) => !/type=Redact /.test(s), "apply did not remove the area mark");
-    await waitApplyButton(client, false, "Apply Redactions stayed on the toolbar with nothing left to apply");
+    await waitApplyButton(client, frame, false, "Apply Redactions stayed on the toolbar with nothing left to apply");
   } finally {
     client.close();
     await killAndWait(proc);

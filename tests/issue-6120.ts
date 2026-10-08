@@ -76,7 +76,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("issue-6120");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
   writeFileSync(join(dir, "doc.pdf"), makePdf(), "latin1");
 
   const { proc, client, frame } = await launchControlled([

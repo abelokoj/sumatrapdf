@@ -62,7 +62,7 @@ export async function testit(): Promise<void> {
   const appdata = tmpPath("issue-6244-appdata");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const withInfo = tmpPath("issue-6244-comicinfo.cbz");
   writeStoredZip(withInfo, [...pages(), { name: "ComicInfo.xml", data: Buffer.from(COMIC_INFO) }]);

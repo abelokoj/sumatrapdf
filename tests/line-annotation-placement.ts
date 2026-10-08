@@ -33,6 +33,7 @@ import {
   findCanvas,
   killAndWait,
   launchControlled,
+  scrollToolbarToCommand,
   pressKey,
   sendCommand,
 } from "./win-automation.ts";
@@ -199,7 +200,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -222,11 +223,17 @@ export async function testit(): Promise<void> {
     const outside = { x: 2, y: center.y };
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdToggleEditPDF"), 0);
-    const toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
-    const lineButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotLine");
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickLineToolbar = () =>
-      clickAt(toolbar, lineButton.x + Math.floor(lineButton.dx / 2), lineButton.y + Math.floor(lineButton.dy / 2), 0);
+    const clickLineToolbar = async () => {
+      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotLine");
+      const lineButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotLine");
+      await clickAt(
+        toolbar,
+        lineButton.x + Math.floor(lineButton.dx / 2),
+        lineButton.y + Math.floor(lineButton.dy / 2),
+        0,
+      );
+    };
 
     await clickLineToolbar();
     let state = await waitForPlacement(client, true);

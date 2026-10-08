@@ -19,7 +19,7 @@ function scrollbarsIn(settings: string): string {
 
 export async function testit(): Promise<void> {
   const appdata = writeAppdata("ad-hoc-embedded-scrollbars-appdata", "Scrollbars = smart");
-  const settingsPath = join(appdata, "SumatraPDF-settings.txt");
+  const settingsPath = join(appdata, "SumatraPDFEnhanced-settings.txt");
 
   const host = await launchControlled([PDF]);
   try {

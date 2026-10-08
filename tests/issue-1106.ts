@@ -63,7 +63,7 @@ export async function testit(): Promise<void> {
   const appDataDir = tmpPath("issue-1106-appdata");
   rmSync(appDataDir, { recursive: true, force: true });
   mkdirSync(appDataDir, { recursive: true });
-  writeFileSync(join(appDataDir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appDataDir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const proc = launchSumatra(["-appdata", appDataDir, PDF], { defaultWindowPos: true });
   let frame = 0;

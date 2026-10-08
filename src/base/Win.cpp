@@ -113,23 +113,17 @@ void HwndPositionInCenterOf(HWND hwnd, HWND hwndRelative) {
     SetWindowPos(hwnd, nullptr, r.x, r.y, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
 }
 
-void ResizeHwndToClientArea(HWND hwnd, int dx, int dy, bool hasMenu) {
+void ResizeHwndToClientArea(HWND hwnd, int dx, int dy, bool /*hasMenu*/) {
     WINDOWINFO wi{};
     wi.cbSize = sizeof(wi);
-    ::GetWindowInfo(hwnd, &wi);
-
-    RECT r{};
-    r.right = dx;
-    r.bottom = dy;
-    DWORD style = wi.dwStyle;
-    DWORD exStyle = wi.dwExStyle;
-    AdjustWindowRectEx(&r, style, hasMenu, exStyle);
+    if (!::GetWindowInfo(hwnd, &wi)) return;
     if ((dx == RectDx(wi.rcClient)) && (dy == RectDy(wi.rcClient))) {
         return;
     }
 
-    dx = RectDx(r);
-    dy = RectDy(r);
+    // Measure the active frame so scaled/custom captions retain the requested client area.
+    dx += RectDx(wi.rcWindow) - RectDx(wi.rcClient);
+    dy += RectDy(wi.rcWindow) - RectDy(wi.rcClient);
     int x = wi.rcWindow.left;
     int y = wi.rcWindow.top;
     MoveWindow(hwnd, x, y, dx, dy, TRUE);

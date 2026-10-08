@@ -99,7 +99,7 @@ export async function testit(): Promise<void> {
     ]),
   );
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     [
       "ReuseInstance = false",
       "RestoreSession = false",

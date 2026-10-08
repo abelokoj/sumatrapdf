@@ -52,7 +52,18 @@ enum class CloseAction {
     Select
 };
 
-// HSV picker, hex edit, swatches and Cancel/OK. Same WindowBase layout as
+enum class ColorModel {
+    Rgb,
+    Hex,
+    Cmyk,
+    Hsv,
+    Hsl
+};
+
+static constexpr int kMaxColorChannels = 4;
+static const SeqStrings kColorModels = "RGB\0HEX\0CMYK\0HSV\0HSL\0";
+
+// HSV picker, numeric color edits, swatches and Cancel/OK. Same WindowBase layout as
 // Settings. Used for Change Background Color and, when colorsArgs is set, as
 // the generic color picker (ShowChangeColorsDialog).
 struct ChangeColorWnd : WindowBase {
@@ -80,11 +91,19 @@ struct ChangeColorWnd : WindowBase {
     int selectedCustomIdx = -1;
     bool previewSelected = true;
     bool updatingEdit = false;
+    bool colorInputValid = true;
+    ColorModel colorModel = ColorModel::Hex;
 
     Pixmap* hsvPx = nullptr;
     VirtCustom* colorArea = nullptr;
+    DropDown* dropColorModel = nullptr;
     VirtText* labelRgb = nullptr;
     Edit* editRgb = nullptr;
+    ILayout* hexRow = nullptr;
+    ILayout* channelRow = nullptr;
+    ILayout* channelCells[kMaxColorChannels]{};
+    VirtText* channelLabels[kMaxColorChannels]{};
+    Edit* channelEdits[kMaxColorChannels]{};
     VirtCustom* swatchPreview = nullptr;
     VirtCustom* swatchPreset[kNumPresets]{};
     VirtCustom* swatchCustom[kMaxCustomColors]{};
@@ -124,7 +143,11 @@ struct ChangeColorWnd : WindowBase {
     void OnSwatchClick(VirtMouseEvent* ev);
     void OnSwatchContext(VirtMouseEvent* ev);
     void OnEditChanged();
+    void OnColorModelChanged();
+    void UpdateColorModelVis();
+    void FocusColorEdit();
     void Relayout();
+    int PreferredWidth();
     void RelayoutRadios();
 
     void OnRemove(VirtMouseEvent* ev = nullptr);
@@ -213,6 +236,147 @@ static Color WithAlpha(Color c, u8 a) {
 static u8 OpacityOf(Color c) {
     u8 a = GetAlpha(c);
     return a == 0 ? 0xff : a;
+}
+
+static int ColorChannelCount(ColorModel model) {
+    return model == ColorModel::Hex ? 0 : model == ColorModel::Cmyk ? 4 : 3;
+}
+
+static double ColorChannelMax(ColorModel model, int channel) {
+    if (model == ColorModel::Rgb) return 255;
+    if (model != ColorModel::Cmyk && channel == 0) return 360;
+    return 100;
+}
+
+static bool ParseColorChannel(Str text, ColorModel model, int channel, double& value) {
+    char* input = CStrTemp(text);
+    char* end = nullptr;
+    value = strtod(input, &end);
+    if (end == input || !isfinite(value)) return false;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end == '%' && model != ColorModel::Rgb && (model == ColorModel::Cmyk || channel > 0)) {
+        end++;
+        while (*end && isspace((unsigned char)*end)) end++;
+    }
+    if (*end || value < 0 || value > ColorChannelMax(model, channel)) return false;
+    return model != ColorModel::Rgb || value == floor(value);
+}
+
+static void ColorToChannels(Color color, ColorModel model, double values[kMaxColorChannels]) {
+    u8 red, green, blue;
+    UnpackColor(color, red, green, blue);
+    values[0] = red;
+    values[1] = green;
+    values[2] = blue;
+    values[3] = 0;
+    if (model == ColorModel::Rgb || model == ColorModel::Hex) return;
+
+    double r = red / 255.0, g = green / 255.0, b = blue / 255.0;
+    double hi = fmax(r, fmax(g, b));
+    double lo = fmin(r, fmin(g, b));
+    double delta = hi - lo;
+    if (model == ColorModel::Cmyk) {
+        values[0] = hi > 0 ? (hi - r) / hi * 100 : 0;
+        values[1] = hi > 0 ? (hi - g) / hi * 100 : 0;
+        values[2] = hi > 0 ? (hi - b) / hi * 100 : 0;
+        values[3] = (1 - hi) * 100;
+        return;
+    }
+
+    double hue = 0;
+    if (delta > 0) {
+        if (hi == r)
+            hue = (g - b) / delta;
+        else if (hi == g)
+            hue = (b - r) / delta + 2;
+        else
+            hue = (r - g) / delta + 4;
+        hue *= 60;
+        if (hue < 0) hue += 360;
+    }
+    values[0] = hue;
+    if (model == ColorModel::Hsv) {
+        values[1] = hi > 0 ? delta / hi * 100 : 0;
+        values[2] = hi * 100;
+        return;
+    }
+    double light = (hi + lo) / 2;
+    values[1] = delta > 0 ? delta / (1 - fabs(2 * light - 1)) * 100 : 0;
+    values[2] = light * 100;
+}
+
+static u8 ColorByte(double value) {
+    return (u8)limitValue((int)floor(value * 255 + 0.5), 0, 255);
+}
+
+static bool ChannelsToColor(ColorModel model, const double values[kMaxColorChannels], u8 alpha, Color& color) {
+    if (model == ColorModel::Hex) return false;
+    for (int i = 0; i < ColorChannelCount(model); i++) {
+        if (!isfinite(values[i]) || values[i] < 0 || values[i] > ColorChannelMax(model, i)) return false;
+        if (model == ColorModel::Rgb && values[i] != floor(values[i])) return false;
+    }
+    double r, g, b;
+    if (model == ColorModel::Rgb) {
+        r = values[0] / 255;
+        g = values[1] / 255;
+        b = values[2] / 255;
+    } else if (model == ColorModel::Cmyk) {
+        double white = 1 - values[3] / 100;
+        r = (1 - values[0] / 100) * white;
+        g = (1 - values[1] / 100) * white;
+        b = (1 - values[2] / 100) * white;
+    } else {
+        double hue = fmod(values[0], 360.0) / 60;
+        double saturation = values[1] / 100;
+        double level = values[2] / 100;
+        double chroma = model == ColorModel::Hsv ? level * saturation : (1 - fabs(2 * level - 1)) * saturation;
+        double x = chroma * (1 - fabs(fmod(hue, 2.0) - 1));
+        double m = model == ColorModel::Hsv ? level - chroma : level - chroma / 2;
+        r = g = b = 0;
+        if (hue < 1) {
+            r = chroma;
+            g = x;
+        } else if (hue < 2) {
+            r = x;
+            g = chroma;
+        } else if (hue < 3) {
+            g = chroma;
+            b = x;
+        } else if (hue < 4) {
+            g = x;
+            b = chroma;
+        } else if (hue < 5) {
+            r = x;
+            b = chroma;
+        } else {
+            r = chroma;
+            b = x;
+        }
+        r += m;
+        g += m;
+        b += m;
+    }
+    color = MkRgba(ColorByte(r), ColorByte(g), ColorByte(b), alpha);
+    return true;
+}
+
+static bool ParseHexColor(Str text, u8 alpha, Color& color) {
+    TempStr value = str::DupTemp(text);
+    str::TrimWSInPlace(value, str::TrimOpt::Both);
+    if (str::EqI(value, StrL("unset")) || str::EqI(value, StrL("checkered"))) {
+        color = kColorUnset;
+        return true;
+    }
+    if (!str::TrimPrefix(value, StrL("0x"))) str::TrimPrefix(value, StrL("#"));
+    if (len(value) != 6) return false;
+    for (int i = 0; i < len(value); i++) {
+        if (!isxdigit((unsigned char)value.s[i])) return false;
+    }
+    ParsedColor parsed;
+    ParseColor(parsed, value);
+    if (!parsed.parsedOk) return false;
+    color = WithAlpha(parsed.col, alpha);
+    return true;
 }
 
 static u8 BlendChannel(u8 fg, u8 bg, u8 a) {
@@ -366,6 +530,7 @@ void ChangeColorWnd::SetCustomColor(int idx, Color col) {
     if (idx < 0 || idx >= kMaxCustomColors) {
         return;
     }
+    if (idx < nCustom && customColors[idx] == col) return;
     customColors[idx] = col;
     customColorsChanged = true;
     if (idx < nCustom) {
@@ -408,10 +573,20 @@ void ChangeColorWnd::UpdateEditFromColor() {
         if (isCheckered) {
             editRgb->SetText(colorsArgs ? StrL("unset") : StrL("checkered"));
         } else {
-            editRgb->SetText(SerializeColorTemp(currentColor));
+            editRgb->SetText(SerializeColorTemp(currentColor & 0xffffff));
         }
     }
+    double values[kMaxColorChannels];
+    ColorToChannels(currentColor, colorModel, values);
+    for (int i = 0; i < kMaxColorChannels; i++) {
+        if (!channelEdits[i]) continue;
+        channelEdits[i]->SetText(isCheckered                     ? Str{}
+                                 : colorModel == ColorModel::Rgb ? fmt("%d", (int)values[i])
+                                                                 : fmt("%.2f", values[i]));
+    }
     updatingEdit = false;
+    colorInputValid = true;
+    if (btnOk) btnOk->SetIsEnabled(true);
     if (selectedCustomIdx >= 0 && !isCheckered) {
         SetCustomColor(selectedCustomIdx, currentColor);
     }
@@ -419,23 +594,29 @@ void ChangeColorWnd::UpdateEditFromColor() {
 }
 
 bool ChangeColorWnd::TryParseEdit() {
-    if (!editRgb) {
-        return false;
+    Color parsed;
+    bool unset = false;
+    u8 alpha = withOpacity ? opacity : GetAlpha(currentColor);
+    if (colorModel == ColorModel::Hex) {
+        if (!editRgb) return false;
+        TempStr text = editRgb->GetTextTemp();
+        if (!ParseHexColor(text, alpha, parsed)) return false;
+        str::TrimWSInPlace(text, str::TrimOpt::Both);
+        unset = str::EqI(text, StrL("unset")) || str::EqI(text, StrL("checkered"));
+    } else {
+        double values[kMaxColorChannels]{};
+        for (int i = 0; i < ColorChannelCount(colorModel); i++) {
+            if (!channelEdits[i] || !ParseColorChannel(channelEdits[i]->GetTextTemp(), colorModel, i, values[i])) {
+                return false;
+            }
+        }
+        if (!ChannelsToColor(colorModel, values, alpha, parsed)) return false;
     }
-    TempStr text = editRgb->GetTextTemp();
-    if (len(text) == 0 || !text.s[0]) {
-        return false;
-    }
-    ParsedColor parsed;
-    ParseColor(parsed, text);
-    if (!parsed.parsedOk) {
-        return false;
-    }
-    if (parsed.col == kColorUnset) {
+    if (unset) {
         isCheckered = true;
     } else {
         isCheckered = false;
-        currentColor = parsed.col;
+        currentColor = parsed;
     }
     return true;
 }
@@ -444,14 +625,60 @@ void ChangeColorWnd::OnEditChanged() {
     if (updatingEdit) {
         return;
     }
-    if (!TryParseEdit()) {
+    bool valid = TryParseEdit();
+    colorInputValid = valid;
+    if (btnOk) btnOk->SetIsEnabled(valid);
+    if (!valid) {
         return;
     }
-    SyncOpacityFromColor();
     if (selectedCustomIdx >= 0 && !isCheckered) {
         SetCustomColor(selectedCustomIdx, currentColor);
     }
     InvalidateSwatches();
+}
+
+void ChangeColorWnd::UpdateColorModelVis() {
+    bool hex = colorModel == ColorModel::Hex;
+    Visibility hexVis = hex ? Visibility::Visible : Visibility::Collapse;
+    if (hexRow) hexRow->SetVisibility(hexVis);
+    if (labelRgb) labelRgb->SetVisibility(hexVis);
+    if (editRgb) editRgb->SetVisibility(hexVis);
+    if (channelRow) channelRow->SetVisibility(hex ? Visibility::Collapse : Visibility::Visible);
+    const char* rgb[] = {"R (0-255)", "G (0-255)", "B (0-255)", ""};
+    const char* cmyk[] = {"C (0-100%)", "M (0-100%)", "Y (0-100%)", "K (0-100%)"};
+    const char* hsv[] = {"H (0-360)", "S (0-100%)", "V (0-100%)", ""};
+    const char* hsl[] = {"H (0-360)", "S (0-100%)", "L (0-100%)", ""};
+    const char** labels = colorModel == ColorModel::Rgb    ? rgb
+                          : colorModel == ColorModel::Cmyk ? cmyk
+                          : colorModel == ColorModel::Hsv  ? hsv
+                                                           : hsl;
+    for (int i = 0; i < kMaxColorChannels; i++) {
+        Visibility vis = i < ColorChannelCount(colorModel) ? Visibility::Visible : Visibility::Collapse;
+        if (channelCells[i]) channelCells[i]->SetVisibility(vis);
+        if (channelLabels[i]) {
+            channelLabels[i]->SetText(Str(labels[i]));
+            channelLabels[i]->SetVisibility(vis);
+        }
+        if (channelEdits[i]) {
+            channelEdits[i]->SetVisibility(vis);
+            EditSetCueText(channelEdits[i], Str(labels[i]));
+        }
+    }
+}
+
+void ChangeColorWnd::FocusColorEdit() {
+    Edit* edit = colorModel == ColorModel::Hex ? editRgb : channelEdits[0];
+    EditSetFocus(edit);
+    EditSelectAll(edit);
+}
+
+void ChangeColorWnd::OnColorModelChanged() {
+    int index = CbGetCurrentSelection(dropColorModel);
+    if (index < 0 || index > (int)ColorModel::Hsl) return;
+    colorModel = (ColorModel)index;
+    UpdateColorModelVis();
+    UpdateEditFromColor();
+    Relayout();
 }
 
 void ChangeColorWnd::PickFromArea(Point ptLocal) {
@@ -721,7 +948,7 @@ void ChangeColorWnd::ApplyBackground() {
 }
 
 void ChangeColorWnd::OnOk(VirtMouseEvent*) {
-    TryParseEdit();
+    if (!colorInputValid) return;
     Finish(CloseAction::Select);
 }
 
@@ -811,9 +1038,18 @@ void ChangeColorWnd::Relayout() {
     if (!hwnd || !layout) {
         return;
     }
-    int dx = DpiScale(400);
+    int dx = PreferredWidth();
     LayoutAndSizeToContent(layout, dx, 0, hwnd);
     DoLayout(HwndClientRect(hwnd).Size());
+}
+
+int ChangeColorWnd::PreferredWidth() {
+    int width = DpiScale(400);
+    if (font) {
+        int fieldWidth = font->averageCharWidth * 44 + DpiScale(32);
+        if (fieldWidth > width) width = fieldWidth;
+    }
+    return width;
 }
 
 void ChangeColorWnd::RelayoutRadios() {
@@ -989,8 +1225,36 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
         auto* row = new HBox();
         row->alignMain = MainAxisAlign::MainStart;
         row->alignCross = CrossAxisAlign::CrossCenter;
+        row->gap = DpiScale(8);
+        row->AddChild(NewVirtText({
+            .s = Tr("Color model:"),
+            .font = font,
+            .isRtl = isRtl,
+        }));
+        DropDown::CreateArgs args;
+        args.parent = hwnd;
+        args.font = GetFont();
+        args.isRtl = isRtl;
+        dropColorModel = new DropDown();
+        dropColorModel->Create(args);
+        dropColorModel->SetItemsSeqStrings(kColorModels);
+        CbSetCurrentSelection(dropColorModel, (int)colorModel);
+        dropColorModel->onSelectionChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnColorModelChanged>(this);
+        dropColorModel->onCloseUp = MkMethod0<ChangeColorWnd, &ChangeColorWnd::FocusColorEdit>(this);
+        row->AddChild(dropColorModel);
+
+        Size previewSz{DpiScale(42), DpiScale(20)};
+        swatchPreview = MakeSwatch(this, kIdPreview, previewSz, false);
+        row->AddChild(swatchPreview);
+        vbox->AddChild(new Padding(row, DpiScaledInsets(6, 0, 0, 0)));
+    }
+
+    {
+        auto* row = new HBox();
+        row->alignMain = MainAxisAlign::MainStart;
+        row->alignCross = CrossAxisAlign::CrossCenter;
         auto* lab = NewVirtText({
-            .s = Tr("RGB:"),
+            .s = StrL("HEX (#RRGGBB):"),
             .font = font,
             .isRtl = isRtl,
             .padding = DpiScaledInsets(0, 8, 0, 0),
@@ -1011,10 +1275,37 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
         editRgb = e;
         row->AddChild(e);
 
-        Size previewSz{DpiScale(42), DpiScale(20)};
-        swatchPreview = MakeSwatch(this, kIdPreview, previewSz, false);
-        row->AddChild(new Padding(swatchPreview, DpiScaledInsets(8, 0, 0, 8)));
+        hexRow = row;
         vbox->AddChild(row);
+    }
+
+    {
+        auto* row = new HBox();
+        row->alignMain = MainAxisAlign::MainStart;
+        row->alignCross = CrossAxisAlign::CrossStart;
+        row->gap = DpiScale(8);
+        for (int i = 0; i < kMaxColorChannels; i++) {
+            auto* cell = new VBox();
+            cell->alignCross = CrossAxisAlign::Stretch;
+            auto* label = NewVirtText({.font = font, .isRtl = isRtl});
+            channelLabels[i] = label;
+            cell->AddChild(label);
+            Edit::CreateArgs args;
+            args.parent = hwnd;
+            args.font = GetFont();
+            args.withBorder = true;
+            args.isRtl = isRtl;
+            args.idealWidthChars = 7;
+            auto* edit = new Edit();
+            edit->Create(args);
+            edit->onTextChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnEditChanged>(this);
+            channelEdits[i] = edit;
+            cell->AddChild(edit);
+            channelCells[i] = cell;
+            row->AddChild(cell);
+        }
+        channelRow = new Padding(row, DpiScaledInsets(4, 0, 0, 0));
+        vbox->AddChild(channelRow);
     }
 
     Size swSz{DpiScale(36), DpiScale(22)};
@@ -1098,17 +1389,17 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
     UpdateSwatchVis();
     UpdateOpacityVis();
     SyncOpacityFromColor();
+    UpdateColorModelVis();
     UpdateEditFromColor();
 
-    int dx = DpiScale(400);
+    int dx = PreferredWidth();
     LayoutAndSizeToContent(layout, dx, 0, hwnd);
     DoLayout(HwndClientRect(hwnd).Size());
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
     UpdateTheme();
 
     SetIsVisible(true);
-    EditSetFocus(editRgb);
-    EditSelectAll(editRgb);
+    FocusColorEdit();
     return true;
 }
 
@@ -1119,8 +1410,7 @@ void ShowChangeBackgroundColorDialog(MainWindow* win) {
     if (gChangeColorWnd) {
         gChangeColorWnd->SetTargetBackground(win);
         HwndSetFocus(gChangeColorWnd->hwnd);
-        EditSetFocus(gChangeColorWnd->editRgb);
-        EditSelectAll(gChangeColorWnd->editRgb);
+        gChangeColorWnd->FocusColorEdit();
         return;
     }
     auto* wnd = new ChangeColorWnd();
@@ -1146,8 +1436,7 @@ void ShowChangeColorsDialog(ChangeColorsArgs* args) {
     if (gChangeColorWnd) {
         gChangeColorWnd->SetTargetColors(args);
         HwndSetFocus(gChangeColorWnd->hwnd);
-        EditSetFocus(gChangeColorWnd->editRgb);
-        EditSelectAll(gChangeColorWnd->editRgb);
+        gChangeColorWnd->FocusColorEdit();
         return;
     }
     auto* wnd = new ChangeColorWnd();
@@ -1164,6 +1453,91 @@ void ShowChangeColorsDialog(ChangeColorsArgs* args) {
     }
     gChangeColorWnd = wnd;
 }
+
+#if defined(DEBUG)
+bool ChangeColor_UnitTests() {
+    Color color;
+    double values[kMaxColorChannels] = {255, 128, 0, 0};
+    if (!ChannelsToColor(ColorModel::Rgb, values, 37, color) || color != MkRgba(255, 128, 0, 37)) return false;
+    values[0] = 256;
+    if (ChannelsToColor(ColorModel::Rgb, values, 37, color)) return false;
+    values[0] = 0.5;
+    if (ChannelsToColor(ColorModel::Rgb, values, 37, color)) return false;
+
+    double cmyk[kMaxColorChannels] = {0, 100, 100, 0};
+    if (!ChannelsToColor(ColorModel::Cmyk, cmyk, 0, color) || color != kColRed) return false;
+    cmyk[0] = cmyk[1] = cmyk[2] = 0;
+    cmyk[3] = 100;
+    if (!ChannelsToColor(ColorModel::Cmyk, cmyk, 93, color) || color != MkRgba(0, 0, 0, 93)) return false;
+
+    double hsv[kMaxColorChannels] = {120, 100, 100, 0};
+    if (!ChannelsToColor(ColorModel::Hsv, hsv, 255, color) || color != MkRgba(0, 255, 0, 255)) return false;
+    hsv[0] = 360;
+    if (!ChannelsToColor(ColorModel::Hsv, hsv, 0, color) || color != kColRed) return false;
+    hsv[0] = 240;
+    hsv[2] = 50;
+    if (!ChannelsToColor(ColorModel::Hsv, hsv, 0, color) || color != MkRgb(0, 0, 128)) return false;
+
+    double hsl[kMaxColorChannels] = {240, 100, 50, 0};
+    if (!ChannelsToColor(ColorModel::Hsl, hsl, 41, color) || color != MkRgba(0, 0, 255, 41)) return false;
+    hsl[1] = 0;
+    if (!ChannelsToColor(ColorModel::Hsl, hsl, 41, color) || color != MkRgba(128, 128, 128, 41)) return false;
+    hsl[2] = 100;
+    if (!ChannelsToColor(ColorModel::Hsl, hsl, 41, color) || color != MkRgba(255, 255, 255, 41)) return false;
+
+    if (!ParseHexColor(StrL(" #12aBef "), 0, color) || color != MkRgb(18, 171, 239)) return false;
+    if (!ParseHexColor(StrL("0x123456"), 79, color) || color != MkRgba(18, 52, 86, 79)) return false;
+    if (!ParseHexColor(StrL("#ffffff"), 0, color) || GetAlpha(color) != 0) return false;
+    if (!ParseHexColor(StrL("unset"), 79, color) || color != kColorUnset) return false;
+    if (ParseHexColor(StrL("#12345g"), 79, color) || ParseHexColor(StrL("#80123456"), 79, color)) return false;
+
+    double component;
+    if (!ParseColorChannel(StrL("255"), ColorModel::Rgb, 0, component) || component != 255) return false;
+    if (!ParseColorChannel(StrL(" 42.5 % "), ColorModel::Cmyk, 1, component) || component != 42.5) return false;
+    if (!ParseColorChannel(StrL("360"), ColorModel::Hsl, 0, component) || component != 360) return false;
+    if (ParseColorChannel(StrL("256"), ColorModel::Rgb, 0, component) ||
+        ParseColorChannel(StrL("0.5"), ColorModel::Rgb, 0, component) ||
+        ParseColorChannel(StrL("-1"), ColorModel::Hsv, 0, component) ||
+        ParseColorChannel(StrL("101%"), ColorModel::Hsl, 2, component) ||
+        ParseColorChannel(StrL("50%"), ColorModel::Hsv, 0, component) ||
+        ParseColorChannel(StrL("nan"), ColorModel::Cmyk, 0, component) ||
+        ParseColorChannel(StrL("inf"), ColorModel::Rgb, 0, component) ||
+        ParseColorChannel(StrL("12x"), ColorModel::Rgb, 0, component) ||
+        ParseColorChannel(StrL(""), ColorModel::Rgb, 0, component))
+        return false;
+
+    // Include black/white/gray and colors across all hue sectors. Display rounding
+    // must still reproduce the original RGB bytes after a numeric channel edit.
+    const Color samples[] = {kColBlack,        kColWhite,          MkGray(128),        kColRed,           kColBlue,
+                             MkRgb(0, 255, 0), MkRgb(17, 83, 229), MkRgb(254, 1, 128), MkRgb(19, 200, 91)};
+    const ColorModel models[] = {ColorModel::Rgb, ColorModel::Cmyk, ColorModel::Hsv, ColorModel::Hsl};
+    for (Color original : samples) {
+        for (ColorModel model : models) {
+            ColorToChannels(original, model, values);
+            for (int i = 0; i < ColorChannelCount(model); i++) {
+                if (!ParseColorChannel(model == ColorModel::Rgb ? fmt("%d", (int)values[i]) : fmt("%.2f", values[i]),
+                                       model, i, values[i]))
+                    return false;
+            }
+            if (!ChannelsToColor(model, values, 113, color) || color != WithAlpha(original, 113)) return false;
+        }
+    }
+
+    ChangeColorWnd wnd;
+    wnd.currentColor = MkRgba(19, 200, 91, 0);
+    wnd.withOpacity = true;
+    wnd.opacity = 0;
+    wnd.nCustom = 1;
+    wnd.customColors[0] = wnd.currentColor;
+    wnd.selectedCustomIdx = 0;
+    for (int i = 0; i <= (int)ColorModel::Hsl; i++) {
+        wnd.colorModel = (ColorModel)i;
+        wnd.UpdateEditFromColor();
+        if (wnd.currentColor != MkRgba(19, 200, 91, 0) || wnd.opacity != 0 || wnd.customColorsChanged) return false;
+    }
+    return true;
+}
+#endif
 
 // which tab the color picked in the generic dialog applies to
 struct TabColorTarget {

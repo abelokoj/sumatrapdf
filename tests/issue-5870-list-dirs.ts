@@ -63,7 +63,7 @@ export async function testit(): Promise<void> {
     states.push(`\t[\n\t\tFilePath = ${p}\n\t\tOpenCount = ${nFiles - i}\n\t]`);
   }
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nRememberOpenedFiles = true\n` +
       `HomePageViewMode = list\nFileStates [\n${states.join("\n")}\n]\n`,
   );

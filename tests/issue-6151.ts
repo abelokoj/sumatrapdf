@@ -118,7 +118,7 @@ async function testSharpTiles(): Promise<void> {
   const appdata = tmpPath("issue-6151-settings");
   mkdirSync(appdata, { recursive: true });
   // Without rasterizer AA, intermediate grays can only come from bitmap scaling.
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), "DisableAntiAlias = true\nCustomScreenDPI = 96\n");
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), "DisableAntiAlias = true\nCustomScreenDPI = 96\n");
 
   await withControlledSumatra(
     EXE,

@@ -724,6 +724,13 @@ void WindowCorners_UnitTests() {
                                   MAKELPARAM(window.x + close.x + close.dx / 2, window.y + close.y + close.dy / 2)) ==
                      HTCLOSE);
             utassert(str::Eq(HwndGetTextTemp(dialog.hwnd), StrL("Scaled caption test")));
+            const Size clientSizes[] = {{320, 240}, {640, 480}};
+            for (Size expected : clientSizes) {
+                ResizeHwndToClientArea(dialog.hwnd, expected.dx, expected.dy, false);
+                Rect client = HwndClientRect(dialog.hwnd);
+                utassert(client.dx == expected.dx);
+                utassert(client.dy == expected.dy);
+            }
             dialog.Destroy();
         }
     }

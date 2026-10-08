@@ -18,7 +18,14 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { inflateSync } from "node:zlib";
-import { ensureModifierKeysUp, enumWindows, getWindowPid, getWindowText, hasInteractiveDesktop } from "./winapi.ts";
+import {
+  ensureModifierKeysUp,
+  enumWindows,
+  getWindowPid,
+  getWindowText,
+  hasInteractiveDesktop,
+  setProcessDpiAware,
+} from "./winapi.ts";
 
 export const ROOT = join(import.meta.dir, "..");
 
@@ -72,6 +79,7 @@ export const TMP_DIR = join(TESTS_TMP_DIR, "tmp");
 export let EXE = SOURCE_EXE;
 
 export function prepareTestEnvironment(): void {
+  setProcessDpiAware();
   const sourceExe = resolve(SOURCE_EXE);
   const exeName = sourceExe.split("\\").pop()!;
   const sourcePdb = sourceExe.replace(/\.exe$/i, ".pdb");
@@ -92,6 +100,10 @@ export function prepareTestEnvironment(): void {
   if (existsSync(sourceTool)) {
     copyFileSync(sourceTool, join(TESTS_TMP_DIR, "sumatrapdf-tool.exe"));
   }
+  const asanRuntime = join(dirname(sourceExe), "clang_rt.asan_dynamic-x86_64.dll");
+  if (existsSync(asanRuntime)) {
+    copyFileSync(asanRuntime, join(TESTS_TMP_DIR, "clang_rt.asan_dynamic-x86_64.dll"));
+  }
   EXE = testExe;
 }
 
@@ -103,6 +115,18 @@ export function prepareTestEnvironment(): void {
 // same but its path no longer says asan
 export const IS_ASAN = /asan/i.test(EXE);
 export const SLOW_BUILD_FACTOR = IS_ASAN ? 4 : 1;
+
+export function hasClaudeCode(): boolean {
+  const profile = process.env.USERPROFILE ?? "";
+  return (
+    !!Bun.which("claude.exe") ||
+    [
+      join(profile, ".local", "bin", "claude.exe"),
+      join(profile, "AppData", "Local", "Programs", "claude-code", "claude.exe"),
+      join(profile, "AppData", "Roaming", "npm", "claude.cmd"),
+    ].some(existsSync)
+  );
+}
 
 export function isClosedPipeError(e: unknown): boolean {
   const err = e as { code?: string; message?: string };
@@ -131,7 +155,7 @@ export function runAppUnitTests(): Promise<void> {
   }
 
   appUnitTests = (async () => {
-    const proc = Bun.spawn([EXE, "-unit-tests", "-for-ai"], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([EXE, "-unit-tests", "-for-ai", "-for-testing"], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),

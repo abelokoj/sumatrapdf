@@ -20,7 +20,7 @@ function makeAppDir(name: string): string {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     `UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\n` +
       `RememberOpenedFiles = false\nRememberStatePerDocument = false\n`,
   );
@@ -29,7 +29,7 @@ function makeAppDir(name: string): string {
 
 // the FileStates [ ... ] block of the saved settings
 function readFileStates(dir: string): string {
-  const s = readFileSync(join(dir, "SumatraPDF-settings.txt"), "utf8");
+  const s = readFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), "utf8");
   const start = s.indexOf("\nFileStates [");
   if (start < 0) {
     throw new Error("issue-5899: no FileStates section in saved settings");

@@ -15,7 +15,7 @@ const LABELS = [
 async function render(mode: string): Promise<Buffer> {
   const dir = tmpPath(`cad-text-${mode}`);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), `EngineeringDrawingEnhance = ${mode}\n`);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), `EngineeringDrawingEnhance = ${mode}\n`);
   await withControlledSumatra(
     EXE,
     async (client) => {

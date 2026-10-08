@@ -96,7 +96,7 @@ export async function testit(): Promise<void> {
   writeFileSync(pdf, makePdf(5));
   const appdata = join(dir, "appdata");
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const { proc, client, frame } = await launchControlled(["-appdata", appdata, pdf]);
   try {

@@ -54,7 +54,7 @@ ${tabState(LOADED_PDF)}
   ]
 ]
 `;
-  writeFileSync(join(APPDATA, "SumatraPDF-settings.txt"), seed, "utf8");
+  writeFileSync(join(APPDATA, "SumatraPDFEnhanced-settings.txt"), seed, "utf8");
 }
 
 async function currentPath(client: ControlClient): Promise<string> {

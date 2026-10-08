@@ -32,6 +32,7 @@ import {
   findCanvas,
   killAndWait,
   launchControlled,
+  scrollToolbarToCommand,
   pressKey,
   sendCommand,
 } from "./win-automation.ts";
@@ -210,7 +211,7 @@ async function testKind(
   const pagePoint = { x: Math.floor(canvasRect.right / 2), y: Math.floor(canvasRect.bottom / 2) };
   const wantCmd = cmdId(cmdName(kind));
 
-  const toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+  const toolbarDump = await scrollToolbarToCommand(client, frame, cmdName(kind));
   const button = toolbarRect(toolbarDump, kind);
   const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
   await clickAt(toolbar, button.x + Math.floor(button.dx / 2), button.y + Math.floor(button.dy / 2), 0);
@@ -268,7 +269,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 

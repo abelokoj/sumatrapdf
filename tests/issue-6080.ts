@@ -59,7 +59,7 @@ export async function testit(): Promise<void> {
   writeFileSync(pdfA, makePdf(), "latin1");
   writeFileSync(pdfB, makePdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "CheckForUpdates = false\nRestoreSession = false\nShowStartPage = false\nShowToc = false\nShowFavorites = false\nUseTabs = true\nSidebarWindowSize = grow\n",
   );
 

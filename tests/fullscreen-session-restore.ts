@@ -8,7 +8,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, cmdId, runStandalone, tmpPath } from "./util.ts";
-import { getWindowRect, isZoomed, postMessage, sleep, WM_CLOSE, type Rect } from "./winapi.ts";
+import { getWindowRect, getWorkArea, isZoomed, postMessage, sleep, WM_CLOSE, type Rect } from "./winapi.ts";
 import { killAndWait, launchControlled, sendCommand, waitForExit } from "./win-automation.ts";
 
 const PDF = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
@@ -41,10 +41,16 @@ export async function testit(): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const settingsPath = join(dir, "SumatraPDFEnhanced-settings.txt");
+  const workArea = getWorkArea();
+  const margin = 20;
+  const width = Math.min(800, workArea.right - workArea.left - 2 * margin);
+  const height = Math.min(860, workArea.bottom - workArea.top - 2 * margin);
+  const left = workArea.left + Math.floor((workArea.right - workArea.left - width) / 2);
+  const top = workArea.top + Math.floor((workArea.bottom - workArea.top - height) / 2);
   writeFileSync(
     settingsPath,
     "UiLanguage = en\nCheckForUpdates = false\nRestoreSession = true\nReuseInstance = false\n" +
-      "WindowState = 1\nWindowPos = 560 120 800 860\n",
+      `WindowState = 1\nWindowPos = ${left} ${top} ${width} ${height}\n`,
   );
 
   // 1: a normal window with a document, fullscreen, quit
@@ -55,6 +61,14 @@ export async function testit(): Promise<void> {
     normal = await settledRect(first.frame);
     if (isZoomed(first.frame)) {
       throw new Error("fullscreen-session-restore: the first window started maximized");
+    }
+    if (
+      normal.left < workArea.left ||
+      normal.top < workArea.top ||
+      normal.right > workArea.right ||
+      normal.bottom > workArea.bottom
+    ) {
+      throw new Error(`fullscreen-session-restore: initial window is outside the work area: ${JSON.stringify(normal)}`);
     }
     await toggleFullscreen(first.frame);
     postMessage(first.frame, WM_CLOSE, 0, 0);

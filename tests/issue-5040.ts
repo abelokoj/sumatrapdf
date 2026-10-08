@@ -125,7 +125,7 @@ async function checkSynctexFlavor(pdflatex: string, gzip: boolean): Promise<void
   const dir = tmpPath(`issue-5040-${gzip ? "gz" : "plain"}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   // first compile has the filler pages, so the sections sit late in the document
   await compile(pdflatex, dir, nFiller, gzip);

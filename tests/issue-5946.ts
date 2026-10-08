@@ -70,7 +70,7 @@ async function openZoom(file: string, extra: string, label: string): Promise<str
   const dir = tmpPath(`issue-5946-${label}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}${extra}\n`);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS_HEAD}${extra}\n`);
   return withControlledSumatra(EXE, (client) => queryZoom(client), ["-appdata", dir, file]);
 }
 

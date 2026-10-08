@@ -21,7 +21,7 @@
 // waiting for the whole suite.
 
 import { existsSync } from "node:fs";
-import { EXE, formatDuration, resetTestTimes, runTest, type NamedTest } from "./util.ts";
+import { EXE, formatDuration, prepareTestEnvironment, resetTestTimes, runTest, type NamedTest } from "./util.ts";
 import { getWorkArea, setTestWindowLayout, testWindowPos } from "./winapi.ts";
 import { tests as allTests } from "./run-all.ts";
 
@@ -120,6 +120,7 @@ function testsFromArgs(argv: string[]): NamedTest[] | undefined {
 
 if (import.meta.main) {
   try {
+    prepareTestEnvironment();
     await testit(testsFromArgs(process.argv));
   } catch (e) {
     console.error(`\n${(e as Error)?.message ?? e}`);

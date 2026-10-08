@@ -41,7 +41,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("issue-6133");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settings());
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settings());
 
   const { proc, client, frame } = await launchControlled(["-appdata", dir, pdf]);
   try {

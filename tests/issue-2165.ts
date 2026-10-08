@@ -85,7 +85,7 @@ async function runWithSettings(pdf: string, extraSettings: string, body: (client
   const dir = tmpPath(`issue-2165-${extraSettings.includes("true") ? "right" : "left"}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}${extraSettings}\n`);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS_HEAD}${extraSettings}\n`);
   await withControlledSumatra(EXE, body, ["-appdata", dir, pdf]);
 }
 

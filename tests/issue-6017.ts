@@ -6,7 +6,7 @@
 
 import { join } from "node:path";
 import { ControlClient, ControlCommand, withControlledSumatra } from "./control.ts";
-import { EXE, ROOT, cmdId, runStandalone, SLOW_BUILD_FACTOR } from "./util.ts";
+import { EXE, ROOT, cmdId, hasClaudeCode, runStandalone, SLOW_BUILD_FACTOR } from "./util.ts";
 import { FRAME_CLASS, sendCommandSync } from "./win-automation.ts";
 import {
   captureWindowDCRegionPixels,
@@ -69,6 +69,10 @@ function colorDelta(a: [number, number, number], b: [number, number, number]): n
 }
 
 export async function testit(): Promise<void> {
+  if (!hasClaudeCode()) {
+    console.log("issue-6017: Claude Code missing; skipping optional AI checkbox check");
+    return;
+  }
   const pdf = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
   await withControlledSumatra(
     EXE,

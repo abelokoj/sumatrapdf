@@ -119,7 +119,7 @@ function writeSettings(extra: string[]): void {
   rmSync(APPDATA, { recursive: true, force: true });
   mkdirSync(APPDATA, { recursive: true });
   writeFileSync(
-    join(APPDATA, "SumatraPDF-settings.txt"),
+    join(APPDATA, "SumatraPDFEnhanced-settings.txt"),
     [`EBookUI [`, `\tFontName = Georgia`, `\tLineSpacing = 1.4`, `]`, `RestoreSession = false`, ...extra, ``].join(
       "\n",
     ),
@@ -321,7 +321,7 @@ export async function testit(): Promise<void> {
     } finally {
       await killAndWait(l.proc);
     }
-    const saved = readFileSync(join(APPDATA, "SumatraPDF-settings.txt"), "utf8");
+    const saved = readFileSync(join(APPDATA, "SumatraPDFEnhanced-settings.txt"), "utf8");
     const entry = saved.split("FilePath").find((s) => s.includes("none.epub")) ?? "";
     if (!entry.includes("IgnoreDocumentCSS = true")) {
       throw new Error("OK didn't write the per-document EBookUI block");
@@ -348,7 +348,7 @@ export async function testit(): Promise<void> {
     } finally {
       await killAndWait(l.proc);
     }
-    const saved = readFileSync(join(APPDATA, "SumatraPDF-settings.txt"), "utf8");
+    const saved = readFileSync(join(APPDATA, "SumatraPDFEnhanced-settings.txt"), "utf8");
     const global = saved.slice(saved.indexOf("EBookUI ["), saved.indexOf("FileStates"));
     if (!global.includes("IgnoreDocumentCSS = true")) {
       throw new Error("OK didn't write the global EBookUI section");

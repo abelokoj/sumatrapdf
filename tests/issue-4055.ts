@@ -82,7 +82,7 @@ async function run(pdf: string, extra: string, label: string): Promise<ModeState
   const dir = tmpPath(`issue-4055-${label}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}${extra}\n`);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS_HEAD}${extra}\n`);
   return withControlledSumatra(EXE, (client) => queryMode(client), ["-appdata", dir, pdf]);
 }
 
@@ -95,7 +95,10 @@ export async function testit(): Promise<void> {
   const aspectDir = tmpPath("issue-4055-page-aspect");
   rmSync(aspectDir, { recursive: true, force: true });
   mkdirSync(aspectDir, { recursive: true });
-  writeFileSync(join(aspectDir, "SumatraPDF-settings.txt"), `${SETTINGS_HEAD}DefaultDisplayMode = page aspect\n`);
+  writeFileSync(
+    join(aspectDir, "SumatraPDFEnhanced-settings.txt"),
+    `${SETTINGS_HEAD}DefaultDisplayMode = page aspect\n`,
+  );
   await withControlledSumatra(
     EXE,
     async (client, proc) => {

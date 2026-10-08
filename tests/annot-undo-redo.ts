@@ -98,7 +98,7 @@ async function toolbarButtons(client: ControlClient): Promise<Map<string, Button
   for (const m of raw.matchAll(re)) {
     const cmd = +m[2]!;
     for (const name of ["CmdUndo", "CmdRedo", "CmdSaveAnnotations"]) {
-      if (cmd === cmdId(name) && m[3] === "0") {
+      if (cmd === cmdId(name)) {
         res.set(name, { idx: +m[1]!, enabled: m[4] === "1", tip: m[5]!.trim() });
       }
     }
@@ -132,7 +132,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makePdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 

@@ -86,7 +86,7 @@ async function openWithSettings(
   const dir = tmpPath(`issue-2022-${label}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settings);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settings);
   return withControlledSumatra(EXE, (client) => waitDisplay(client), ["-appdata", dir, pdf]);
 }
 

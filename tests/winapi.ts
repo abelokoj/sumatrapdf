@@ -22,6 +22,10 @@ const user32 = dlopen("user32.dll", {
   GetWindow: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.u64 },
   PostMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64], returns: FFIType.bool },
   SendMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64], returns: FFIType.i64 },
+  SendMessageTimeoutW: {
+    args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64, FFIType.u32, FFIType.u32, FFIType.ptr],
+    returns: FFIType.i64,
+  },
   MoveWindow: {
     args: [FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.bool],
     returns: FFIType.bool,
@@ -633,6 +637,32 @@ export function sendMessage(hwnd: number, msg: number, wParam: number | bigint, 
   return user32.symbols.SendMessageW(hwnd, msg, BigInt(wParam), BigInt(lParam)) as bigint;
 }
 
+export function sendMessageTimeout(
+  hwnd: number,
+  msg: number,
+  wParam: number | bigint,
+  lParam: number | bigint,
+  timeoutMs = 30_000,
+): bigint {
+  const SMTO_ABORTIFHUNG = 0x0002;
+  const SMTO_ERRORONEXIT = 0x0020;
+  const result = new BigUint64Array(1);
+  const ok = user32.symbols.SendMessageTimeoutW(
+    hwnd,
+    msg,
+    BigInt(wParam),
+    BigInt(lParam),
+    SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+    timeoutMs,
+    ptr(result),
+  );
+  if (!ok)
+    throw new Error(
+      `Window message ${msg} failed or timed out after ${timeoutMs} ms (Win32 ${kernel32.symbols.GetLastError()})`,
+    );
+  return BigInt.asIntN(64, result[0]!);
+}
+
 // Send a null-terminated UTF-16 WM_COPYDATA payload. COPYDATASTRUCT is 24
 // bytes on x64: ULONG_PTR dwData, DWORD cbData + padding, PVOID lpData.
 export function sendCopyDataW(hwnd: number, dataId: number, text: string): bigint {
@@ -1072,8 +1102,7 @@ export function getSystemMetrics(index: number): number {
 // when reading a DPI-aware window like SumatraPDF's on a scaled display (see
 // project memory dpi-aware-probe-trick). No-op at 100% scaling.
 //
-// This is process-wide and cannot be undone, so only call it from tests that
-// read pixels or physical geometry, not from every test.
+// Call before preparing tests that consume the app's physical control bounds.
 export function setProcessDpiAware(): boolean {
   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4
   return user32.symbols.SetProcessDpiAwarenessContext(-4n as unknown as number);

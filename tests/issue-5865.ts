@@ -145,7 +145,7 @@ export async function testit(): Promise<void> {
   const dir = tmpPath("issue-5865-appdata");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   // run 1: open the doc, go fullscreen, quit (saves WindowState = 3)
   await runOnce(dir, [pdf], async (frame, canvas) => {

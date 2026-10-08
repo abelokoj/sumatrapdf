@@ -83,7 +83,7 @@ export async function testit(): Promise<void> {
   const appDataDir = tmpPath("issue-1438-appdata");
   rmSync(appDataDir, { recursive: true, force: true });
   mkdirSync(appDataDir, { recursive: true });
-  const settingsPath = `${appDataDir}/SumatraPDF-settings.txt`;
+  const settingsPath = `${appDataDir}/SumatraPDFEnhanced-settings.txt`;
 
   // no -for-testing: this test reads the position the app writes into settings
   async function session(act: (frame: number) => void): Promise<void> {

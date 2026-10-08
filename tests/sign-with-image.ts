@@ -31,7 +31,7 @@ export async function testit(): Promise<void> {
     "]",
     "",
   ].join("\n");
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settings);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settings);
   const pdf = join(dir, "blank.pdf");
   writeFileSync(
     pdf,

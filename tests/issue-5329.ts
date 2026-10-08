@@ -41,7 +41,7 @@ async function readComments(pdf: string, mode: AuthorMode): Promise<string[]> {
   const appdata = tmpPath(`issue-5329-${showAuthor ? "author" : "default"}`);
   mkdirSync(appdata, { recursive: true });
   const settings = showAuthor ? "ShowAnnotationAuthorInTooltip = true\n" : "";
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), settings);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), settings);
 
   const raw = await withControlledSumatra(
     EXE,

@@ -64,7 +64,7 @@ function writeAppData(dir: string): string {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "SumatraPDF-settings.txt"),
+    join(dir, "SumatraPDFEnhanced-settings.txt"),
     ["RestoreSession = false", "CheckForUpdates = false", "ShowToc = false", "SelectionToolbar = true", ""].join("\n"),
   );
   return dir;

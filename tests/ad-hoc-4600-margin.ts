@@ -24,7 +24,10 @@ async function render(settings: string[]): Promise<Cap> {
   const appdata = tmpPath("issue-4600-margin-appdata");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), [...settings, `RestoreSession = false`, ``].join("\n"));
+  writeFileSync(
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
+    [...settings, `RestoreSession = false`, ``].join("\n"),
+  );
   const epub = join(tmpPath("epub-font"), "none.epub");
   const proc = launchSumatra(["-appdata", appdata, "-view", "single page", "-zoom", "fit page", epub]);
   try {

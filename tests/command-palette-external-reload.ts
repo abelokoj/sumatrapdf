@@ -72,7 +72,7 @@ export async function testit(): Promise<void> {
   const appdata = tmpPath(kTag);
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  const settingsPath = join(appdata, "SumatraPDF-settings.txt");
+  const settingsPath = join(appdata, "SumatraPDFEnhanced-settings.txt");
   const logPath = join(appdata, "log.txt");
   writeFileSync(settingsPath, settingsText("true"));
 

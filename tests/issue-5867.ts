@@ -46,7 +46,7 @@ async function runWithIcon(name: string, svg: string): Promise<void> {
   const dir = tmpPath(`issue-5867-${name}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settings(svg));
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settings(svg));
 
   const { proc, client, frame } = await launchControlled(["-appdata", dir, pdf]);
   try {

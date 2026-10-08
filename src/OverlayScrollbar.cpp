@@ -560,10 +560,13 @@ static void SetState(OverlayScrollbar* sb, State newState) {
         }
         PaintScrollbar(sb);
     } else {
-        // Make fully transparent instead of ShowWindow(SW_HIDE) because
-        // SW_HIDE can trigger Z-order changes that hide other popups
         sb->mouseOverThumb = false;
-        MakeLayeredWindowTransparent(sb->hwnd);
+        if (newState == State::Hidden) {
+            OverlayScrollbarHide(sb);
+        } else {
+            // Smart auto-hide keeps the active layered window available for mouse proximity.
+            MakeLayeredWindowTransparent(sb->hwnd);
+        }
     }
 
     if (wasVisible != nowVisible) {
@@ -1447,6 +1450,36 @@ bool OverlayScrollbar_UnitTestsNative() {
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     gSettings->scrollbarWidth = 28;
+    HWND emptyOwner = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, -10000, -10000, 300, 200, nullptr, nullptr,
+                                      GetModuleHandleW(nullptr), nullptr);
+    utassert(emptyOwner != nullptr);
+    if (emptyOwner) {
+        for (auto mode : {OverlayScrollbar::Mode::Thick, OverlayScrollbar::Mode::Smart}) {
+            auto* bar = OverlayScrollbarCreate(emptyOwner, OverlayScrollbar::Type::Vert, mode);
+            utassert(bar && bar->hwnd);
+            if (bar && bar->hwnd) {
+                SCROLLINFO info{sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS};
+                info.nMax = 999;
+                info.nPage = 100;
+                OverlayScrollbarSetInfo(bar, &info, false);
+                OverlayScrollbarShow(bar, true);
+                utassert(HwndIsVisible(bar->hwnd));
+                HWND active = GetActiveWindow();
+                OverlayScrollbarShow(bar, false);
+                utassert(!IsActive(bar));
+                utassert(!HwndIsVisible(bar->hwnd));
+                utassert(GetActiveWindow() == active);
+                OverlayScrollbarUpdatePos(bar);
+                utassert(!HwndIsVisible(bar->hwnd));
+                OverlayScrollbarShow(bar, true);
+                utassert(HwndIsVisible(bar->hwnd));
+                OverlayScrollbarShow(bar, false);
+                utassert(!HwndIsVisible(bar->hwnd));
+            }
+            OverlayScrollbarDestroy(bar);
+        }
+        DestroyWindow(emptyOwner);
+    }
     HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 300, 200, nullptr, nullptr,
                                   GetModuleHandleW(nullptr), nullptr);
     HWND edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 10, 10, 250,

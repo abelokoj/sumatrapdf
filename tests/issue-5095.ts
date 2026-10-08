@@ -10,22 +10,24 @@
 // layout.
 //
 // The toolbar is a Virt* tree (no ToolbarWindow32 HWND), so the test reads
-// button order and visibility through -dbg-control TestToolbarButtons.
+// button presence and order through -dbg-control TestToolbarButtons.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlCommand, withControlledSumatra } from "./control.ts";
 import { cmdId, EXE, runStandalone, tmpPath, assemblePdf } from "./util.ts";
 
-type Button = { visible: boolean; idx: number };
+type Button = { present: boolean; idx: number };
 
-// the standard toolbar written out as a layout; sumatra-website/www/docs/Customize-toolbar.md
-// gives users this string as the starting point for their own
+// The Enhanced standard toolbar, written as a customizable layout.
 const DEFAULT_LAYOUT =
-  "CmdOpenFile CmdPrint | PageInfo CmdGoToPrevPage CmdGoToNextPage | " +
-  "CmdNavigateBack CmdNavigateForward | CmdToggleReadAloud | " +
-  "CmdZoomFitWidthAndContinuous CmdZoomFitPageAndSinglePage CmdRotateLeft CmdRotateRight " +
-  "CmdZoomOut CmdZoomIn | CmdFindFirst | CmdToggleEditPDF";
+  "CmdOpenFile CmdFindFirst | CmdGoToPrevPage PageInfo CmdGoToNextPage | " +
+  "CmdZoomOut CmdZoomIn CmdZoomFitWidthAndContinuous CmdSinglePageView | CmdRotateLeft CmdRotateRight | " +
+  "CmdToggleEditPDF CmdHandTool CmdAnnotationLasso CmdCreateAnnotInk CmdAnnotationHighlightBrush " +
+  "CmdCreateAnnotUnderline CmdCreateAnnotStrikeOut CmdInkEraser CmdToggleLaserPointer | " +
+  "CmdToggleBookmarks CmdCommandPaletteFavorites CmdCommandPalette CmdPrint | " +
+  "CmdOptions CmdThemeLight CmdThemeDark CmdChangeTheme CmdInvertColors " +
+  "CmdDictionaryLookup CmdVocabularyHome CmdExportStudyNotes CmdTogglePresentationMode";
 
 function makePdf(): string {
   const objs = [
@@ -55,7 +57,7 @@ function buttonsByName(dump: string, cmds: string[]): Map<string, Button> {
   for (const name of cmds) {
     const id = cmdId(name);
     const b = parsed.find((x) => x.cmd === id);
-    res.set(name, b ? { visible: !b.hidden, idx: b.idx } : { visible: false, idx: -1 });
+    res.set(name, b ? { present: true, idx: b.idx } : { present: false, idx: -1 });
   }
   return res;
 }
@@ -93,7 +95,7 @@ function writeSettings(dir: string, layout: string) {
     layout ? `ToolbarCustomLayout = ${layout}` : ``,
     ``,
   ];
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), lines.join("\n"));
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), lines.join("\n"));
 }
 
 export async function testit(): Promise<void> {
@@ -109,8 +111,8 @@ export async function testit(): Promise<void> {
   writeSettings(appdata, "");
   const std = await readToolbar(appdata, pdf, cmds);
   for (const name of cmds) {
-    if (!std.get(name)!.visible) {
-      throw new Error(`${name} has no visible toolbar button in the standard layout`);
+    if (!std.get(name)!.present) {
+      throw new Error(`${name} has no toolbar button in the standard layout`);
     }
   }
   if (std.get("CmdOpenFile")!.idx >= std.get("CmdFindFirst")!.idx) {
@@ -121,12 +123,12 @@ export async function testit(): Promise<void> {
   writeSettings(appdata, "CmdFindFirst | CmdGoToNextPage CmdGoToPrevPage");
   const custom = await readToolbar(appdata, pdf, cmds);
   for (const name of ["CmdOpenFile", "CmdPrint"]) {
-    if (custom.get(name)!.visible) {
+    if (custom.get(name)!.present) {
       throw new Error(`${name} is on the toolbar although the layout leaves it out`);
     }
   }
   for (const name of ["CmdFindFirst", "CmdGoToNextPage", "CmdGoToPrevPage"]) {
-    if (!custom.get(name)!.visible) {
+    if (!custom.get(name)!.present) {
       throw new Error(`${name} is missing although the layout lists it`);
     }
   }
@@ -142,10 +144,10 @@ export async function testit(): Promise<void> {
   for (const name of cmds) {
     const a = std.get(name)!;
     const b = explicit.get(name)!;
-    if (a.visible !== b.visible || a.idx !== b.idx) {
+    if (a.present !== b.present || a.idx !== b.idx) {
       throw new Error(
         `the documented default layout doesn't reproduce the standard one: ${name} is ` +
-          `${a.visible ? `at ${a.idx}` : "hidden"} by default but ${b.visible ? `at ${b.idx}` : "hidden"} with it`,
+          `${a.present ? `at ${a.idx}` : "absent"} by default but ${b.present ? `at ${b.idx}` : "absent"} with it`,
       );
     }
   }

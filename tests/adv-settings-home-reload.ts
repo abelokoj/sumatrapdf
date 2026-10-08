@@ -35,7 +35,7 @@ export async function testit(): Promise<void> {
   const pdf = join(appdata, "doc.pdf");
   copyFileSync(join(ROOT, "ext", "a-zlib", "zlib.3.pdf"), pdf);
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     `UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nRememberOpenedFiles = true\nShowStartPage = true\nFileStates [\n\t[\n\t\tFilePath = ${pdf}\n\t\tOpenCount = 1\n\t]\n]\n`,
   );
 

@@ -63,7 +63,7 @@ async function rowsFor(
   showProgress: boolean,
   files: { path: string; pageNo: string; pageCount: number }[],
 ): Promise<Row[]> {
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), settingsFor(dir, showProgress, files));
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), settingsFor(dir, showProgress, files));
   return withControlledSumatra(EXE, (client) => homeListRows(client), ["-appdata", dir]);
 }
 

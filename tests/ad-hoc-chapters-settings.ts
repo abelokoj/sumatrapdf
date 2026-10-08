@@ -21,7 +21,7 @@ import { killAndWait, killProcessesNamed, launchControlled, sendCommandSync } fr
 const MOBI = String.raw`C:\Users\kjk\OneDrive\!sumatra\1000.mobi`;
 
 const APPDATA = tmpPath("ad-hoc-chapters-settings-appdata");
-const SETTINGS_PATH = join(APPDATA, "SumatraPDF-settings.txt");
+const SETTINGS_PATH = join(APPDATA, "SumatraPDFEnhanced-settings.txt");
 
 function resetAppData(): void {
   rmSync(APPDATA, { recursive: true, force: true });

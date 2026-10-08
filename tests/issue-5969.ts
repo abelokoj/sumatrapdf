@@ -137,7 +137,7 @@ export async function testit(): Promise<void> {
   const appDataDir = tmpPath("issue-5969-appdata");
   rmSync(appDataDir, { recursive: true, force: true });
   mkdirSync(appDataDir, { recursive: true });
-  writeFileSync(join(appDataDir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appDataDir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const twoPage = tmpPath("issue-5969-two.pdf");
   writeFileSync(twoPage, makeTwoPagePdf());

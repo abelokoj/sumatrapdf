@@ -42,6 +42,7 @@ import {
   findCanvas,
   killAndWait,
   launchControlled,
+  scrollToolbarToCommand,
   pressKey,
   sendCommand,
 } from "./win-automation.ts";
@@ -97,7 +98,7 @@ async function placementState(client: ControlClient): Promise<PlacementState> {
   };
 }
 
-async function waitForPlacement(client: ControlClient, active: boolean): Promise<PlacementState> {
+async function waitForPlacement(client: ControlClient, active: boolean, step = "completion"): Promise<PlacementState> {
   const deadline = Date.now() + 5_000;
   let state: PlacementState;
   for (;;) {
@@ -106,7 +107,10 @@ async function waitForPlacement(client: ControlClient, active: boolean): Promise
       return state;
     }
     if (Date.now() > deadline) {
-      throw new Error(`polyline-annotation-placement: active did not become ${active}\n${state.raw}`);
+      const toolbar = await client.request(ControlCommand.TestToolbarButtons, []);
+      throw new Error(
+        `polyline-annotation-placement: ${step}: active did not become ${active}\n${state.raw}\n${toolbar[1] ?? ""}`,
+      );
     }
     await sleep(40);
   }
@@ -226,7 +230,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -251,14 +255,28 @@ export async function testit(): Promise<void> {
     const outside = { x: 2, y: center.y };
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdToggleEditPDF"), 0);
-    const toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
-    const button = toolbarButtonRect(toolbarDump);
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickToolbar = () =>
-      clickAt(toolbar, button.x + Math.floor(button.dx / 2), button.y + Math.floor(button.dy / 2), 0);
+    const clickToolbar = async () => {
+      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotPolyLine");
+      const button = toolbarButtonRect(toolbarDump);
+      const bounds = getClientRect(toolbar);
+      if (
+        button.dx <= 0 ||
+        button.dy <= 0 ||
+        button.x < bounds.left ||
+        button.y < bounds.top ||
+        button.x + button.dx > bounds.right ||
+        button.y + button.dy > bounds.bottom
+      ) {
+        throw new Error(
+          `polyline-annotation-placement: toolbar button outside client bounds ${JSON.stringify(bounds)}\n${toolbarDump}`,
+        );
+      }
+      await clickAt(toolbar, button.x + Math.floor(button.dx / 2), button.y + Math.floor(button.dy / 2), 0);
+    };
 
     await clickToolbar();
-    let state = await waitForPlacement(client, true);
+    let state = await waitForPlacement(client, true, "initial toolbar click");
     moveMouse(canvas, center);
     state = await placementState(client);
     if (
@@ -279,7 +297,7 @@ export async function testit(): Promise<void> {
     }
 
     await clickToolbar();
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "toolbar click after outside cancellation");
     await clickAt(canvas, p1.x, p1.y, 0);
     state = await placementState(client);
     if (!state.active || state.points !== 1 || state.page !== 1 || state.annotations !== 0) {
@@ -313,7 +331,7 @@ export async function testit(): Promise<void> {
 
     await client.setNotificationsEnabled(true);
     await executeFromCommandPalette(client, frame);
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "palette before double-click");
     await clickPoints(canvas, [p1, p2, p3]);
     const dblLp = packCoords(p3.x, p3.y);
     sendMessage(canvas, WM_LBUTTONDBLCLK, MK_LBUTTON, dblLp);
@@ -321,7 +339,7 @@ export async function testit(): Promise<void> {
     await expectFinished(client, 2, "double-click");
 
     sendCommand(frame, cmdId("CmdCreateAnnotPolyLine"));
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "command before Enter");
     await clickAt(canvas, p1.x, p1.y, 0);
     await pressKey(frame, VK_RETURN, 0);
     state = await placementState(client);
@@ -333,13 +351,13 @@ export async function testit(): Promise<void> {
     await expectFinished(client, 3, "Enter");
 
     sendCommand(frame, cmdId("CmdCreateAnnotPolyLine"));
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "command before Space");
     await clickPoints(canvas, [p1, p2, p3]);
     await pressKey(frame, VK_SPACE, 0);
     await expectFinished(client, 4, "Space");
 
     sendCommand(frame, cmdId("CmdCreateAnnotPolyLine"));
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "command before Esc");
     await clickPoints(canvas, [p1, p2]);
     await pressKey(frame, VK_ESCAPE, 0);
     state = await waitForPlacement(client, false);
@@ -348,7 +366,7 @@ export async function testit(): Promise<void> {
     }
 
     sendCommand(frame, cmdId("CmdCreateAnnotPolyLine"));
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "command before outside later click");
     await clickPoints(canvas, [p1, p2]);
     await clickAt(canvas, outside.x, outside.y, 0);
     state = await waitForPlacement(client, false);
@@ -367,7 +385,7 @@ export async function testit(): Promise<void> {
     // Ctrl+click commits the vertex and closes the path back to the first
     // point, so the annotation repeats it (issue #6119)
     await executeFromCommandPalette(client, frame);
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "palette before Ctrl+click");
     // enough vertices that closing the path grows the point vec: appending an
     // element of the vec to itself used to read the freed buffer
     await clickPoints(canvas, [p1, p2, p3]);
@@ -402,7 +420,7 @@ export async function testit(): Promise<void> {
     // SetCursorPos queues a WM_MOUSEMOVE with no Shift, which can land after the
     // synthetic one and undo the snap. Resend until the horizontal preview sticks.
     sendCommand(frame, cmdId("CmdCreateAnnotPolyLine"));
-    await waitForPlacement(client, true);
+    await waitForPlacement(client, true, "command before Shift+click");
     await clickAt(canvas, p1.x, p1.y, 0);
     const nearlyFlat = { x: p1.x + 150, y: p1.y + 12 };
     moveMouse(canvas, nearlyFlat, MK_SHIFT);

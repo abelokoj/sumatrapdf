@@ -30,6 +30,7 @@ import {
   findCanvas,
   killAndWait,
   launchControlled,
+  scrollToolbarToCommand,
   pressEscape,
   sendCommand,
   sendCommandSync,
@@ -160,7 +161,7 @@ export async function testit(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
@@ -180,7 +181,7 @@ export async function testit(): Promise<void> {
     const pagePoint = { x: Math.floor(canvasRect.right / 2), y: Math.floor(canvasRect.bottom / 2) };
 
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
-    const toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+    const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotText");
     const textButton = textToolbarRect(toolbarDump);
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
     await clickAt(

@@ -78,7 +78,7 @@ export async function testit(): Promise<void> {
   const appdata = tmpPath("command-palette-alt-names");
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
-  writeFileSync(join(appdata, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(appdata, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const pdf = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
   const { proc, client, frame } = await launchControlled(["-appdata", appdata, pdf]);

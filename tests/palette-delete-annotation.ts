@@ -57,7 +57,7 @@ export async function testit(): Promise<void> {
   mkdirSync(dir, { recursive: true });
   const pdf = join(dir, "annot.pdf");
   writeFileSync(pdf, makePdf(), "latin1");
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), SETTINGS);
 
   const { proc, client, frame } = await launchControlled([
     "-appdata",

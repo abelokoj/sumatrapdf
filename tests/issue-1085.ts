@@ -85,7 +85,7 @@ async function run(highlightOn: boolean, destNo: number): Promise<Mark> {
   const dir = tmpPath(`issue-1085-${highlightOn ? "on" : "off"}-d${destNo}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SumatraPDF-settings.txt"), `${SETTINGS}HighlightLinkDestination = ${highlightOn}\n`);
+  writeFileSync(join(dir, "SumatraPDFEnhanced-settings.txt"), `${SETTINGS}HighlightLinkDestination = ${highlightOn}\n`);
   const pdf = join(dir, "dests.pdf");
   writeFileSync(pdf, makePdf());
   return withControlledSumatra(

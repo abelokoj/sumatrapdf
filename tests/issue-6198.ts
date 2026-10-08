@@ -81,7 +81,7 @@ export async function testit(): Promise<void> {
   writeFileSync(pdf, makePdf(), "latin1");
   const origSize = statSync(pdf).size;
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 

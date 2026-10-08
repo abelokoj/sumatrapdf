@@ -124,7 +124,7 @@ export async function testit(): Promise<void> {
   const appData = join(root, "appdata");
   mkdirSync(appData, { recursive: true });
   writeFileSync(
-    join(appData, "SumatraPDF-settings.txt"),
+    join(appData, "SumatraPDFEnhanced-settings.txt"),
     ["UiLanguage = en", "CheckForUpdates = false", "RememberOpenedFiles = true", "ShowStartPage = true", ""].join("\n"),
   );
   const withCover = join(root, "book.pdf");

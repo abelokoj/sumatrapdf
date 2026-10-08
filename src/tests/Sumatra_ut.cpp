@@ -93,6 +93,7 @@ void UninstallerSelfDeleteTests();
 void VocabularyDialog_UnitTests();
 bool ImageEdit_UnitTestsUi();
 bool CpdfBookmarks_UnitTestsUi();
+bool ChangeColor_UnitTests();
 bool AnnotRecovery_UnitTests();
 void StudyExport_UnitTests();
 void EnhancedUpdate_UnitTests();
@@ -784,6 +785,7 @@ int RunAppUnitTests(bool forAi) {
     StudyExport_UnitTests();
     utassert(ImageEdit_UnitTestsUi());
     utassert(CpdfBookmarks_UnitTestsUi());
+    utassert(ChangeColor_UnitTests());
     utassert(AnnotRecovery_UnitTests());
     EnhancedUpdate_UnitTests();
     utassert(AppTools_UnitTestsStorage());

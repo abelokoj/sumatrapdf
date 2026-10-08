@@ -242,7 +242,7 @@ bool AnnotationSupportsOpacity(AnnotationType);
 bool CopyAnnotation(Annotation*);
 bool CutAnnotation(Annotation*);
 Annotation* TakeCutAnnotation();
-bool EngineOwnsAnnotation(EngineBase*, Annotation*);
+bool EngineOwnsAnnotation(EngineBase*, Annotation*, int pageNo = 0);
 bool HasCopiedAnnotation();
 void FreeAnnotationClipboard();
 Annotation* PasteCopiedAnnotation(EngineBase*, int pageNo, PointF topLeft);

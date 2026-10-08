@@ -58,7 +58,7 @@ export async function testit(): Promise<void> {
   mkdirSync(dir, { recursive: true });
   const pdf = join(dir, "issue-6224.pdf");
   writeFileSync(pdf, buildPdf(), "latin1");
-  const settingsPath = join(dir, "SumatraPDF-settings.txt");
+  const settingsPath = join(dir, "SumatraPDFEnhanced-settings.txt");
   writeFileSync(
     settingsPath,
     "UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nReuseInstance = false\nRememberStatePerDocument = true\n",

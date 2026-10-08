@@ -28,11 +28,12 @@ import {
   setCursorPos,
   sleep,
   VK_ESCAPE,
+  VK_DOWN,
   WM_COMMAND,
   WM_KEYDOWN,
-  WM_MOUSEMOVE,
   WM_RBUTTONDOWN,
   WM_RBUTTONUP,
+  WM_MOUSEMOVE,
 } from "./winapi.ts";
 import {
   clickAt,
@@ -42,6 +43,7 @@ import {
   launchControlled,
   parkCursorAway,
   pressKey,
+  scrollToolbarToCommand,
   sendCommandSync,
 } from "./win-automation.ts";
 
@@ -53,7 +55,7 @@ const POPUP_CLASS = "SumatraAnnotColorPopup";
 const PRESETS = "#80ff0000 #00ff00";
 // ink's own colors, with the alpha it paints them at
 const INK_PRESETS = "#66ff0000 #4000ff00";
-// Annotations.InkColors when not set; the first is the default ink color
+// Explicit legacy palette and Ballpoint profile keep opacity checks stable.
 const INK_DEFAULT_PRESETS = "#66ffff00* #668bf05d #6699defa #66f199d2 #66e24745";
 const COLOR_DIALOG_TITLE = "Annotation Colors";
 const PICKED_COLOR = "#ff0000";
@@ -71,7 +73,7 @@ function parseRect(m: RegExpExecArray | null): Rect {
 function writeSettings(appdata: string): void {
   const nl = String.fromCharCode(10);
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     [
       "UiLanguage = en",
       "RestoreSession = false",
@@ -79,6 +81,12 @@ function writeSettings(appdata: string): void {
       "CheckForUpdates = false",
       "Annotations [",
       `\tPresetColors = ${PRESETS}`,
+      "\tTextIconColor =",
+      `\tInkColors = ${INK_DEFAULT_PRESETS.replace("*", "")}`,
+      "\tInkBallpoint [",
+      "\t\tColor = #ffff00",
+      "\t\tOpacity = 40",
+      "\t]",
       "]",
       "",
     ].join(nl),
@@ -178,12 +186,13 @@ function findColorDialog(pid: number): number {
 // The button at the right end of the drop-down opens the color dialog. It has
 // to end up in front of the main window, which it only does if it is owned by
 // it, and the drop-down has to be gone.
-async function checkEditColors(pid: number, frame: number, swatches: Rect[]): Promise<void> {
+async function checkEditColors(client: ControlClient, pid: number, frame: number): Promise<void> {
   const popup = findTopWindow(pid, POPUP_CLASS);
   const r = getWindowRect(popup);
-  const last = swatches[swatches.length - 1]!;
-  const x = last.x + last.dx + Math.floor((r.right - (last.x + last.dx)) / 2);
-  await clickAt(popup, x - r.left, last.y + Math.floor(last.dy / 2) - r.top, 0);
+  const raw = await markupDump(client);
+  const edit = parseRect(/annotColorPopup .* edit=(-?\d+),(-?\d+),(\d+),(\d+)/.exec(raw));
+  if (!edit.dx || !edit.dy) throw new Error(`annot-color-dropdown: no Edit colors icon\n${raw}`);
+  await clickAt(popup, edit.x + Math.floor(edit.dx / 2) - r.left, edit.y + Math.floor(edit.dy / 2) - r.top, 0);
 
   const dlg = await pollUntil(
     () => findColorDialog(pid),
@@ -262,7 +271,7 @@ async function testMarkup(): Promise<void> {
     if (swatches.length !== 2) {
       throw new Error(`annot-color-dropdown: a markup annotation should have no "none" swatch: ${swatches.length}`);
     }
-    await checkEditColors(proc.pid!, frame, swatches);
+    await checkEditColors(client, proc.pid!, frame);
 
     swatches = await openChipDropdown(client, proc.pid!, "color");
     await pickSwatch(client, proc.pid!, swatches, 0);
@@ -396,8 +405,8 @@ const DEFAULT_COLORS: Record<string, string> = {
 };
 
 // the visible annotation button for a command, in toolbar client coords
-async function annotButtonRect(client: ControlClient, cmd: number): Promise<Rect | null> {
-  const raw = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+async function annotButtonRect(client: ControlClient, frame: number, cmd: number): Promise<Rect | null> {
+  const raw = await scrollToolbarToCommand(client, frame, cmd);
   const re = /annotation-idx=\d+ cmd=(\d+) hidden=(\d) enabled=\d rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
@@ -432,16 +441,29 @@ async function waitForHoverColors(client: ControlClient, want?: string): Promise
   );
 }
 
-// right-click opens the drop-down at once, without waiting for the hover delay.
-// The real cursor stays parked off the window: on a button, its moves swap to
-// that button's drop-down.
-function rightClickToolbar(toolbar: number, x: number, y: number): void {
-  const lp = packCoords(x, y);
+// Focus the tool without activating it, then use its Down shortcut. Releasing
+// outside cancels the pointer gesture before a native pin menu can open.
+async function openToolbarPalette(
+  client: ControlClient,
+  toolbar: number,
+  command: number,
+  bounds: Rect,
+): Promise<void> {
+  const lp = packCoords(bounds.x + (bounds.dx >> 1), bounds.y + (bounds.dy >> 1));
   sendMessage(toolbar, WM_RBUTTONDOWN, MK_RBUTTON, lp);
-  sendMessage(toolbar, WM_RBUTTONUP, 0, lp);
+  sendMessage(toolbar, WM_RBUTTONUP, 0, packCoords(-1, -1));
+  sendMessage(toolbar, WM_KEYDOWN, VK_DOWN, 0);
+  if (command === cmdId("CmdCreateAnnotRedact")) return;
+  await pollUntil(
+    async () => String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? ""),
+    (raw) => new RegExp(`^dropdown cmd=${command} items=[1-9]`, "m").test(raw),
+    {
+      error: (raw) => `annot-color-dropdown: the focused tool ${command} did not open its palette\n${raw}`,
+    },
+  );
 }
 
-// Esc dismisses a right-click drop-down; moving the mouse away does not
+// Esc dismisses an explicitly opened drop-down; moving the mouse away does not.
 async function closeHoverMenu(pid: number, frame: number): Promise<void> {
   await pressKey(frame, VK_ESCAPE, 0);
   for (let i = 0; i < 30; i++) {
@@ -485,17 +507,23 @@ async function testToolbarButtons(): Promise<void> {
     // in use, and joins the presets when it is not one of them yet
     const presets = PRESETS.split(" ");
     for (const name of COLOR_BUTTONS) {
-      const b = await annotButtonRect(client, cmdId(name));
+      const b = await annotButtonRect(client, frame, cmdId(name));
       if (!b) {
         throw new Error(`annot-color-dropdown: no ${name} button on the Edit PDF toolbar`);
       }
-      rightClickToolbar(toolbar, b.x + (b.dx >> 1), b.y + (b.dy >> 1));
+      await openToolbarPalette(client, toolbar, cmdId(name), b);
       const def = DEFAULT_COLORS[name]!;
       if (!presets.includes(def)) {
         presets.push(def);
       }
       const want = presets.map((c) => (c === def ? `${c}*` : c)).join(" ");
-      const colors = await waitForHoverColors(client, want);
+      let colors: string[];
+      try {
+        colors = await waitForHoverColors(client, want);
+      } catch (error) {
+        const raw = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+        throw new Error(`${name}: ${(error as Error).message}\n${raw}`);
+      }
       if (colors.join(" ") !== want) {
         throw new Error(`annot-color-dropdown: ${name} offers "${colors.join(" ")}", want "${want}"`);
       }
@@ -504,8 +532,8 @@ async function testToolbarButtons(): Promise<void> {
 
     // ink offers colors of its own, translucent, and its default is the first
     {
-      const b = (await annotButtonRect(client, cmdId("CmdCreateAnnotInk")))!;
-      rightClickToolbar(toolbar, b.x + (b.dx >> 1), b.y + (b.dy >> 1));
+      const b = (await annotButtonRect(client, frame, cmdId("CmdCreateAnnotInk")))!;
+      await openToolbarPalette(client, toolbar, cmdId("CmdCreateAnnotInk"), b);
       const colors = (await waitForHoverColors(client, INK_DEFAULT_PRESETS)).join(" ");
       if (colors !== INK_DEFAULT_PRESETS) {
         throw new Error(`annot-color-dropdown: CmdCreateAnnotInk offers "${colors}", want "${INK_DEFAULT_PRESETS}"`);
@@ -514,22 +542,19 @@ async function testToolbarButtons(): Promise<void> {
     }
 
     // a redaction mark's color is the box that covers the text, not a choice
-    const redact = await annotButtonRect(client, cmdId("CmdCreateAnnotRedact"));
+    const redact = await annotButtonRect(client, frame, cmdId("CmdCreateAnnotRedact"));
     if (redact) {
-      rightClickToolbar(toolbar, redact.x + (redact.dx >> 1), redact.y + (redact.dy >> 1));
+      await openToolbarPalette(client, toolbar, cmdId("CmdCreateAnnotRedact"), redact);
       const h = findTopWindow(pid, HOVER_MENU_CLASS);
       if (h && isWindowVisible(h)) {
         throw new Error("annot-color-dropdown: Redact should have no color drop-down");
       }
       await closeHoverMenu(pid, frame);
-      // with no drop-down the right-click picked the tool; leave its mode,
-      // which disables the other buttons
-      await pressKey(frame, VK_ESCAPE, 0);
     }
 
     // picking a color is the color the next annotation of that type is made in
-    const square = (await annotButtonRect(client, cmdId("CmdCreateAnnotSquare")))!;
-    rightClickToolbar(toolbar, square.x + (square.dx >> 1), square.y + (square.dy >> 1));
+    const square = (await annotButtonRect(client, frame, cmdId("CmdCreateAnnotSquare")))!;
+    await openToolbarPalette(client, toolbar, cmdId("CmdCreateAnnotSquare"), square);
     const raw = await pollUntil(
       async () => String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? ""),
       (s) => /^dropdown-item idx=1 /m.test(s),
@@ -557,10 +582,10 @@ async function testToolbarButtons(): Promise<void> {
 
     // clicking the button picks the tool: its colors go away, and resting on
     // the button does not bring them back
-    const line = (await annotButtonRect(client, cmdId("CmdCreateAnnotLine")))!;
+    const line = (await annotButtonRect(client, frame, cmdId("CmdCreateAnnotLine")))!;
     const lx = line.x + (line.dx >> 1);
     const ly = line.y + (line.dy >> 1);
-    rightClickToolbar(toolbar, lx, ly);
+    await openToolbarPalette(client, toolbar, cmdId("CmdCreateAnnotLine"), line);
     await waitForHoverColors(client);
     await clickAt(toolbar, lx, ly, 0);
     await pollUntil(
@@ -594,7 +619,7 @@ async function testCurrentColorAdded(): Promise<void> {
   mkdirSync(appdata, { recursive: true });
   const nl = String.fromCharCode(10);
   writeFileSync(
-    join(appdata, "SumatraPDF-settings.txt"),
+    join(appdata, "SumatraPDFEnhanced-settings.txt"),
     [
       "UiLanguage = en",
       "RestoreSession = false",
@@ -602,8 +627,13 @@ async function testCurrentColorAdded(): Promise<void> {
       "CheckForUpdates = false",
       "Annotations [",
       `\tPresetColors = ${PRESETS}`,
+      "\tTextIconColor =",
       "\tLineColor = #123456",
       `\tInkColors = ${INK_PRESETS}`,
+      "\tInkBallpoint [",
+      "\t\tColor = #ffff00",
+      "\t\tOpacity = 40",
+      "\t]",
       "]",
       "",
     ].join(nl),
@@ -638,8 +668,8 @@ async function testCurrentColorAdded(): Promise<void> {
       // ink has colors of its own, translucent; its default 40% yellow joins them
       ["CmdCreateAnnotInk", `${INK_PRESETS} #66ffff00*`],
     ] as const) {
-      const b = (await annotButtonRect(client, cmdId(name)))!;
-      rightClickToolbar(toolbar, b.x + (b.dx >> 1), b.y + (b.dy >> 1));
+      const b = (await annotButtonRect(client, frame, cmdId(name)))!;
+      await openToolbarPalette(client, toolbar, cmdId(name), b);
       const colors = (await waitForHoverColors(client, want)).join(" ");
       if (colors !== want) {
         throw new Error(`annot-color-dropdown: ${name} offers "${colors}", want "${want}"`);
